@@ -167,6 +167,23 @@ public class LambdaService {
             if (imageUri != null) {
                 fn.setImageUri(imageUri);
             }
+
+            // Hot-reload support: S3Bucket=hot-reload,S3Key=<host-path>
+            // This mirrors LocalStack’s convention — the S3Key is treated as a
+            // host filesystem path that gets bind-mounted into Lambda containers.
+            // The path is a Docker HOST path (not a container path) because the
+            // Docker daemon resolves bind mounts on the host filesystem.
+            String s3Bucket = (String) code.get("S3Bucket");
+            String s3Key = (String) code.get("S3Key");
+            if ("hot-reload".equals(s3Bucket) && s3Key != null && !s3Key.isBlank()) {
+                // Strip surrounding quotes that the AWS CLI may add
+                String cleanPath = s3Key.replaceAll("^['\"]|['\"]$", "");
+                fn.setCodeLocalPath(cleanPath);
+                fn.setHotReload(true);
+                LOG.infov("Hot-reload enabled for function {0}: host code path = {1}",
+                        functionName, cleanPath);
+            }
+
             String zipFileBase64 = (String) code.get("ZipFile");
             if (zipFileBase64 != null) {
                 extractZipCode(fn, zipFileBase64);
@@ -193,6 +210,17 @@ public class LambdaService {
 
         String zipFileBase64 = (String) request.get("ZipFile");
         String imageUri = (String) request.get("ImageUri");
+
+        // Hot-reload support for code updates
+        String s3Bucket = (String) request.get("S3Bucket");
+        String s3Key = (String) request.get("S3Key");
+        if ("hot-reload".equals(s3Bucket) && s3Key != null && !s3Key.isBlank()) {
+            String cleanPath = s3Key.replaceAll("^['\"]|['\"]$", "");
+            fn.setCodeLocalPath(cleanPath);
+            fn.setHotReload(true);
+            LOG.infov("Hot-reload updated for function {0}: host code path = {1}",
+                    functionName, cleanPath);
+        }
 
         if (zipFileBase64 != null) {
             extractZipCode(fn, zipFileBase64);
@@ -578,7 +606,27 @@ public class LambdaService {
     }
 
     private void extractZipCode(LambdaFunction fn, String zipFileBase64) {
-        byte[] zipBytes = Base64.getDecoder().decode(zipFileBase64);
+        byte[] zipBytes;
+        try {
+            zipBytes = Base64.getDecoder().decode(zipFileBase64);
+        } catch (IllegalArgumentException e) {
+            // ZipFile content is not valid base64 (e.g., raw JS stub from CF provisioner).
+            // Treat it as inline source code: wrap it in a zip and proceed.
+            LOG.warnv("ZipFile for {0} is not base64, treating as inline source", fn.getFunctionName());
+            try {
+                var buf = new java.io.ByteArrayOutputStream();
+                var zos = new java.util.zip.ZipOutputStream(buf);
+                String handler = fn.getHandler() != null ? fn.getHandler().split("\\.")[0] + ".js" : "index.js";
+                zos.putNextEntry(new java.util.zip.ZipEntry(handler));
+                zos.write(zipFileBase64.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                zos.closeEntry();
+                zos.close();
+                zipBytes = buf.toByteArray();
+            } catch (java.io.IOException ioe) {
+                LOG.warnv("Failed to wrap inline source for {0}: {1}", fn.getFunctionName(), ioe.getMessage());
+                return;
+            }
+        }
         Path codePath = codeStore.getCodePath(fn.getFunctionName());
         try {
             zipExtractor.extractTo(zipBytes, codePath);

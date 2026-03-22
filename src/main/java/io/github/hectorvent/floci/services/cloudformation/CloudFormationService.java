@@ -48,7 +48,15 @@ public class CloudFormationService {
 
     public List<Stack> describeStacks(String stackName, String region) {
         if (stackName != null && !stackName.isBlank()) {
-            Stack stack = stacks.get(key(stackName, region));
+            // Support lookup by ARN: arn:aws:cloudformation:REGION:ACCOUNT:stack/NAME/UUID
+            String resolvedName = stackName;
+            if (stackName.startsWith("arn:")) {
+                String[] parts = stackName.split("/");
+                if (parts.length >= 2) {
+                    resolvedName = parts[1];
+                }
+            }
+            Stack stack = stacks.get(key(resolvedName, region));
             if (stack == null) {
                 throw new AwsException("ValidationError",
                         "Stack with id " + stackName + " does not exist", 400);
@@ -125,13 +133,17 @@ public class CloudFormationService {
         String templateBody = cs.getTemplateBody();
         Map<String, String> params = cs.getParameters() != null ? cs.getParameters() : Map.of();
 
-        executor.submit(() -> executeTemplate(stack, templateBody, params, isCreate, region));
+        // Run synchronously so the stack reaches CREATE_COMPLETE / UPDATE_COMPLETE
+        // before the HTTP response is sent. Serverless Framework polls immediately
+        // after executeChangeSet and races with async execution, causing spurious
+        // "stack does not exist" errors when the poll arrives before completion.
+        executeTemplate(stack, templateBody, params, isCreate, region);
     }
 
     // ── DeleteStack ───────────────────────────────────────────────────────────
 
     public void deleteStack(String stackName, String region) {
-        Stack stack = stacks.get(key(stackName, region));
+        Stack stack = stacks.get(key(resolveStackName(stackName), region));
         if (stack == null) {
             return; // Already gone — no-op
         }
@@ -139,7 +151,7 @@ public class CloudFormationService {
         addEvent(stack, stack.getStackName(), stack.getStackId(),
                 "AWS::CloudFormation::Stack", "DELETE_IN_PROGRESS", null);
 
-        executor.submit(() -> deleteStackResources(stack, region));
+        deleteStackResources(stack, region);
     }
 
     // ── GetTemplate ───────────────────────────────────────────────────────────
@@ -457,12 +469,23 @@ public class CloudFormationService {
     }
 
     private Stack getStackOrThrow(String stackName, String region) {
-        Stack stack = stacks.get(key(stackName, region));
+        Stack stack = stacks.get(key(resolveStackName(stackName), region));
         if (stack == null) {
             throw new AwsException("ValidationError",
                     "Stack with id " + stackName + " does not exist", 400);
         }
         return stack;
+    }
+
+    /** Resolve ARN to stack name: arn:aws:cloudformation:REGION:ACCOUNT:stack/NAME/UUID → NAME */
+    private static String resolveStackName(String stackName) {
+        if (stackName != null && stackName.startsWith("arn:")) {
+            String[] parts = stackName.split("/");
+            if (parts.length >= 2) {
+                return parts[1];
+            }
+        }
+        return stackName;
     }
 
     private static String key(String stackName, String region) {
