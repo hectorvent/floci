@@ -16,6 +16,6 @@
 
 ## Checklist
 
-- [ ] `mvn test` passes locally
+- [ ] `./mvnw test` passes locally
 - [ ] New or updated integration test added
 - [ ] Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)

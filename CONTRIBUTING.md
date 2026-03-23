@@ -17,20 +17,32 @@ Thank you for your interest in contributing! Floci is a community-driven project
 - Maven 3.9+
 - Docker (for integration tests that spin up Lambda/RDS/ElastiCache)
 
+Any Java 25+ distribution will work. If you need to install it, [SDKMAN](https://sdkman.io/) is a convenient option:
+
+```bash
+curl -s "https://get.sdkman.io" | bash
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+sdk install java 25-open
+```
+
 ### Build & Run
+
+This project includes a Maven wrapper, so you don't need to install Maven separately:
 
 ```bash
 git clone https://github.com/hectorvent/floci.git
 cd floci
-mvn quarkus:dev        # hot reload on port 4566
+./mvnw quarkus:dev     # hot reload on port 4566
 ```
+
+If you prefer to use your own Maven installation (3.9+), you can use `mvn` instead of `./mvnw`.
 
 ### Run Tests
 
 ```bash
-mvn test                                          # all tests
-mvn test -Dtest=SsmIntegrationTest                # single class
-mvn test -Dtest=SsmIntegrationTest#putParameter   # single method
+./mvnw test                                          # all tests
+./mvnw test -Dtest=SsmIntegrationTest                # single class
+./mvnw test -Dtest=SsmIntegrationTest#putParameter   # single method
 ```
 
 ## Commit Message Format
@@ -73,7 +85,7 @@ Always implement the **real AWS wire protocol** — never invent custom endpoint
 
 - Keep PRs focused — one feature or fix per PR
 - Add or update tests for any changed behavior
-- Ensure `mvn test` passes before opening the PR
+- Ensure `./mvnw test` passes before opening the PR
 - Reference any related issues in the PR description
 
 ## Reporting Security Issues
