@@ -122,3 +122,5 @@ floci:
     acm:
       enabled: true
       validation-wait-seconds: 0
+    ses:
+      enabled: true

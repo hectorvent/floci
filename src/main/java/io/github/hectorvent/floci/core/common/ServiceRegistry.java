@@ -46,6 +46,7 @@ public class ServiceRegistry {
             case "states" -> config.services().stepfunctions().enabled();
             case "cloudformation" -> config.services().cloudformation().enabled();
             case "acm" -> config.services().acm().enabled();
+            case "email" -> config.services().ses().enabled();
             default -> true;
         };
     }
@@ -73,6 +74,7 @@ public class ServiceRegistry {
         if (config.services().stepfunctions().enabled()) enabled.add("states");
         if (config.services().cloudformation().enabled()) enabled.add("cloudformation");
         if (config.services().acm().enabled()) enabled.add("acm");
+        if (config.services().ses().enabled()) enabled.add("email");
         return enabled;
     }
 

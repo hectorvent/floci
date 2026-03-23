@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>Floci</name>
-    <description>Fast, free, open-source local AWS emulator supporting SSM, SQS, SNS, S3, DynamoDB, Lambda, API Gateway, Cognito, KMS, Kinesis, Secrets Manager, CloudFormation, Step Functions, IAM, STS, ElastiCache, RDS, EventBridge, and CloudWatch</description>
+    <description>Fast, free, open-source local AWS emulator supporting SSM, SQS, SNS, SES, S3, DynamoDB, Lambda, API Gateway, Cognito, KMS, Kinesis, Secrets Manager, CloudFormation, Step Functions, IAM, STS, ElastiCache, RDS, EventBridge, and CloudWatch</description>
 
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
