@@ -335,7 +335,8 @@ public class S3Controller {
     public Response getObject(@PathParam("bucket") String bucket,
                               @PathParam("key") String key,
                               @QueryParam("versionId") String versionId,
-                              @Context UriInfo uriInfo) {
+                              @Context UriInfo uriInfo,
+                              @Context HttpHeaders httpHeaders) {
         try {
             if (hasQueryParam(uriInfo, "tagging")) {
                 return handleGetObjectTagging(bucket, key);
@@ -350,9 +351,49 @@ public class S3Controller {
                 return Response.ok(s3Service.getObjectAcl(bucket, key, versionId)).build();
             }
             S3Object obj = s3Service.getObject(bucket, key, versionId);
-            var resp = Response.ok(obj.getData())
+            byte[] data = obj.getData();
+            int totalSize = data.length;
+
+            String rangeHeader = httpHeaders.getHeaderString("Range");
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                String rangeSpec = rangeHeader.substring(6);
+                int start, end;
+                if (rangeSpec.startsWith("-")) {
+                    // suffix range: bytes=-N (last N bytes)
+                    int suffixLen = Integer.parseInt(rangeSpec.substring(1));
+                    start = Math.max(0, totalSize - suffixLen);
+                    end = totalSize - 1;
+                } else if (rangeSpec.endsWith("-")) {
+                    // open-ended: bytes=N-
+                    start = Integer.parseInt(rangeSpec.substring(0, rangeSpec.length() - 1));
+                    end = totalSize - 1;
+                } else {
+                    // explicit: bytes=N-M
+                    String[] parts = rangeSpec.split("-");
+                    start = Integer.parseInt(parts[0]);
+                    end = Math.min(Integer.parseInt(parts[1]), totalSize - 1);
+                }
+                int length = end - start + 1;
+                byte[] slice = java.util.Arrays.copyOfRange(data, start, start + length);
+                var resp = Response.status(206)
+                        .entity(slice)
+                        .header("Content-Type", obj.getContentType())
+                        .header("Content-Length", length)
+                        .header("Content-Range", "bytes " + start + "-" + end + "/" + totalSize)
+                        .header("Accept-Ranges", "bytes")
+                        .header("ETag", obj.getETag())
+                        .header("Last-Modified", RFC_822.format(obj.getLastModified()));
+                if (obj.getVersionId() != null) {
+                    resp.header("x-amz-version-id", obj.getVersionId());
+                }
+                appendLockHeaders(resp, obj);
+                return resp.build();
+            }
+
+            var resp = Response.ok(data)
                     .header("Content-Type", obj.getContentType())
-                    .header("Content-Length", obj.getSize())
+                    .header("Content-Length", totalSize)
+                    .header("Accept-Ranges", "bytes")
                     .header("ETag", obj.getETag())
                     .header("Last-Modified", RFC_822.format(obj.getLastModified()));
             if (obj.getVersionId() != null) {
@@ -375,6 +416,7 @@ public class S3Controller {
             var resp = Response.ok()
                     .header("Content-Type", obj.getContentType())
                     .header("Content-Length", obj.getSize())
+                    .header("Accept-Ranges", "bytes")
                     .header("ETag", obj.getETag())
                     .header("Last-Modified", RFC_822.format(obj.getLastModified()));
             if (obj.getVersionId() != null) {
