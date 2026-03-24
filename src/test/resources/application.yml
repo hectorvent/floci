@@ -2,6 +2,8 @@ quarkus:
   http:
     port: 0
     test-port: 0
+    limits:
+      max-body-size: 536870912
 
 floci:
   base-url: "http://localhost:4566"
@@ -54,6 +56,7 @@ floci:
     s3:
       enabled: true
       default-presign-expiry-seconds: 3600
+      max-object-size-mb: 512
     dynamodb:
       enabled: true
     sns:

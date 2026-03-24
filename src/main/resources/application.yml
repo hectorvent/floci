@@ -2,6 +2,8 @@ quarkus:
   http:
     port: 4566
     host: 0.0.0.0
+    limits:
+      max-body-size: 536870912
   native:
     additional-build-args: "--initialize-at-run-time=org.apache.hc.client5.http.impl.auth.NTLMEngineImpl,--initialize-at-run-time=com.github.dockerjava.transport.NamedPipeSocket$Kernel32"
 
@@ -57,6 +59,7 @@ floci:
     s3:
       enabled: true
       default-presign-expiry-seconds: 3600
+      max-object-size-mb: 512
     dynamodb:
       enabled: true
     sns:

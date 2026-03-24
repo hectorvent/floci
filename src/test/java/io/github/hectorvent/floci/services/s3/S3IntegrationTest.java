@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.util.Arrays;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
@@ -192,6 +194,42 @@ class S3IntegrationTest {
             .delete("/test-bucket")
         .then()
             .statusCode(204);
+    }
+
+    @Test
+    @Order(15)
+    void putLargeObject() {
+        // 22 MB – exceeds the old Jackson 20 MB maxStringLength default
+        byte[] largeBody = new byte[22 * 1024 * 1024];
+        Arrays.fill(largeBody, (byte) 'A');
+
+        // Create a dedicated bucket so this test is self-contained
+        given()
+        .when()
+            .put("/large-object-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/octet-stream")
+            .body(largeBody)
+        .when()
+            .put("/large-object-bucket/large-file.bin")
+        .then()
+            .statusCode(200)
+            .header("ETag", notNullValue());
+
+        // Verify we can retrieve the same number of bytes back
+        given()
+        .when()
+            .get("/large-object-bucket/large-file.bin")
+        .then()
+            .statusCode(200)
+            .header("Content-Length", String.valueOf(largeBody.length));
+
+        // Cleanup
+        given().delete("/large-object-bucket/large-file.bin");
+        given().delete("/large-object-bucket");
     }
 
     @Test

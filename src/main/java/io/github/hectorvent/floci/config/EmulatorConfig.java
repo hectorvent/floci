@@ -177,6 +177,9 @@ public interface EmulatorConfig {
 
         @WithDefault("3600")
         int defaultPresignExpirySeconds();
+
+        @WithDefault("512")
+        int maxObjectSizeMb();
     }
 
     interface DynamoDbServiceConfig {
