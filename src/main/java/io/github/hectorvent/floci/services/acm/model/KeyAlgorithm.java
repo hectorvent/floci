@@ -1,8 +1,15 @@
 package io.github.hectorvent.floci.services.acm.model;
 
 import com.fasterxml.jackson.annotation.JsonValue;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import org.jboss.logging.Logger;
 
+/**
+ * Key algorithm for certificate key pair generation.
+ *
+ * @see <a href="https://docs.aws.amazon.com/acm/latest/APIReference/API_RequestCertificate.html">AWS ACM RequestCertificate</a>
+ */
+@RegisterForReflection
 public enum KeyAlgorithm {
     RSA_1024("RSA-1024", "RSA", 1024),
     RSA_2048("RSA-2048", "RSA", 2048),
@@ -48,9 +55,16 @@ public enum KeyAlgorithm {
 
     public static KeyAlgorithm fromAwsName(String name) {
         if (name == null) return RSA_2048;
-        String normalized = name.replace("_", "-").toUpperCase();
+        // Normalize both directions: RSA_2048 ↔ RSA-2048
+        String dashNormalized = name.replace("_", "-");
+        String underscoreNormalized = name.replace("-", "_");
         for (KeyAlgorithm alg : values()) {
-            if (alg.awsName.equalsIgnoreCase(name) || alg.name().equalsIgnoreCase(normalized)) {
+            // Match against awsName (dash format: "RSA-2048", "EC-prime256v1")
+            if (alg.awsName.equalsIgnoreCase(name) || alg.awsName.equalsIgnoreCase(dashNormalized)) {
+                return alg;
+            }
+            // Match against enum name (underscore format: "RSA_2048", "EC_prime256v1")
+            if (alg.name().equalsIgnoreCase(name) || alg.name().equalsIgnoreCase(underscoreNormalized)) {
                 return alg;
             }
         }

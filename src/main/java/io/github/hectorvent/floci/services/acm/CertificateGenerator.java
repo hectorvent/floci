@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.acm;
 
 import io.github.hectorvent.floci.services.acm.model.KeyAlgorithm;
 import jakarta.enterprise.context.ApplicationScoped;
+import org.bouncycastle.asn1.nist.NISTObjectIdentifiers;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.BasicConstraints;
 import org.bouncycastle.asn1.x509.Extension;
@@ -24,8 +25,6 @@ import org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfoBuilder;
 import org.bouncycastle.pkcs.jcajce.JcaPKCS8EncryptedPrivateKeyInfoBuilder;
 import org.bouncycastle.pkcs.jcajce.JcePKCSPBEOutputEncryptorBuilder;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
-import io.quarkus.runtime.StartupEvent;
-import jakarta.enterprise.event.Observes;
 import org.jboss.logging.Logger;
 
 import java.io.StringReader;
@@ -52,13 +51,6 @@ public class CertificateGenerator {
     private static final String ISSUER_DN = "CN=Amazon,OU=Server CA 1B,O=Amazon,C=US";
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
-    void onStart(@Observes StartupEvent ev) {
-        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new BouncyCastleProvider());
-            LOG.info("Registered BouncyCastle security provider");
-        }
-    }
-
     public record GeneratedCertificate(
         String certificatePem,
         String privateKeyPem,
@@ -70,6 +62,13 @@ public class CertificateGenerator {
         String signatureAlgorithm
     ) {}
 
+    /**
+     * Generates a self-signed X.509 certificate for local emulation.
+     *
+     * <p>Note: RSA key generation (especially 4096-bit) can take 100-500ms.
+     * In production emulator usage, consider moving this to a worker thread
+     * or using virtual threads for concurrent certificate generation.</p>
+     */
     public GeneratedCertificate generateCertificate(String domainName, List<String> sans, KeyAlgorithm keyAlgorithm) {
         try {
             KeyPair keyPair = generateKeyPair(keyAlgorithm);
@@ -175,12 +174,20 @@ public class CertificateGenerator {
         return sw.toString();
     }
 
+    /**
+     * Encrypts a private key using AES-256-CBC (replacing deprecated Triple-DES).
+     *
+     * @param privateKeyPem The private key in PEM format
+     * @param passphrase The passphrase for encryption
+     * @return Encrypted private key in PEM format
+     */
     public String encryptPrivateKey(String privateKeyPem, String passphrase) {
         try {
             PrivateKey privateKey = parsePrivateKey(privateKeyPem);
 
+            // Use AES-256-CBC instead of deprecated Triple-DES
             JcePKCSPBEOutputEncryptorBuilder encryptorBuilder = new JcePKCSPBEOutputEncryptorBuilder(
-                PKCSObjectIdentifiers.pbeWithSHAAnd3_KeyTripleDES_CBC
+                NISTObjectIdentifiers.id_aes256_CBC
             );
             encryptorBuilder.setProvider(BouncyCastleProvider.PROVIDER_NAME);
 

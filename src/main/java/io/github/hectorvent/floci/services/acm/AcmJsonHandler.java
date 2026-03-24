@@ -13,6 +13,14 @@ import org.jboss.logging.Logger;
 
 import java.util.*;
 
+/**
+ * JSON handler for AWS Certificate Manager (ACM) API operations.
+ *
+ * <p>Implements the AWS JSON 1.1 protocol for ACM operations including
+ * certificate request, import, export, listing, and lifecycle management.</p>
+ *
+ * @see <a href="https://docs.aws.amazon.com/acm/latest/APIReference/Welcome.html">AWS ACM API Reference</a>
+ */
 @ApplicationScoped
 public class AcmJsonHandler {
 
@@ -84,6 +92,14 @@ public class AcmJsonHandler {
         String certificateArn = request.path("CertificateArn").asText();
         Certificate cert = service.getCertificate(certificateArn, region);
 
+        // AWS returns RequestInProgressException for certificates still pending validation
+        if (cert.getStatus() == CertificateStatus.PENDING_VALIDATION) {
+            throw new io.github.hectorvent.floci.core.common.AwsException(
+                "RequestInProgressException",
+                "The certificate request is in progress. The certificate body is not yet available.",
+                400);
+        }
+
         ObjectNode response = objectMapper.createObjectNode();
         response.put("Certificate", cert.getCertificateBody());
         if (cert.getCertificateChain() != null) {
@@ -98,15 +114,17 @@ public class AcmJsonHandler {
         int maxItems = request.path("MaxItems").asInt(100);
         String nextToken = request.path("NextToken").asText(null);
 
-        List<Certificate> certs = service.listCertificates(statuses, keyTypes, region, maxItems, nextToken);
+        ListResult result = service.listCertificates(statuses, keyTypes, region, maxItems, nextToken);
 
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode summaryList = objectMapper.createArrayNode();
-        for (Certificate cert : certs) {
+        for (Certificate cert : result.certificates()) {
             summaryList.add(buildCertificateSummary(cert));
         }
         response.set("CertificateSummaryList", summaryList);
-        // NextToken is omitted when there are no more results
+        if (result.nextToken() != null) {
+            response.put("NextToken", result.nextToken());
+        }
         return Response.ok(response).build();
     }
 
@@ -387,8 +405,11 @@ public class AcmJsonHandler {
         if (method == null) return ValidationMethod.DNS;
         try {
             return ValidationMethod.valueOf(method.toUpperCase());
-        } catch (Exception e) {
-            return ValidationMethod.DNS;
+        } catch (IllegalArgumentException e) {
+            throw new io.github.hectorvent.floci.core.common.AwsException(
+                "ValidationException",
+                "Invalid validation method: " + method + ". Must be DNS or EMAIL.",
+                400);
         }
     }
 
