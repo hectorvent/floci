@@ -115,6 +115,21 @@ class S3VersioningIntegrationTest {
 
     @Test
     @Order(9)
+    void getObjectAttributesSpecificVersion() {
+        given()
+            .header("x-amz-object-attributes", "ETag,ObjectSize,StorageClass")
+        .when()
+            .get("/" + BUCKET + "/test.txt?attributes&versionId=" + versionId1)
+        .then()
+            .statusCode(200)
+            .header("x-amz-version-id", versionId1)
+            .body(containsString("<GetObjectAttributesResponse"))
+            .body(containsString("<ObjectSize>17</ObjectSize>"))
+            .body(containsString("<StorageClass>STANDARD</StorageClass>"));
+    }
+
+    @Test
+    @Order(10)
     void listObjectVersions() {
         given()
         .when()
@@ -128,7 +143,7 @@ class S3VersioningIntegrationTest {
     }
 
     @Test
-    @Order(10)
+    @Order(11)
     void deleteCreatesMarker() {
         given()
         .when()
@@ -139,7 +154,7 @@ class S3VersioningIntegrationTest {
     }
 
     @Test
-    @Order(11)
+    @Order(12)
     void getAfterDeleteReturns404() {
         given()
         .when()
@@ -149,7 +164,7 @@ class S3VersioningIntegrationTest {
     }
 
     @Test
-    @Order(12)
+    @Order(13)
     void getSpecificVersionAfterDelete() {
         // Specific version should still be accessible
         given()
@@ -161,7 +176,7 @@ class S3VersioningIntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(14)
     void listVersionsShowsDeleteMarker() {
         given()
         .when()
@@ -172,7 +187,7 @@ class S3VersioningIntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(15)
     void cleanUp() {
         // Delete specific versions permanently
         given().when().delete("/" + BUCKET + "/test.txt?versionId=" + versionId1).then().statusCode(204);

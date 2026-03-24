@@ -156,6 +156,17 @@ class S3VersioningServiceTest {
     }
 
     @Test
+    void getObjectWithNonExistentVersionIdThrowsNoSuchVersion() {
+        s3Service.putBucketVersioning("versioned-bucket", "Enabled");
+        s3Service.putObject("versioned-bucket", "test.txt",
+                "data".getBytes(StandardCharsets.UTF_8), "text/plain", null);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                s3Service.getObject("versioned-bucket", "test.txt", "fake-version-id"));
+        assertEquals("NoSuchVersion", ex.getErrorCode());
+    }
+
+    @Test
     void listObjectsExcludesDeleteMarkers() {
         s3Service.putBucketVersioning("versioned-bucket", "Enabled");
         s3Service.putObject("versioned-bucket", "keep.txt",

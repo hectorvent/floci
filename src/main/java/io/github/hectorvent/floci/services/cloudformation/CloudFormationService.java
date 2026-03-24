@@ -128,6 +128,18 @@ public class CloudFormationService {
         executor.submit(() -> executeTemplate(stack, templateBody, params, isCreate, region));
     }
 
+    // ── DeleteChangeSet ───────────────────────────────────────────────────────
+
+    public void deleteChangeSet(String stackName, String changeSetName, String region) {
+        Stack stack = getStackOrThrow(stackName, region);
+        ChangeSet cs = stack.getChangeSets().get(changeSetName);
+        if (cs == null) {
+            throw new AwsException("ChangeSetNotFoundException",
+                    "ChangeSet [" + changeSetName + "] does not exist", 400);
+        }
+        stack.getChangeSets().remove(changeSetName);
+    }
+
     // ── DeleteStack ───────────────────────────────────────────────────────────
 
     public void deleteStack(String stackName, String region) {

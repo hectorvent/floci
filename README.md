@@ -2,6 +2,15 @@
   <img src="logo.svg" alt="Floci" width="400" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/hectorvent/floci/releases/latest"><img src="https://img.shields.io/github/v/release/hectorvent/floci?label=latest%20release&color=blue" alt="Latest Release"></a>
+  <a href="https://github.com/hectorvent/floci/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/hectorvent/floci/release.yml?label=build" alt="Build Status"></a>
+  <a href="https://hub.docker.com/r/hectorvent/floci"><img src="https://img.shields.io/docker/pulls/hectorvent/floci?label=docker%20pulls" alt="Docker Pulls"></a>
+  <a href="https://hub.docker.com/r/hectorvent/floci"><img src="https://img.shields.io/docker/image-size/hectorvent/floci/latest?label=image%20size" alt="Docker Image Size"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+  <a href="https://github.com/hectorvent/floci/stargazers"><img src="https://img.shields.io/github/stars/hectorvent/floci?style=flat" alt="GitHub Stars"></a>
+</p>
+
 <h3 align="center">🍿☁️ Light, fluffy, and always free</h3>
 
 <p align="center">
@@ -9,19 +18,18 @@
 </p>
 
 <p align="center">
-  A free, open-source local AWS emulator. No account. No feature gates. No CI restrictions. Just&nbsp;<code>docker compose up</code>.
+  A free, open-source local AWS emulator. No account. No feature gates. Just&nbsp;<code>docker compose up</code>.
 </p>
 
 ---
 
-> LocalStack's community edition [sunset in March 2026](https://blog.localstack.cloud/the-road-ahead-for-localstack/) — requiring auth tokens, dropping CI support, and freezing security updates. Floci is the no-strings-attached alternative.
+> LocalStack's community edition [sunset in March 2026](https://blog.localstack.cloud/the-road-ahead-for-localstack/) — requiring auth tokens, and freezing security updates. Floci is the no-strings-attached alternative.
 
 ## Why Floci?
 
 | | Floci | LocalStack Community |
 |---|---|---|
 | Auth token required | No | Yes (since March 2026) |
-| CI/CD support | Unlimited | Requires paid plan |
 | Security updates | Yes | Frozen |
 | Startup time | **~24 ms** | ~3.3 s |
 | Idle memory | **~13 MiB** | ~143 MiB |
@@ -107,6 +115,25 @@ const client = new S3Client({
     forcePathStyle: true,
 });
 ```
+
+## Compatibility Testing
+
+> For full compatibility validation against real SDK and client workflows, use [floci-compatibility-tests](https://github.com/hectorvent/floci-compatibility-tests).
+
+This companion project provides a dedicated compatibility test suite for Floci across multiple SDKs and tooling scenarios, and is the recommended starting point when verifying integration behavior end to end.
+
+Available SDK test modules:
+
+| Module | Language / Tool | SDK / Client |
+|---|---|---|
+| `sdk-test-java` | Java 17 | AWS SDK for Java v2 |
+| `sdk-test-go` | Go | AWS SDK for Go v2 |
+| `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 |
+| `sdk-test-python` | Python 3 | boto3 |
+| `sdk-test-rust` | Rust | AWS SDK for Rust |
+| `sdk-test-awscli` | Bash | AWS CLI v2 |
+
+The repository also includes compatibility validation for infrastructure tooling through `compat-cdk` (AWS CDK v2) and `compat-opentofu` (OpenTofu / Terraform-compatible workflows).
 
 ## Image Tags
 

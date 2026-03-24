@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.s3.model;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,16 +15,23 @@ public class MultipartUpload {
     private String bucket;
     private String key;
     private String contentType;
+    private String storageClass;
+    private Map<String, String> metadata;
     private Instant initiated;
     private final Map<Integer, Part> parts = new ConcurrentHashMap<>();
 
-    public MultipartUpload() {}
+    public MultipartUpload() {
+        this.storageClass = "STANDARD";
+        this.metadata = new HashMap<>();
+    }
 
     public MultipartUpload(String bucket, String key, String contentType) {
         this.uploadId = UUID.randomUUID().toString();
         this.bucket = bucket;
         this.key = key;
         this.contentType = contentType != null ? contentType : "application/octet-stream";
+        this.storageClass = "STANDARD";
+        this.metadata = new HashMap<>();
         this.initiated = Instant.now();
     }
 
@@ -38,6 +46,12 @@ public class MultipartUpload {
 
     public String getContentType() { return contentType; }
     public void setContentType(String contentType) { this.contentType = contentType; }
+
+    public String getStorageClass() { return storageClass; }
+    public void setStorageClass(String storageClass) { this.storageClass = storageClass; }
+
+    public Map<String, String> getMetadata() { return metadata; }
+    public void setMetadata(Map<String, String> metadata) { this.metadata = metadata; }
 
     public Instant getInitiated() { return initiated; }
     public void setInitiated(Instant initiated) { this.initiated = initiated; }

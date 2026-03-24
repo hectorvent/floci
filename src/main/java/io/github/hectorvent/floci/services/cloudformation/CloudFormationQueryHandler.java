@@ -46,6 +46,7 @@ public class CloudFormationQueryHandler {
             case "CreateChangeSet" -> createChangeSet(params, region);
             case "DescribeChangeSet" -> describeChangeSet(params, region);
             case "ExecuteChangeSet" -> executeChangeSet(params, region);
+            case "DeleteChangeSet" -> deleteChangeSet(params, region);
             case "ListChangeSets" -> listChangeSets(params, region);
             case "DescribeStackEvents" -> describeStackEvents(params, region);
             case "DescribeStackResources" -> describeStackResources(params, region);
@@ -218,6 +219,25 @@ public class CloudFormationQueryHandler {
                 .raw("<ExecuteChangeSetResult/>")
                 .raw(AwsQueryResponse.responseMetadata())
                 .end("ExecuteChangeSetResponse")
+                .build();
+        return Response.ok(xml).type("text/xml").build();
+    }
+
+    // ── DeleteChangeSet ───────────────────────────────────────────────────────
+
+    private Response deleteChangeSet(MultivaluedMap<String, String> params, String region) {
+        String stackName = params.getFirst("StackName");
+        String changeSetName = params.getFirst("ChangeSetName");
+        try {
+            cfnService.deleteChangeSet(stackName, changeSetName, region);
+        } catch (AwsException e) {
+            return xmlError(e.getErrorCode(), e.getMessage(), e.getHttpStatus());
+        }
+        String xml = new XmlBuilder()
+                .start("DeleteChangeSetResponse", CF_NS)
+                .raw("<DeleteChangeSetResult/>")
+                .raw(AwsQueryResponse.responseMetadata())
+                .end("DeleteChangeSetResponse")
                 .build();
         return Response.ok(xml).type("text/xml").build();
     }

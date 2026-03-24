@@ -17,20 +17,32 @@ Thank you for your interest in contributing! Floci is a community-driven project
 - Maven 3.9+
 - Docker (for integration tests that spin up Lambda/RDS/ElastiCache)
 
+Any Java 25+ distribution will work. If you need to install it, [SDKMAN](https://sdkman.io/) is a convenient option:
+
+```bash
+curl -s "https://get.sdkman.io" | bash
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+sdk install java 25-open
+```
+
 ### Build & Run
+
+This project includes a Maven wrapper, so you don't need to install Maven separately:
 
 ```bash
 git clone https://github.com/hectorvent/floci.git
 cd floci
-mvn quarkus:dev        # hot reload on port 4566
+./mvnw quarkus:dev     # hot reload on port 4566
 ```
+
+If you prefer to use your own Maven installation (3.9+), you can use `mvn` instead of `./mvnw`.
 
 ### Run Tests
 
 ```bash
-mvn test                                          # all tests
-mvn test -Dtest=SsmIntegrationTest                # single class
-mvn test -Dtest=SsmIntegrationTest#putParameter   # single method
+./mvnw test                                          # all tests
+./mvnw test -Dtest=SsmIntegrationTest                # single class
+./mvnw test -Dtest=SsmIntegrationTest#putParameter   # single method
 ```
 
 ## Commit Message Format
@@ -72,9 +84,30 @@ Always implement the **real AWS wire protocol** — never invent custom endpoint
 ## Pull Request Guidelines
 
 - Keep PRs focused — one feature or fix per PR
-- Add or update tests for any changed behavior
-- Ensure `mvn test` passes before opening the PR
+- Follow the testing policy below
 - Reference any related issues in the PR description
+
+## Testing Policy for Pull Requests
+
+Floci accepts pull requests only when the test coverage is appropriate for the type of change being proposed.
+
+As a project policy:
+
+- Pull requests that introduce new behavior must include tests that validate that behavior.
+- Pull requests that fix bugs should include a regression test whenever the bug can be covered realistically.
+- Pull requests that modify runtime logic, request handling, persistence behavior, protocol compatibility, or service responses are expected to include updated or additional tests.
+- Pull requests that do not change observable behavior, such as documentation updates, formatting, comments, dependency housekeeping, or low-risk internal refactors, may not require new tests.
+- Even when no new tests are needed, the existing test suite must still pass.
+
+If a pull request does not include new tests, the author should explain why in the PR description. Valid reasons may include:
+
+- no functional behavior changed
+- existing tests already cover the change
+- the change is not meaningfully testable in isolation
+
+Maintainers may request additional or more targeted test coverage before approving a PR.
+
+CI runs automatically on every pull request, and build/test checks must pass before merge.
 
 ## Reporting Security Issues
 
