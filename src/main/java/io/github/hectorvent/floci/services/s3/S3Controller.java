@@ -481,16 +481,22 @@ public class S3Controller {
                 if (baseUrl.endsWith("/")) {
                     baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
                 }
-                String xml = new XmlBuilder()
+                XmlBuilder xmlBuilder = new XmlBuilder()
                         .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                         .start("CompleteMultipartUploadResult", AwsNamespaces.S3)
                         .elem("Location", baseUrl + "/" + bucket + "/" + key)
                         .elem("Bucket", bucket)
                         .elem("Key", key)
-                        .elem("ETag", obj.getETag())
-                        .end("CompleteMultipartUploadResult")
-                        .build();
-                return Response.ok(xml).build();
+                        .elem("ETag", obj.getETag());
+                if (obj.getVersionId() != null) {
+                    xmlBuilder.elem("VersionId", obj.getVersionId());
+                }
+                String xml = xmlBuilder.end("CompleteMultipartUploadResult").build();
+                var resp = Response.ok(xml);
+                if (obj.getVersionId() != null) {
+                    resp.header("x-amz-version-id", obj.getVersionId());
+                }
+                return resp.build();
             }
 
             return xmlErrorResponse(new AwsException("InvalidArgument",

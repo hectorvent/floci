@@ -123,6 +123,18 @@ class S3MultipartServiceTest {
     }
 
     @Test
+    void completeMultipartUploadVersioned() {
+        s3Service.putBucketVersioning("test-bucket", "Enabled");
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "versioned.bin", "text/plain");
+        s3Service.uploadPart("test-bucket", "versioned.bin", upload.getUploadId(), 1, "data".getBytes());
+
+        S3Object result = s3Service.completeMultipartUpload("test-bucket", "versioned.bin",
+                upload.getUploadId(), List.of(1));
+
+        assertNotNull(result.getVersionId(), "Versioned bucket should produce a versionId");
+    }
+
+    @Test
     void completeMultipartUploadCleansUp() {
         MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", null);
         s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 1, "data".getBytes());
