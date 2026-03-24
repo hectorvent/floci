@@ -8,6 +8,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -95,7 +96,9 @@ class S3MultipartIntegrationTest {
             .statusCode(200)
             .body(containsString("<CompleteMultipartUploadResult"))
             .body(containsString("<ETag>"))
-            .body(containsString("-2")); // Composite ETag ends with -2
+            .body(containsString("-2")) // Composite ETag ends with -2
+            .body(not(containsString("<VersionId>"))) // Unversioned bucket — no VersionId
+            .header("x-amz-version-id", nullValue());
     }
 
     @Test
@@ -160,5 +163,44 @@ class S3MultipartIntegrationTest {
     void cleanUp() {
         given().when().delete("/" + BUCKET + "/" + KEY).then().statusCode(204);
         given().when().delete("/" + BUCKET).then().statusCode(204);
+    }
+
+    @Test
+    @Order(11)
+    void completeMultipartUploadReturnsVersionIdForVersionedBucket() {
+        String vBucket = "multipart-versioned-bucket";
+
+        // Create bucket and enable versioning
+        given().when().put("/" + vBucket).then().statusCode(200);
+        given().body("<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>")
+            .when().put("/" + vBucket + "?versioning").then().statusCode(200);
+
+        // Initiate multipart upload
+        String vUploadId = given()
+            .contentType("application/octet-stream")
+            .when().post("/" + vBucket + "/versioned.bin?uploads")
+            .then().statusCode(200)
+            .extract().xmlPath().getString("InitiateMultipartUploadResult.UploadId");
+
+        // Upload a part
+        given().body("VersionedPartData")
+            .when().put("/" + vBucket + "/versioned.bin?uploadId=" + vUploadId + "&partNumber=1")
+            .then().statusCode(200);
+
+        // Complete — should return VersionId in both header and XML body
+        String versionId = given()
+            .contentType("application/xml")
+            .body("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>e</ETag></Part></CompleteMultipartUpload>")
+            .when().post("/" + vBucket + "/versioned.bin?uploadId=" + vUploadId)
+            .then()
+            .statusCode(200)
+            .header("x-amz-version-id", notNullValue())
+            .body(containsString("<VersionId>"))
+            .extract().header("x-amz-version-id");
+
+        assertNotNull(versionId);
+
+        // Clean up
+        given().when().delete("/" + vBucket + "/versioned.bin?versionId=" + versionId).then().statusCode(204);
     }
 }
