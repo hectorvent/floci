@@ -6,7 +6,9 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @RegisterForReflection
@@ -22,6 +24,9 @@ public class S3Object {
     private long size;
     private Instant lastModified;
     private String eTag;
+    private String storageClass;
+    private S3Checksum checksum;
+    private List<Part> parts;
     private String versionId;
     private boolean deleteMarker;
     private boolean isLatest = true;
@@ -34,6 +39,9 @@ public class S3Object {
 
     public S3Object() {
         this.metadata = new HashMap<>();
+        this.storageClass = "STANDARD";
+        this.checksum = new S3Checksum();
+        this.parts = new ArrayList<>();
         this.tags = new HashMap<>();
     }
 
@@ -46,6 +54,11 @@ public class S3Object {
         this.lastModified = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         this.eTag = computeETag(data);
         this.metadata = new HashMap<>();
+        this.storageClass = "STANDARD";
+        this.checksum = new S3Checksum();
+        this.checksum.setChecksumSHA256(S3Checksum.sha256Base64(data));
+        this.checksum.setChecksumType("FULL_OBJECT");
+        this.parts = new ArrayList<>();
         this.tags = new HashMap<>();
     }
 
@@ -72,6 +85,15 @@ public class S3Object {
 
     public String getETag() { return eTag; }
     public void setETag(String eTag) { this.eTag = eTag; }
+
+    public String getStorageClass() { return storageClass; }
+    public void setStorageClass(String storageClass) { this.storageClass = storageClass; }
+
+    public S3Checksum getChecksum() { return checksum; }
+    public void setChecksum(S3Checksum checksum) { this.checksum = checksum; }
+
+    public List<Part> getParts() { return parts; }
+    public void setParts(List<Part> parts) { this.parts = parts; }
 
     public String getVersionId() { return versionId; }
     public void setVersionId(String versionId) { this.versionId = versionId; }

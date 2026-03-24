@@ -125,13 +125,20 @@ public class S3Service {
 
     public S3Object putObject(String bucketName, String key, byte[] data,
                               String contentType, Map<String, String> metadata) {
-        return putObject(bucketName, key, data, contentType, metadata, null, null, null);
+        return putObject(bucketName, key, data, contentType, metadata, null, null, null, null);
     }
 
     public S3Object putObject(String bucketName, String key, byte[] data,
                               String contentType, Map<String, String> metadata,
                               String objectLockMode, Instant retainUntilDate, String legalHoldStatus) {
-        S3Object object = storeObject(bucketName, key, data, contentType, metadata,
+        return putObject(bucketName, key, data, contentType, metadata, null,
+                objectLockMode, retainUntilDate, legalHoldStatus);
+    }
+
+    public S3Object putObject(String bucketName, String key, byte[] data,
+                              String contentType, Map<String, String> metadata, String storageClass,
+                              String objectLockMode, Instant retainUntilDate, String legalHoldStatus) {
+        S3Object object = storeObject(bucketName, key, data, contentType, metadata, storageClass, null, null,
                 objectLockMode, retainUntilDate, legalHoldStatus);
         fireNotifications(bucketName, key, "ObjectCreated:Put", object);
         return object;
@@ -142,11 +149,13 @@ public class S3Service {
      */
     private S3Object storeObject(String bucketName, String key, byte[] data,
                                  String contentType, Map<String, String> metadata) {
-        return storeObject(bucketName, key, data, contentType, metadata, null, null, null);
+        return storeObject(bucketName, key, data, contentType, metadata, null, null, null,
+                null, null, null);
     }
 
     private S3Object storeObject(String bucketName, String key, byte[] data,
-                                 String contentType, Map<String, String> metadata,
+                                 String contentType, Map<String, String> metadata, String storageClass,
+                                 S3Checksum checksum, List<Part> parts,
                                  String objectLockMode, Instant retainUntilDate, String legalHoldStatus) {
         Bucket bucket = bucketStore.get(bucketName)
                 .orElseThrow(() -> new AwsException("NoSuchBucket",
@@ -156,6 +165,9 @@ public class S3Service {
         if (metadata != null) {
             object.getMetadata().putAll(metadata);
         }
+        object.setStorageClass(ObjectAttributeName.normalizeStorageClass(storageClass));
+        object.setChecksum(checksum != null ? copyChecksum(checksum) : buildChecksum(data, parts, false));
+        object.setParts(copyParts(parts));
 
         if (bucket.isVersioningEnabled()) {
             String versionId = UUID.randomUUID().toString();
@@ -238,23 +250,7 @@ public class S3Service {
     }
 
     public S3Object getObject(String bucketName, String key, String versionId) {
-        ensureBucketExists(bucketName);
-
-        String storeKey;
-        if (versionId != null) {
-            storeKey = versionedKey(bucketName, key, versionId);
-        } else {
-            storeKey = objectKey(bucketName, key);
-        }
-
-        S3Object obj = objectStore.get(storeKey)
-                .orElseThrow(() -> versionId != null
-                        ? new AwsException("NoSuchVersion", "The specified version does not exist.", 404)
-                        : new AwsException("NoSuchKey", "The specified key does not exist.", 404));
-
-        if (obj.isDeleteMarker()) {
-            throw new AwsException("NoSuchKey", "The specified key does not exist.", 404);
-        }
+        S3Object obj = getObjectMetadata(bucketName, key, versionId);
 
         // Read from versioned file if available, otherwise from latest
         if (versionId != null) {
@@ -270,7 +266,79 @@ public class S3Service {
     }
 
     public S3Object headObject(String bucketName, String key, String versionId) {
-        return getObject(bucketName, key, versionId);
+        return getObjectMetadata(bucketName, key, versionId);
+    }
+
+    public S3Object getObjectMetadata(String bucketName, String key, String versionId) {
+        S3Object copy = copyObject(getStoredObject(bucketName, key, versionId));
+        copy.setData(null);
+        return copy;
+    }
+
+    public GetObjectAttributesResult getObjectAttributes(String bucketName, String key, String versionId,
+                                                         Set<ObjectAttributeName> attributes,
+                                                         Integer maxParts, Integer partNumberMarker) {
+        S3Object object = getObjectMetadata(bucketName, key, versionId);
+
+        GetObjectAttributesResult result = new GetObjectAttributesResult();
+        result.setLastModified(object.getLastModified());
+        result.setVersionId(object.getVersionId());
+
+        if (attributes.contains(ObjectAttributeName.E_TAG)) {
+            result.setETag(object.getETag());
+        }
+        if (attributes.contains(ObjectAttributeName.STORAGE_CLASS)) {
+            result.setStorageClass(object.getStorageClass());
+        }
+        if (attributes.contains(ObjectAttributeName.OBJECT_SIZE)) {
+            result.setObjectSize(object.getSize());
+        }
+        if (attributes.contains(ObjectAttributeName.CHECKSUM)) {
+            result.setChecksum(copyChecksum(object.getChecksum()));
+        }
+        if (attributes.contains(ObjectAttributeName.OBJECT_PARTS)) {
+            result.setObjectParts(buildObjectParts(object, maxParts, partNumberMarker));
+        }
+
+        return result;
+    }
+
+    private S3Object getStoredObject(String bucketName, String key, String versionId) {
+        ensureBucketExists(bucketName);
+
+        String storeKey = versionId != null ? versionedKey(bucketName, key, versionId) : objectKey(bucketName, key);
+        S3Object object = objectStore.get(storeKey)
+                .orElseThrow(() -> versionId != null
+                        ? new AwsException("NoSuchVersion", "The specified version does not exist.", 404)
+                        : new AwsException("NoSuchKey", "The specified key does not exist.", 404));
+        if (object.isDeleteMarker()) {
+            throw new AwsException("NoSuchKey", "The specified key does not exist.", 404);
+        }
+        return object;
+    }
+
+    private GetObjectAttributesParts buildObjectParts(S3Object object, Integer maxParts, Integer partNumberMarker) {
+        List<Part> sortedParts = new ArrayList<>(copyParts(object.getParts()));
+        sortedParts.sort(Comparator.comparingInt(Part::getPartNumber));
+
+        int max = (maxParts == null || maxParts <= 0) ? 1000 : maxParts;
+        int marker = Math.max(partNumberMarker != null ? partNumberMarker : 0, 0);
+
+        List<Part> visibleParts = sortedParts.stream()
+                .filter(part -> part.getPartNumber() > marker)
+                .toList();
+        List<Part> returnedParts = visibleParts.stream().limit(max).toList();
+
+        GetObjectAttributesParts result = new GetObjectAttributesParts();
+        result.setMaxParts(max);
+        result.setPartNumberMarker(marker);
+        result.setParts(returnedParts);
+        result.setPartsCount(sortedParts.size());
+        result.setTruncated(visibleParts.size() > returnedParts.size());
+        result.setNextPartNumberMarker(returnedParts.isEmpty()
+                ? marker
+                : returnedParts.get(returnedParts.size() - 1).getPartNumber());
+        return result;
     }
 
     public S3Object deleteObject(String bucketName, String key) {
@@ -374,15 +442,28 @@ public class S3Service {
 
     public S3Object copyObject(String sourceBucket, String sourceKey,
                                String destBucket, String destKey) {
+        return copyObject(sourceBucket, sourceKey, destBucket, destKey,
+                null, null, null, null);
+    }
+
+    public S3Object copyObject(String sourceBucket, String sourceKey,
+                               String destBucket, String destKey,
+                               String metadataDirective, Map<String, String> replacementMetadata,
+                               String storageClass, String contentType) {
         S3Object source = getObject(sourceBucket, sourceKey);
         ensureBucketExists(destBucket);
 
-        S3Object copy = new S3Object(destBucket, destKey, source.getData(), source.getContentType());
-        copy.getMetadata().putAll(source.getMetadata());
+        boolean replaceMetadata = "REPLACE".equalsIgnoreCase(metadataDirective);
+        Map<String, String> metadata = replaceMetadata ? new LinkedHashMap<>() : new LinkedHashMap<>(source.getMetadata());
+        if (replaceMetadata && replacementMetadata != null) {
+            metadata.putAll(replacementMetadata);
+        }
 
-        String objectKey = objectKey(destBucket, destKey);
-        objectStore.put(objectKey, copy);
-        writeFile(destBucket, destKey, source.getData());
+        String effectiveContentType = replaceMetadata && contentType != null ? contentType : source.getContentType();
+        String effectiveStorageClass = storageClass != null ? storageClass : source.getStorageClass();
+        S3Object copy = storeObject(destBucket, destKey, source.getData(), effectiveContentType, metadata,
+                effectiveStorageClass, source.getChecksum(), source.getParts(), null, null, null);
+        copy.setETag(source.getETag());
         LOG.debugv("Copied object: {0}/{1} -> {2}/{3}", sourceBucket, sourceKey, destBucket, destKey);
         fireNotifications(destBucket, destKey, "ObjectCreated:Copy", copy);
         return copy;
@@ -636,8 +717,17 @@ public class S3Service {
     // --- Multipart Upload Operations ---
 
     public MultipartUpload initiateMultipartUpload(String bucket, String key, String contentType) {
+        return initiateMultipartUpload(bucket, key, contentType, null, null);
+    }
+
+    public MultipartUpload initiateMultipartUpload(String bucket, String key, String contentType,
+                                                   Map<String, String> metadata, String storageClass) {
         ensureBucketExists(bucket);
         MultipartUpload upload = new MultipartUpload(bucket, key, contentType);
+        if (metadata != null) {
+            upload.getMetadata().putAll(metadata);
+        }
+        upload.setStorageClass(ObjectAttributeName.normalizeStorageClass(storageClass));
 
         try {
             Files.createDirectories(dataRoot.resolve(".multipart").resolve(upload.getUploadId()));
@@ -670,7 +760,9 @@ public class S3Service {
         }
 
         String eTag = computeETag(data);
-        upload.getParts().put(partNumber, new Part(partNumber, eTag, data.length));
+        Part part = new Part(partNumber, eTag, data.length);
+        part.setChecksum(buildChecksum(data, List.of(part), true));
+        upload.getParts().put(partNumber, part);
         LOG.debugv("Uploaded part {0} for upload {1} ({2} bytes)", partNumber, uploadId, data.length);
         return eTag;
     }
@@ -708,7 +800,12 @@ public class S3Service {
             // Composite ETag: MD5 of concatenated part MD5s, suffixed with part count
             String compositeETag = "\"" + bytesToHex(md.digest()) + "-" + partNumbers.size() + "\"";
 
-            S3Object object = storeObject(bucket, key, allData, upload.getContentType(), null);
+            List<Part> completedParts = partNumbers.stream()
+                    .map(num -> copyPart(upload.getParts().get(num)))
+                    .toList();
+            S3Checksum checksum = buildChecksum(allData, completedParts, true);
+            S3Object object = storeObject(bucket, key, allData, upload.getContentType(), upload.getMetadata(),
+                    upload.getStorageClass(), checksum, completedParts, null, null, null);
             // Override the ETag with the composite multipart ETag
             object.setETag(compositeETag);
             objectStore.put(objectKey(bucket, key), object);
@@ -1005,6 +1102,74 @@ public class S3Service {
     private void cleanupMultipart(String uploadId) {
         multipartUploads.remove(uploadId);
         deleteDirectory(dataRoot.resolve(".multipart").resolve(uploadId));
+    }
+
+    private static S3Checksum buildChecksum(byte[] data, List<Part> parts, boolean multipartUpload) {
+        S3Checksum checksum = new S3Checksum();
+        checksum.setChecksumSHA1(S3Checksum.sha1Base64(data));
+        checksum.setChecksumSHA256(S3Checksum.sha256Base64(data));
+        checksum.setChecksumType(multipartUpload || (parts != null && parts.size() > 1)
+                ? "COMPOSITE"
+                : "FULL_OBJECT");
+        return checksum;
+    }
+
+    private static S3Object copyObject(S3Object source) {
+        S3Object copy = new S3Object();
+        copy.setBucketName(source.getBucketName());
+        copy.setKey(source.getKey());
+        copy.setData(source.getData() != null ? Arrays.copyOf(source.getData(), source.getData().length) : null);
+        copy.setMetadata(new HashMap<>(source.getMetadata()));
+        copy.setContentType(source.getContentType());
+        copy.setSize(source.getSize());
+        copy.setLastModified(source.getLastModified());
+        copy.setETag(source.getETag());
+        copy.setStorageClass(source.getStorageClass());
+        copy.setChecksum(copyChecksum(source.getChecksum()));
+        copy.setParts(copyParts(source.getParts()));
+        copy.setVersionId(source.getVersionId());
+        copy.setDeleteMarker(source.isDeleteMarker());
+        copy.setLatest(source.isLatest());
+        copy.setTags(new HashMap<>(source.getTags()));
+        copy.setObjectLockMode(source.getObjectLockMode());
+        copy.setRetainUntilDate(source.getRetainUntilDate());
+        copy.setLegalHoldStatus(source.getLegalHoldStatus());
+        copy.setAcl(source.getAcl());
+        return copy;
+    }
+
+    private static S3Checksum copyChecksum(S3Checksum source) {
+        if (source == null) {
+            return null;
+        }
+        S3Checksum copy = new S3Checksum();
+        copy.setChecksumCRC32(source.getChecksumCRC32());
+        copy.setChecksumCRC32C(source.getChecksumCRC32C());
+        copy.setChecksumCRC64NVME(source.getChecksumCRC64NVME());
+        copy.setChecksumSHA1(source.getChecksumSHA1());
+        copy.setChecksumSHA256(source.getChecksumSHA256());
+        copy.setChecksumType(source.getChecksumType());
+        return copy;
+    }
+
+    private static List<Part> copyParts(List<Part> sourceParts) {
+        if (sourceParts == null) {
+            return new ArrayList<>();
+        }
+        return sourceParts.stream().map(S3Service::copyPart).toList();
+    }
+
+    private static Part copyPart(Part source) {
+        if (source == null) {
+            return null;
+        }
+        Part copy = new Part();
+        copy.setPartNumber(source.getPartNumber());
+        copy.setETag(source.getETag());
+        copy.setSize(source.getSize());
+        copy.setChecksum(copyChecksum(source.getChecksum()));
+        copy.setLastModified(source.getLastModified());
+        return copy;
     }
 
     private static String computeETag(byte[] data) {

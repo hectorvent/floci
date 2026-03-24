@@ -2,6 +2,8 @@ package io.github.hectorvent.floci.services.s3;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesResult;
+import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
 import io.github.hectorvent.floci.services.s3.model.Bucket;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -212,6 +216,7 @@ class S3ServiceTest {
         S3Object head = s3Service.headObject("test-bucket", "file.txt");
         assertEquals(5, head.getSize());
         assertEquals("text/plain", head.getContentType());
+        assertNull(head.getData());
     }
 
     @Test
@@ -222,5 +227,55 @@ class S3ServiceTest {
 
         S3Object obj = s3Service.getObject("test-bucket", "file.txt");
         assertArrayEquals("v2".getBytes(), obj.getData());
+    }
+
+    @Test
+    void putObjectPersistsMetadataStorageClassAndChecksum() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+
+        S3Object stored = s3Service.putObject("test-bucket", "docs/file.txt", "payload".getBytes(StandardCharsets.UTF_8),
+                "text/plain", Map.of("owner", "team-a"), "STANDARD_IA", null, null, null);
+
+        S3Object head = s3Service.headObject("test-bucket", "docs/file.txt");
+        assertEquals("STANDARD_IA", head.getStorageClass());
+        assertEquals("team-a", head.getMetadata().get("owner"));
+        assertNotNull(head.getChecksum());
+        assertNotNull(head.getChecksum().getChecksumSHA256());
+        assertEquals("FULL_OBJECT", head.getChecksum().getChecksumType());
+        assertEquals(stored.getETag(), head.getETag());
+    }
+
+    @Test
+    void getObjectAttributesReturnsRequestedFields() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+        s3Service.putObject("test-bucket", "report.txt", "payload".getBytes(StandardCharsets.UTF_8),
+                "text/plain", Map.of("env", "dev"), "GLACIER", null, null, null);
+
+        GetObjectAttributesResult attributes = s3Service.getObjectAttributes("test-bucket", "report.txt", null,
+                Set.of(ObjectAttributeName.E_TAG, ObjectAttributeName.OBJECT_SIZE,
+                        ObjectAttributeName.STORAGE_CLASS, ObjectAttributeName.CHECKSUM),
+                null, null);
+
+        assertNotNull(attributes.getETag());
+        assertEquals(7L, attributes.getObjectSize());
+        assertEquals("GLACIER", attributes.getStorageClass());
+        assertNotNull(attributes.getChecksum());
+        assertNotNull(attributes.getChecksum().getChecksumSHA256());
+        assertNull(attributes.getObjectParts());
+    }
+
+    @Test
+    void copyObjectCanReplaceMetadata() {
+        s3Service.createBucket("source-bucket", "us-east-1");
+        s3Service.createBucket("dest-bucket", "us-east-1");
+        s3Service.putObject("source-bucket", "original.txt", "content".getBytes(StandardCharsets.UTF_8),
+                "text/plain", Map.of("owner", "source"), "STANDARD", null, null, null);
+
+        S3Object copy = s3Service.copyObject("source-bucket", "original.txt", "dest-bucket", "copy.txt",
+                "REPLACE", Map.of("owner", "dest"), "STANDARD_IA", "application/json");
+
+        assertEquals("application/json", copy.getContentType());
+        assertEquals("STANDARD_IA", copy.getStorageClass());
+        assertEquals("dest", copy.getMetadata().get("owner"));
     }
 }

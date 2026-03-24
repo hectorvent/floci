@@ -2,7 +2,9 @@ package io.github.hectorvent.floci.services.s3;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesResult;
 import io.github.hectorvent.floci.services.s3.model.MultipartUpload;
+import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,6 +13,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -69,7 +73,8 @@ class S3MultipartServiceTest {
 
     @Test
     void completeMultipartUpload() {
-        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", "text/plain");
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", "text/plain",
+                Map.of("owner", "team-a"), "STANDARD_IA");
         s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 1, "part1".getBytes());
         s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 2, "part2".getBytes());
 
@@ -78,11 +83,15 @@ class S3MultipartServiceTest {
 
         assertNotNull(result);
         assertEquals("text/plain", result.getContentType());
+        assertEquals("STANDARD_IA", result.getStorageClass());
+        assertEquals("team-a", result.getMetadata().get("owner"));
+        assertEquals(2, result.getParts().size());
         // Verify the data is concatenated
         S3Object fetched = s3Service.getObject("test-bucket", "file.bin");
         assertEquals("part1part2", new String(fetched.getData()));
         // Composite ETag should end with -2 (number of parts)
         assertTrue(result.getETag().endsWith("-2\""), "ETag should be composite: " + result.getETag());
+        assertEquals("COMPOSITE", result.getChecksum().getChecksumType());
     }
 
     @Test
@@ -143,5 +152,26 @@ class S3MultipartServiceTest {
         // Should no longer be in active uploads
         List<MultipartUpload> uploads = s3Service.listMultipartUploads("test-bucket");
         assertTrue(uploads.isEmpty());
+    }
+
+    @Test
+    void getObjectAttributesReturnsMultipartParts() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "parts.bin", "application/octet-stream");
+        s3Service.uploadPart("test-bucket", "parts.bin", upload.getUploadId(), 1, "abc".getBytes(StandardCharsets.UTF_8));
+        s3Service.uploadPart("test-bucket", "parts.bin", upload.getUploadId(), 2, "def".getBytes(StandardCharsets.UTF_8));
+        s3Service.completeMultipartUpload("test-bucket", "parts.bin", upload.getUploadId(), List.of(1, 2));
+
+        GetObjectAttributesResult attributes = s3Service.getObjectAttributes("test-bucket", "parts.bin", null,
+                Set.of(ObjectAttributeName.OBJECT_PARTS, ObjectAttributeName.CHECKSUM),
+                1, 0);
+
+        assertNotNull(attributes.getChecksum());
+        assertEquals("COMPOSITE", attributes.getChecksum().getChecksumType());
+        assertNotNull(attributes.getObjectParts());
+        assertEquals(2, attributes.getObjectParts().getPartsCount());
+        assertEquals(1, attributes.getObjectParts().getParts().size());
+        assertTrue(attributes.getObjectParts().isTruncated());
+        assertEquals(1, attributes.getObjectParts().getNextPartNumberMarker());
+        assertNotNull(attributes.getObjectParts().getParts().get(0).getChecksum().getChecksumSHA256());
     }
 }

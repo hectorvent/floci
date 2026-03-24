@@ -11,14 +11,18 @@ public class Part {
     private int partNumber;
     private String eTag;
     private long size;
+    private S3Checksum checksum;
     private Instant lastModified;
 
-    public Part() {}
+    public Part() {
+        this.checksum = new S3Checksum();
+    }
 
     public Part(int partNumber, String eTag, long size) {
         this.partNumber = partNumber;
         this.eTag = eTag;
         this.size = size;
+        this.checksum = new S3Checksum();
         this.lastModified = Instant.now().truncatedTo(ChronoUnit.SECONDS);
     }
 
@@ -30,6 +34,9 @@ public class Part {
 
     public long getSize() { return size; }
     public void setSize(long size) { this.size = size; }
+
+    public S3Checksum getChecksum() { return checksum; }
+    public void setChecksum(S3Checksum checksum) { this.checksum = checksum; }
 
     public Instant getLastModified() { return lastModified; }
     public void setLastModified(Instant lastModified) { this.lastModified = lastModified; }

@@ -30,6 +30,8 @@ class S3MultipartIntegrationTest {
     void initiateMultipartUpload() {
         uploadId = given()
             .contentType("application/octet-stream")
+            .header("x-amz-meta-owner", "team-a")
+            .header("x-amz-storage-class", "STANDARD_IA")
         .when()
             .post("/" + BUCKET + "/" + KEY + "?uploads")
         .then()
@@ -106,11 +108,30 @@ class S3MultipartIntegrationTest {
             .get("/" + BUCKET + "/" + KEY)
         .then()
             .statusCode(200)
+            .header("x-amz-meta-owner", equalTo("team-a"))
+            .header("x-amz-storage-class", equalTo("STANDARD_IA"))
             .body(equalTo("Part1Data-HelloPart2Data-World"));
     }
 
     @Test
     @Order(8)
+    void getMultipartObjectAttributes() {
+        given()
+            .header("x-amz-object-attributes", "ObjectParts,Checksum,StorageClass")
+            .header("x-amz-max-parts", 1)
+        .when()
+            .get("/" + BUCKET + "/" + KEY + "?attributes")
+        .then()
+            .statusCode(200)
+            .body(containsString("<GetObjectAttributesResponse"))
+            .body(containsString("<StorageClass>STANDARD_IA</StorageClass>"))
+            .body(containsString("<ObjectParts>"))
+            .body(containsString("<PartsCount>2</PartsCount>"))
+            .body(containsString("<ChecksumSHA256>"));
+    }
+
+    @Test
+    @Order(9)
     void multipartUploadNoLongerListed() {
         given()
         .when()
@@ -121,7 +142,7 @@ class S3MultipartIntegrationTest {
     }
 
     @Test
-    @Order(9)
+    @Order(10)
     void abortMultipartUpload() {
         // Initiate new upload
         String newUploadId = given()
@@ -156,7 +177,7 @@ class S3MultipartIntegrationTest {
     }
 
     @Test
-    @Order(10)
+    @Order(11)
     void cleanUp() {
         given().when().delete("/" + BUCKET + "/" + KEY).then().statusCode(204);
         given().when().delete("/" + BUCKET).then().statusCode(204);
