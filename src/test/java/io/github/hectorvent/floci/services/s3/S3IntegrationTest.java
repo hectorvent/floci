@@ -236,6 +236,30 @@ class S3IntegrationTest {
     }
 
     @Test
+    @Order(17)
+    void putLargeObject() {
+        // Create a dedicated bucket for the large upload test
+        given().when().put("/large-upload-bucket").then().statusCode(200);
+
+        // Upload a 15MB payload to verify max-body-size is above the old 10MB default
+        byte[] largePayload = new byte[15 * 1024 * 1024];
+        java.util.Arrays.fill(largePayload, (byte) 'A');
+
+        given()
+            .contentType("application/octet-stream")
+            .body(largePayload)
+        .when()
+            .put("/large-upload-bucket/large-file.bin")
+        .then()
+            .statusCode(200)
+            .header("ETag", notNullValue());
+
+        // Cleanup
+        given().delete("/large-upload-bucket/large-file.bin");
+        given().delete("/large-upload-bucket");
+    }
+
+    @Test
     void getNonExistentBucket() {
         given()
         .when()
