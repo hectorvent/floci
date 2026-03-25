@@ -61,7 +61,7 @@ public class SnsService {
                 regionResolver,
                 sqsService,
                 lambdaService,
-                config.baseUrl(),
+                config.effectiveBaseUrl(),
                 objectMapper
         );
     }

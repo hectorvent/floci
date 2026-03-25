@@ -57,7 +57,7 @@ public class S3Service {
                         new TypeReference<Map<String, S3Object>>() {
                         }),
                 Path.of(config.storage().persistentPath()).resolve("s3"),
-                sqsService, snsService, regionResolver, config.baseUrl(), objectMapper
+                sqsService, snsService, regionResolver, config.effectiveBaseUrl(), objectMapper
         );
     }
 

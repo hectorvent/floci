@@ -262,7 +262,7 @@ public class LambdaService {
         int batchSize = toInt(request.get("BatchSize"), 10);
         boolean enabled = !Boolean.FALSE.equals(request.get("Enabled"));
 
-        String queueUrl = eventSourceArn.contains(":sqs:") ? AwsArnUtils.arnToQueueUrl(eventSourceArn, config.baseUrl()) : null;
+        String queueUrl = eventSourceArn.contains(":sqs:") ? AwsArnUtils.arnToQueueUrl(eventSourceArn, config.effectiveBaseUrl()) : null;
 
         EventSourceMapping esm = new EventSourceMapping();
         esm.setUuid(UUID.randomUUID().toString());
@@ -437,7 +437,7 @@ public class LambdaService {
         urlConfig.setAuthType((String) request.getOrDefault("AuthType", "NONE"));
         
         String urlId = UUID.nameUUIDFromBytes((region + functionName + (qualifier != null ? qualifier : "")).getBytes()).toString().replace("-", "").substring(0, 32);
-        String baseHost = config.baseUrl().replaceFirst("https?://", "");
+        String baseHost = config.effectiveBaseUrl().replaceFirst("https?://", "");
         String url = String.format("http://%s.lambda-url.%s.%s/", urlId, region, baseHost);
         urlConfig.setFunctionUrl(url);
 
