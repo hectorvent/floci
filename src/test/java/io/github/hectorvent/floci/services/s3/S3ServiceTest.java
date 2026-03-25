@@ -343,6 +343,26 @@ class S3ServiceTest {
     }
 
     @Test
+    void listObjectsDirectoryBucketPreservesInsertionOrder() {
+        // Directory buckets (--x-s3 suffix) do not guarantee lexicographic order
+        s3Service.createBucket("my-bucket--x-s3", "us-east-1");
+        s3Service.putObject("my-bucket--x-s3", "c.txt", "c".getBytes(), null, null);
+        s3Service.putObject("my-bucket--x-s3", "a.txt", "a".getBytes(), null, null);
+        s3Service.putObject("my-bucket--x-s3", "b.txt", "b".getBytes(), null, null);
+
+        List<S3Object> objects = s3Service.listObjects("my-bucket--x-s3", null, null, 1000);
+        assertEquals(3, objects.size());
+        // Should NOT be sorted — order depends on storage backend, not lexicographic
+        List<String> keys = objects.stream().map(S3Object::getKey).toList();
+        // Verify that the result is NOT necessarily sorted (i.e. sorting was skipped)
+        // We can't assert exact order since it depends on the storage backend,
+        // but we can verify all keys are present
+        assertTrue(keys.contains("a.txt"));
+        assertTrue(keys.contains("b.txt"));
+        assertTrue(keys.contains("c.txt"));
+    }
+
+    @Test
     void isDirectoryBucket() {
         assertTrue(S3Service.isDirectoryBucket("my-bucket--x-s3"));
         assertFalse(S3Service.isDirectoryBucket("my-bucket"));

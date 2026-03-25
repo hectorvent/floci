@@ -435,10 +435,14 @@ public class S3Service {
         }
 
         // General purpose buckets return keys in lexicographic (UTF-8) order
-        // Directory buckets (names ending with --x-s3) do not guarantee order
+        // Directory buckets (names ending with DIRECTORY_BUCKET_SUFFIX) do not guarantee order
         if (!isDirectoryBucket(bucketName)) {
+            Map<String, byte[]> keyBytes = new HashMap<>(allObjects.size());
+            for (S3Object obj : allObjects) {
+                keyBytes.computeIfAbsent(obj.getKey(), k -> k.getBytes(StandardCharsets.UTF_8));
+            }
             allObjects.sort(Comparator.comparing(
-                    obj -> obj.getKey().getBytes(StandardCharsets.UTF_8),
+                    obj -> keyBytes.get(obj.getKey()),
                     Arrays::compareUnsigned));
         }
 
@@ -449,8 +453,10 @@ public class S3Service {
         return allObjects;
     }
 
+    static final String DIRECTORY_BUCKET_SUFFIX = "--x-s3";
+
     static boolean isDirectoryBucket(String bucketName) {
-        return bucketName != null && bucketName.endsWith("--x-s3");
+        return bucketName != null && bucketName.endsWith(DIRECTORY_BUCKET_SUFFIX);
     }
 
     public S3Object copyObject(String sourceBucket, String sourceKey,
