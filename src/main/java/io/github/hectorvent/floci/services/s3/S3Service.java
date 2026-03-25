@@ -436,7 +436,9 @@ public class S3Service {
         // General purpose buckets return keys in lexicographic (UTF-8) order
         // Directory buckets (names ending with --x-s3) do not guarantee order
         if (!isDirectoryBucket(bucketName)) {
-            allObjects.sort(Comparator.comparing(S3Object::getKey));
+            allObjects.sort(Comparator.comparing(
+                    obj -> obj.getKey().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    java.util.Arrays::compareUnsigned));
         }
 
         if (maxKeys > 0 && allObjects.size() > maxKeys) {

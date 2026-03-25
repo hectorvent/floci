@@ -323,6 +323,26 @@ class S3ServiceTest {
     }
 
     @Test
+    void listObjectsReturnsNonAsciiKeysInUtf8LexicographicOrder() {
+        s3Service.createBucket("non-ascii-bucket", "us-east-1");
+        // U+E000 in UTF-8: EE 80 80 (BMP, Private Use Area)
+        // U+10000 in UTF-8: F0 90 80 80 (supplementary plane)
+        // Java String.compareTo (UTF-16): U+E000 (0xE000) > U+10000 (surrogate 0xD800)
+        // UTF-8 unsigned byte order: U+E000 (0xEE) < U+10000 (0xF0)
+        String keyE000 = "\uE000.txt";
+        String key10000 = new String(Character.toChars(0x10000)) + ".txt";
+
+        s3Service.putObject("non-ascii-bucket", key10000, "b".getBytes(StandardCharsets.UTF_8), null, null);
+        s3Service.putObject("non-ascii-bucket", keyE000, "a".getBytes(StandardCharsets.UTF_8), null, null);
+
+        List<S3Object> objects = s3Service.listObjects("non-ascii-bucket", null, null, 1000);
+        assertEquals(2, objects.size());
+        // UTF-8 byte order: U+E000 (EE 80 80) < U+10000 (F0 90 80 80)
+        assertEquals(keyE000, objects.get(0).getKey());
+        assertEquals(key10000, objects.get(1).getKey());
+    }
+
+    @Test
     void isDirectoryBucket() {
         assertTrue(S3Service.isDirectoryBucket("my-bucket--x-s3"));
         assertFalse(S3Service.isDirectoryBucket("my-bucket"));
