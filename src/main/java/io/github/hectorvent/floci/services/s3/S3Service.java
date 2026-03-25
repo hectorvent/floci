@@ -425,12 +425,18 @@ public class S3Service {
 
         if (delimiter != null && !delimiter.isEmpty()) {
             // Filter to only return objects at this level (simulate directory listing)
-            allObjects = allObjects.stream()
+            allObjects = new ArrayList<>(allObjects.stream()
                     .filter(obj -> {
                         String remainder = obj.getKey().substring(prefix != null ? prefix.length() : 0);
                         return !remainder.contains(delimiter);
                     })
-                    .toList();
+                    .toList());
+        }
+
+        // General purpose buckets return keys in lexicographic (UTF-8) order
+        // Directory buckets (names ending with --x-s3) do not guarantee order
+        if (!isDirectoryBucket(bucketName)) {
+            allObjects.sort(Comparator.comparing(S3Object::getKey));
         }
 
         if (maxKeys > 0 && allObjects.size() > maxKeys) {
@@ -438,6 +444,10 @@ public class S3Service {
         }
 
         return allObjects;
+    }
+
+    static boolean isDirectoryBucket(String bucketName) {
+        return bucketName != null && bucketName.endsWith("--x-s3");
     }
 
     public S3Object copyObject(String sourceBucket, String sourceKey,

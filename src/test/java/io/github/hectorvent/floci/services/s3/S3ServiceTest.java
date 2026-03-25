@@ -278,4 +278,54 @@ class S3ServiceTest {
         assertEquals("STANDARD_IA", copy.getStorageClass());
         assertEquals("dest", copy.getMetadata().get("owner"));
     }
+
+    @Test
+    void listObjectsReturnsKeysInLexicographicOrder() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+        // Insert in non-sorted order
+        s3Service.putObject("test-bucket", "c.txt", "c".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "a.txt", "a".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "b.txt", "b".getBytes(), null, null);
+
+        List<S3Object> objects = s3Service.listObjects("test-bucket", null, null, 1000);
+        assertEquals(3, objects.size());
+        assertEquals("a.txt", objects.get(0).getKey());
+        assertEquals("b.txt", objects.get(1).getKey());
+        assertEquals("c.txt", objects.get(2).getKey());
+    }
+
+    @Test
+    void listObjectsWithPrefixReturnsKeysInLexicographicOrder() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+        s3Service.putObject("test-bucket", "dir/z.txt", "z".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "dir/a.txt", "a".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "dir/m.txt", "m".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "other/x.txt", "x".getBytes(), null, null);
+
+        List<S3Object> objects = s3Service.listObjects("test-bucket", "dir/", null, 1000);
+        assertEquals(3, objects.size());
+        assertEquals("dir/a.txt", objects.get(0).getKey());
+        assertEquals("dir/m.txt", objects.get(1).getKey());
+        assertEquals("dir/z.txt", objects.get(2).getKey());
+    }
+
+    @Test
+    void listObjectsMaxKeysRespectsLexicographicOrder() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+        s3Service.putObject("test-bucket", "c.txt", "c".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "a.txt", "a".getBytes(), null, null);
+        s3Service.putObject("test-bucket", "b.txt", "b".getBytes(), null, null);
+
+        List<S3Object> objects = s3Service.listObjects("test-bucket", null, null, 2);
+        assertEquals(2, objects.size());
+        assertEquals("a.txt", objects.get(0).getKey());
+        assertEquals("b.txt", objects.get(1).getKey());
+    }
+
+    @Test
+    void isDirectoryBucket() {
+        assertTrue(S3Service.isDirectoryBucket("my-bucket--x-s3"));
+        assertFalse(S3Service.isDirectoryBucket("my-bucket"));
+        assertFalse(S3Service.isDirectoryBucket(null));
+    }
 }
