@@ -18,6 +18,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * CloudFormation stack lifecycle management — Create, Update, Delete stacks via ChangeSets.
@@ -106,7 +107,7 @@ public class CloudFormationService {
 
     // ── ExecuteChangeSet ──────────────────────────────────────────────────────
 
-    public void executeChangeSet(String stackName, String changeSetName, String region) {
+    public Future<?> executeChangeSet(String stackName, String changeSetName, String region) {
         Stack stack = getStackOrThrow(stackName, region);
         ChangeSet cs = stack.getChangeSets().get(changeSetName);
         if (cs == null) {
@@ -125,7 +126,7 @@ public class CloudFormationService {
         String templateBody = cs.getTemplateBody();
         Map<String, String> params = cs.getParameters() != null ? cs.getParameters() : Map.of();
 
-        executor.submit(() -> executeTemplate(stack, templateBody, params, isCreate, region));
+        return executor.submit(() -> executeTemplate(stack, templateBody, params, isCreate, region));
     }
 
     // ── DeleteStack ───────────────────────────────────────────────────────────

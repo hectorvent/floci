@@ -17,7 +17,13 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import io.github.hectorvent.floci.services.s3.model.S3Object;
+
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Provisions individual CloudFormation resource types using Floci's existing service implementations.
@@ -221,23 +227,62 @@ public class CloudFormationResourceProvisioner {
 
     private void provisionLambda(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
                                  String region, String accountId) {
-        String funcName = resolveOptional(props, "FunctionName", engine);
-        if (funcName == null || funcName.isBlank()) {
-            funcName = "cfn-func-" + UUID.randomUUID().toString().substring(0, 8);
-        }
+        String funcName = resolveOrDefault(props, "FunctionName", engine,
+                "cfn-func-" + UUID.randomUUID().toString().substring(0, 8));
         Map<String, Object> req = new HashMap<>();
         req.put("FunctionName", funcName);
-        req.put("Runtime", props != null && props.has("Runtime") ? engine.resolve(props.get("Runtime")) : "nodejs18.x");
-        req.put("Handler", props != null && props.has("Handler") ? engine.resolve(props.get("Handler")) : "index.handler");
-        req.put("Role", props != null && props.has("Role") ? engine.resolve(props.get("Role")) : "arn:aws:iam::" + accountId + ":role/default");
-        if (props != null && props.has("Code")) {
-            req.put("Code", Map.of("ZipFile", "exports.handler=async(e)=>({statusCode:200})"));
-        } else {
-            req.put("Code", Map.of("ZipFile", "exports.handler=async(e)=>({statusCode:200})"));
-        }
+        req.put("Runtime", resolveOrDefault(props, "Runtime", engine, "nodejs18.x"));
+        req.put("Handler", resolveOrDefault(props, "Handler", engine, "index.handler"));
+        req.put("Role", resolveOrDefault(props, "Role", engine, "arn:aws:iam::" + accountId + ":role/default"));
+        req.put("Code", resolveLambdaCode(props, engine));
+
         var func = lambdaService.createFunction(region, req);
         r.setPhysicalId(funcName);
         r.getAttributes().put("Arn", func.getFunctionArn());
+    }
+
+    private Map<String, Object> resolveLambdaCode(JsonNode props, CloudFormationTemplateEngine engine) {
+        if (props != null && props.has("Code")) {
+            JsonNode codeNode = engine.resolveNode(props.get("Code"));
+
+            String s3Bucket = codeNode.path("S3Bucket").asText(null);
+            String s3Key = codeNode.path("S3Key").asText(null);
+            if (s3Bucket != null && s3Key != null) {
+                try {
+                    S3Object obj = s3Service.getObject(s3Bucket, s3Key);
+                    String base64Zip = Base64.getEncoder().encodeToString(obj.getData());
+                    return Map.of("ZipFile", base64Zip);
+                } catch (Exception e) {
+                    LOG.warnv("S3 code not found for Lambda ({0}/{1}), using default handler: {2}",
+                              s3Bucket, s3Key, e.getMessage());
+                }
+            }
+
+            String zipFile = codeNode.path("ZipFile").asText(null);
+            if (zipFile != null) {
+                return Map.of("ZipFile", zipFile);
+            }
+
+            String imageUri = codeNode.path("ImageUri").asText(null);
+            if (imageUri != null) {
+                return Map.of("ImageUri", imageUri);
+            }
+        }
+        return Map.of("ZipFile", defaultHandlerZipBase64());
+    }
+
+    private static String defaultHandlerZipBase64() {
+        try {
+            var baos = new ByteArrayOutputStream();
+            try (var zos = new ZipOutputStream(baos)) {
+                zos.putNextEntry(new ZipEntry("index.js"));
+                zos.write("exports.handler=async(e)=>({statusCode:200})".getBytes(StandardCharsets.UTF_8));
+                zos.closeEntry();
+            }
+            return Base64.getEncoder().encodeToString(baos.toByteArray());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create default handler zip", e);
+        }
     }
 
     // ── IAM Role ──────────────────────────────────────────────────────────────
@@ -459,6 +504,12 @@ public class CloudFormationResourceProvisioner {
             return null;
         }
         return engine.resolve(props.get(name));
+    }
+
+    private String resolveOrDefault(JsonNode props, String name,
+                                    CloudFormationTemplateEngine engine, String defaultValue) {
+        String value = resolveOptional(props, name, engine);
+        return (value != null && !value.isBlank()) ? value : defaultValue;
     }
 
     private void deleteRoleSafe(String roleName) {
