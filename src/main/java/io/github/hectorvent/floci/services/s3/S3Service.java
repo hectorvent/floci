@@ -20,6 +20,7 @@ import org.jboss.logging.Logger;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -437,8 +438,8 @@ public class S3Service {
         // Directory buckets (names ending with --x-s3) do not guarantee order
         if (!isDirectoryBucket(bucketName)) {
             allObjects.sort(Comparator.comparing(
-                    obj -> obj.getKey().getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    java.util.Arrays::compareUnsigned));
+                    obj -> obj.getKey().getBytes(StandardCharsets.UTF_8),
+                    Arrays::compareUnsigned));
         }
 
         if (maxKeys > 0 && allObjects.size() > maxKeys) {
