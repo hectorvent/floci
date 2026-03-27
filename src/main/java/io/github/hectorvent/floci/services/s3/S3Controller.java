@@ -347,8 +347,8 @@ public class S3Controller {
                               @PathParam("key") String key,
                               @QueryParam("versionId") String versionId,
                               @HeaderParam("x-amz-object-attributes") String objectAttributesHeader,
-                              @QueryParam("max-parts") Integer maxParts,
-                              @QueryParam("part-number-marker") Integer partNumberMarker,
+                              @HeaderParam("x-amz-max-parts") Integer maxParts,
+                              @HeaderParam("x-amz-part-number-marker") Integer partNumberMarker,
                               @HeaderParam("range") String rangeHeader,
                               @Context UriInfo uriInfo) {
         try {
