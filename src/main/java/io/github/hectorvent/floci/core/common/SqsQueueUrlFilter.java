@@ -25,7 +25,8 @@ public class SqsQueueUrlFilter implements ContainerRequestFilter {
         String target = ctx.getHeaderString("X-Amz-Target");
         MediaType mt = ctx.getMediaType();
 
-        if (target != null && target.startsWith("AmazonSQS.")
+        if ("POST".equalsIgnoreCase(ctx.getMethod())
+                && target != null && target.startsWith("AmazonSQS.")
                 && mt != null
                 && "application".equals(mt.getType())
                 && "x-amz-json-1.0".equals(mt.getSubtype())) {
