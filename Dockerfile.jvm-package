@@ -2,12 +2,12 @@ FROM eclipse-temurin:25-jre-alpine
 
 WORKDIR /app
 
-RUN mkdir -p /app/data
-VOLUME /app/data
-
-RUN chown 1001 /app \
+RUN mkdir -p /app/data \
+    && chown 1001:root /app \
     && chmod "g+rwX" /app \
-    && chown 1001:root /app
+    && chown 1001:root /app/data
+
+VOLUME /app/data
 
 COPY --chown=1001:root target/quarkus-app quarkus-app/
 
