@@ -346,4 +346,60 @@ class DynamoDbServiceTest {
         assertTrue(stored.has("score"), "score attribute must be present");
         assertEquals("0", stored.get("score").get("N").asText());
     }
+
+    @Test
+    void updateItemSetIfNotExistsCopiesSourceAttributeWhenAttrNameDiffersFromCheckAttr() {
+        // SET a = if_not_exists(b, :v) where b exists → a must be set to b's current value
+        createUsersTable();
+
+        // Put an item that has "source" but not "target"
+        ObjectNode existing = mapper.createObjectNode();
+        ObjectNode userIdVal = mapper.createObjectNode(); userIdVal.put("S", "u-copy");
+        ObjectNode sourceVal = mapper.createObjectNode(); sourceVal.put("S", "copied-value");
+        existing.set("userId", userIdVal);
+        existing.set("source", sourceVal);
+        service.putItem("Users", existing);
+
+        ObjectNode key = item("userId", "u-copy");
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode fallbackVal = mapper.createObjectNode(); fallbackVal.put("S", "fallback");
+        exprValues.set(":v", fallbackVal);
+
+        // target = if_not_exists(source, :v) — source exists, so target should receive source's value
+        service.updateItem("Users", key, null,
+                "SET target = if_not_exists(source, :v)",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertTrue(stored.has("target"), "target attribute must be present");
+        assertEquals("copied-value", stored.get("target").get("S").asText(),
+                "target should receive source's value when source exists");
+    }
+
+    @Test
+    void updateItemSetIfNotExistsUsesFallbackWhenCheckAttrAbsentAndAttrNameDiffers() {
+        // SET a = if_not_exists(b, :v) where b is absent → a must be set to :v
+        createUsersTable();
+
+        // Item has no "source" attribute
+        service.putItem("Users", item("userId", "u-fallback"));
+
+        ObjectNode key = item("userId", "u-fallback");
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode fallbackVal = mapper.createObjectNode(); fallbackVal.put("S", "fallback");
+        exprValues.set(":v", fallbackVal);
+
+        service.updateItem("Users", key, null,
+                "SET target = if_not_exists(source, :v)",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertTrue(stored.has("target"), "target attribute must be present");
+        assertEquals("fallback", stored.get("target").get("S").asText(),
+                "target should receive the fallback value when source is absent");
+    }
 }

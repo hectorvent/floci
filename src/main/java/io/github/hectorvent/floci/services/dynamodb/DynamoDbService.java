@@ -17,6 +17,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -887,26 +888,29 @@ public class DynamoDbService {
             }
 
             // Resolve the value
-            String valueLower = valuePart.toLowerCase();
+            String valueLower = valuePart.toLowerCase(Locale.ROOT);
             if (valueLower.startsWith("if_not_exists(")) {
-                // if_not_exists(attrRef, fallbackExpr): use fallback only when attrRef is absent in the item
+                // if_not_exists(attrRef, fallbackExpr) evaluates to:
+                //   attrRef's current value  — when attrRef exists in the item
+                //   fallbackExpr             — otherwise
+                // The result is always assigned to attrName.
                 String[] args = extractFunctionArgs(valuePart);
                 if (args.length == 2) {
                     String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
                     String fallbackExpr = args[1].trim();
-                    if (!item.has(checkAttr)) {
-                        JsonNode fallback;
-                        if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
-                            fallback = exprAttrValues.get(fallbackExpr);
-                        } else {
-                            // fallback is itself an attribute reference
-                            fallback = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
-                        }
-                        if (fallback != null) {
-                            item.set(attrName, fallback);
-                        }
+                    JsonNode resolved;
+                    if (item.has(checkAttr)) {
+                        // attrRef exists — evaluate to its current value
+                        resolved = item.get(checkAttr);
+                    } else if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
+                        resolved = exprAttrValues.get(fallbackExpr);
+                    } else {
+                        // fallback is itself an attribute reference
+                        resolved = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
                     }
-                    // attribute already exists — keep its current value (no-op)
+                    if (resolved != null) {
+                        item.set(attrName, resolved);
+                    }
                 }
             } else if (valuePart.startsWith(":") && exprAttrValues != null) {
                 JsonNode value = exprAttrValues.get(valuePart);
