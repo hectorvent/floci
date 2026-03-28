@@ -216,6 +216,14 @@ public class ApiGatewayService {
         integration.setHttpMethod((String) request.get("httpMethod"));
         integration.setUri((String) request.get("uri"));
 
+        if (request.get("passthroughBehavior") != null) {
+            integration.setPassthroughBehavior((String) request.get("passthroughBehavior"));
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> reqParams = (Map<String, String>) request.get("requestParameters");
+        if (reqParams != null) integration.setRequestParameters(reqParams);
+
         @SuppressWarnings("unchecked")
         Map<String, String> reqTemplates = (Map<String, String>) request.get("requestTemplates");
         if (reqTemplates != null) integration.setRequestTemplates(reqTemplates);

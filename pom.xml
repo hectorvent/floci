@@ -102,6 +102,13 @@
             <version>0.9.9</version>
         </dependency>
 
+        <!-- Apache Velocity Template Engine (API Gateway VTL mapping templates) -->
+        <dependency>
+            <groupId>org.apache.velocity</groupId>
+            <artifactId>velocity-engine-core</artifactId>
+            <version>2.4.1</version>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>io.quarkus</groupId>
