@@ -2,6 +2,19 @@ name: Compatibility Tests
 
 on:
   pull_request:
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+      - '.mvn/**'
+      - 'mvnw'
+      - 'mvnw.cmd'
+      - 'Dockerfile'
+      - 'Dockerfile.jvm-package'
+      - 'Dockerfile.native'
+      - 'Dockerfile.native-package'
+      - 'docker-compose.yml'
+      - 'docker-compose-test.yml'
+      - '.github/workflows/compatibility.yml'
 
 permissions:
   contents: read
