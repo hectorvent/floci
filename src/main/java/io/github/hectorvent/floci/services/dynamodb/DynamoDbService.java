@@ -887,10 +887,38 @@ public class DynamoDbService {
             }
 
             // Resolve the value
-            if (valuePart.startsWith(":") && exprAttrValues != null) {
+            String valueLower = valuePart.toLowerCase();
+            if (valueLower.startsWith("if_not_exists(")) {
+                // if_not_exists(attrRef, fallbackExpr): use fallback only when attrRef is absent in the item
+                String[] args = extractFunctionArgs(valuePart);
+                if (args.length == 2) {
+                    String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
+                    String fallbackExpr = args[1].trim();
+                    if (!item.has(checkAttr)) {
+                        JsonNode fallback;
+                        if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
+                            fallback = exprAttrValues.get(fallbackExpr);
+                        } else {
+                            // fallback is itself an attribute reference
+                            fallback = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
+                        }
+                        if (fallback != null) {
+                            item.set(attrName, fallback);
+                        }
+                    }
+                    // attribute already exists — keep its current value (no-op)
+                }
+            } else if (valuePart.startsWith(":") && exprAttrValues != null) {
                 JsonNode value = exprAttrValues.get(valuePart);
                 if (value != null) {
                     item.set(attrName, value);
+                }
+            } else if (!valuePart.isEmpty()) {
+                // Plain attribute reference: SET a = b  or  SET a = #alias
+                String refAttr = resolveAttributeName(valuePart, exprAttrNames);
+                JsonNode refValue = item.get(refAttr);
+                if (refValue != null) {
+                    item.set(attrName, refValue);
                 }
             }
 

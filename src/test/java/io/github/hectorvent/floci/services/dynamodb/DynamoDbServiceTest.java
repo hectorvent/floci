@@ -246,4 +246,111 @@ class DynamoDbServiceTest {
         assertThrows(AwsException.class, () -> service.query("NoTable", null, null, null, null, null));
         assertThrows(AwsException.class, () -> service.scan("NoTable", null, null, null, null, null));
     }
+
+    // --- if_not_exists tests ---
+
+    /**
+     * Bug: UpdateItem with "SET attr = if_not_exists(attr, :val)" on a non-existent item
+     * used to create the item with key attributes only, silently dropping the SET clause.
+     * Expected (real AWS): the item is created with both key and the fallback attribute.
+     */
+    @Test
+    void updateItemSetIfNotExistsOnNonExistentItemCreatesAttribute() {
+        createOrdersTable();
+
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode priceVal = mapper.createObjectNode();
+        priceVal.put("N", "100");
+        exprValues.set(":val", priceVal);
+
+        service.updateItem("Orders", key, null,
+                "SET price = if_not_exists(price, :val)",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should have been created");
+        assertTrue(stored.has("price"), "price attribute must be present on a newly created item");
+        assertEquals("100", stored.get("price").get("N").asText());
+    }
+
+    @Test
+    void updateItemSetIfNotExistsPreservesExistingValue() {
+        createOrdersTable();
+
+        // Put an item that already has price = 200
+        ObjectNode existing = mapper.createObjectNode();
+        ObjectNode pkVal = mapper.createObjectNode(); pkVal.put("S", "1");
+        ObjectNode skVal = mapper.createObjectNode(); skVal.put("S", "sort1");
+        ObjectNode priceExisting = mapper.createObjectNode(); priceExisting.put("N", "200");
+        existing.set("customerId", pkVal);
+        existing.set("orderId", skVal);
+        existing.set("price", priceExisting);
+        service.putItem("Orders", existing);
+
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode fallback = mapper.createObjectNode(); fallback.put("N", "100");
+        exprValues.set(":val", fallback);
+
+        service.updateItem("Orders", key, null,
+                "SET price = if_not_exists(price, :val)",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored);
+        // Existing value must NOT be overwritten
+        assertEquals("200", stored.get("price").get("N").asText(),
+                "if_not_exists should preserve the existing value");
+    }
+
+    @Test
+    void updateItemSetIfNotExistsSetsAttributeWhenMissingFromExistingItem() {
+        createOrdersTable();
+
+        // Put an item that does NOT have a price attribute
+        service.putItem("Orders", item("customerId", "1", "orderId", "sort1"));
+
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode fallback = mapper.createObjectNode(); fallback.put("N", "99");
+        exprValues.set(":val", fallback);
+
+        service.updateItem("Orders", key, null,
+                "SET price = if_not_exists(price, :val)",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored);
+        assertTrue(stored.has("price"),
+                "price should be set when it was absent from an existing item");
+        assertEquals("99", stored.get("price").get("N").asText());
+    }
+
+    @Test
+    void updateItemSetIfNotExistsMultipleAttributesOnNewItem() {
+        createUsersTable();
+
+        ObjectNode key = item("userId", "u-new");
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode nameVal = mapper.createObjectNode(); nameVal.put("S", "DefaultName");
+        ObjectNode scoreVal = mapper.createObjectNode(); scoreVal.put("N", "0");
+        exprValues.set(":name", nameVal);
+        exprValues.set(":score", scoreVal);
+
+        service.updateItem("Users", key, null,
+                "SET name = if_not_exists(name, :name), score = if_not_exists(score, :score)",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored, "item should have been created");
+        assertTrue(stored.has("name"), "name attribute must be present");
+        assertEquals("DefaultName", stored.get("name").get("S").asText());
+        assertTrue(stored.has("score"), "score attribute must be present");
+        assertEquals("0", stored.get("score").get("N").asText());
+    }
 }
