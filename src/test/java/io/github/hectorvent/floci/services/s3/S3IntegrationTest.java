@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.util.Arrays;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
@@ -210,7 +212,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(16)
+    @Order(15)
     void cleanupAndDeleteBucket() {
         // Delete all objects
         given().delete("/test-bucket/greeting.txt");
@@ -225,7 +227,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(15)
+    @Order(16)
     void getObjectAttributesRejectsUnknownSelector() {
         given()
             .header("x-amz-object-attributes", "ETag,UnknownThing")
@@ -237,6 +239,7 @@ class S3IntegrationTest {
     }
 
     @Test
+    @Order(17)
     void getNonExistentBucket() {
         given()
         .when()
@@ -324,5 +327,38 @@ class S3IntegrationTest {
         .then()
             .statusCode(400)
             .body(containsString("InvalidLocationConstraint"));
+    }
+
+    @Test
+    @Order(20)
+    void putLargeObject() {
+        // 22 MB – exceeds the old Jackson 20 MB maxStringLength default
+        byte[] largeBody = new byte[22 * 1024 * 1024];
+        Arrays.fill(largeBody, (byte) 'A');
+
+        given()
+        .when()
+            .put("/large-object-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/octet-stream")
+            .body(largeBody)
+        .when()
+            .put("/large-object-bucket/large-file.bin")
+        .then()
+            .statusCode(200)
+            .header("ETag", notNullValue());
+
+        given()
+        .when()
+            .get("/large-object-bucket/large-file.bin")
+        .then()
+            .statusCode(200)
+            .header("Content-Length", String.valueOf(largeBody.length));
+
+        given().delete("/large-object-bucket/large-file.bin");
+        given().delete("/large-object-bucket");
     }
 }

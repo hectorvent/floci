@@ -38,6 +38,9 @@ public interface EmulatorConfig {
     @WithDefault("000000000000")
     String defaultAccountId();
 
+    @WithDefault("536870912")
+    long maxRequestSize();
+
     StorageConfig storage();
 
     AuthConfig auth();
