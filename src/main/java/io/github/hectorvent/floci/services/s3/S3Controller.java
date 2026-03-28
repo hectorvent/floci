@@ -364,7 +364,8 @@ public class S3Controller {
                               @HeaderParam("x-amz-object-attributes") String objectAttributesHeader,
                               @HeaderParam("x-amz-max-parts") Integer maxParts,
                               @HeaderParam("x-amz-part-number-marker") Integer partNumberMarker,
-                              @Context UriInfo uriInfo) {
+                              @Context UriInfo uriInfo,
+                              @Context HttpHeaders httpHeaders) {
         try {
             if (hasQueryParam(uriInfo, "tagging")) {
                 return handleGetObjectTagging(bucket, key);
@@ -379,8 +380,11 @@ public class S3Controller {
                 return Response.ok(s3Service.getObjectAcl(bucket, key, versionId)).build();
             }
             if (hasQueryParam(uriInfo, "attributes")) {
+                // Merge all x-amz-object-attributes header values (SDK may send multiple lines)
+                List<String> attrHeaders = httpHeaders.getRequestHeader("x-amz-object-attributes");
+                String mergedAttributes = attrHeaders != null ? String.join(",", attrHeaders) : objectAttributesHeader;
                 return handleGetObjectAttributes(bucket, key, versionId,
-                        objectAttributesHeader, maxParts, partNumberMarker);
+                        mergedAttributes, maxParts, partNumberMarker);
             }
             S3Object obj = s3Service.getObject(bucket, key, versionId);
             var resp = Response.ok(obj.getData())
