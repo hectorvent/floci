@@ -3,7 +3,7 @@ quarkus:
     port: 4566
     host: 0.0.0.0
     limits:
-      max-body-size: ${floci.max-request-size}
+      max-body-size: ${floci.max-request-size}M
   native:
     additional-build-args: >-
       --initialize-at-run-time=org.apache.hc.client5.http.impl.auth.NTLMEngineImpl,
@@ -16,7 +16,7 @@ quarkus:
       --initialize-at-run-time=io.github.hectorvent.floci.services.acm.CertificateGenerator
 
 floci:
-  max-request-size: 536870912
+  max-request-size: 512
   base-url: "http://localhost:4566"
   # hostname: ""  # When set, overrides the hostname in response URLs (e.g. SQS QueueUrl).
                    # Needed for multi-container Docker setups. Example: FLOCI_HOSTNAME=floci

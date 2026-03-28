@@ -9,7 +9,7 @@ floci:
   base-url: "http://localhost:4566"  # Used to build callback URLs (e.g. SNS subscription endpoints)
   default-region: us-east-1
   default-account-id: "000000000000"
-  max-request-size: 536870912        # Max HTTP request body size in bytes (default 512 MB)
+  max-request-size: 512              # Max HTTP request body size in MB (default 512 MB)
 
   auth:
     validate-signatures: false        # Set to true to enforce AWS request signing
@@ -137,7 +137,7 @@ floci:
 | `FLOCI_SERVICES_SQS_DEFAULT_VISIBILITY_TIMEOUT`    | `30`     | Visibility timeout (seconds)                                  |
 | `FLOCI_SERVICES_SQS_MAX_MESSAGE_SIZE`              | `262144` | Max message size (bytes)                                      |
 | `FLOCI_SERVICES_SQS_MAX_RECEIVE_COUNT`             | `10`     | Max receive count                                             |
-| `FLOCI_MAX_REQUEST_SIZE`                           | `536870912` | Max HTTP request body size in bytes (512 MB)               |
+| `FLOCI_MAX_REQUEST_SIZE`                           | `512`    | Max HTTP request body size in MB                              |
 | `FLOCI_SERVICES_S3_MAX_MULTIPART_PARTS`            | `10000`  | Max parts per upload                                          |
 | `FLOCI_SERVICES_S3_DEFAULT_PRESIGN_EXPIRY_SECONDS` | `3600`   | Pre-signed URL expiry                                         |
 | `FLOCI_SERVICES_DYNAMODB_MAX_ITEM_SIZE`            | `400000` | Max item size (bytes)                                         |

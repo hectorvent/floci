@@ -3,7 +3,7 @@ quarkus:
     port: 0
     test-port: 0
     limits:
-      max-body-size: ${floci.max-request-size}
+      max-body-size: ${floci.max-request-size}M
 
 floci:
   base-url: "http://localhost:4566"
