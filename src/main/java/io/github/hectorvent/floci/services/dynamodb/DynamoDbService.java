@@ -17,7 +17,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
-import java.util.Locale;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -888,8 +887,7 @@ public class DynamoDbService {
             }
 
             // Resolve the value
-            String valueLower = valuePart.toLowerCase(Locale.ROOT);
-            if (valueLower.startsWith("if_not_exists(")) {
+            if (valuePart.startsWith("if_not_exists(")) {
                 // if_not_exists(attrRef, fallbackExpr) evaluates to:
                 //   attrRef's current value  — when attrRef exists in the item
                 //   fallbackExpr             — otherwise
