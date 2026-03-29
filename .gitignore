@@ -12,6 +12,8 @@ data/
 .DS_Store
 
 CLAUDE.md
+GEMINI.md
+COPILOT.md
 .claude
 
 posts

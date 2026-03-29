@@ -41,10 +41,18 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) â
 
 ## Adding a New AWS Service
 
-See [CLAUDE.md](https://github.com/hectorvent/floci/blob/main/CLAUDE.md) for the full architecture guide. Quick summary:
+See [AGENT.md](https://github.com/hectorvent/floci/blob/main/AGENT.md) for the full architecture guide. `AGENT.md` is the canonical agent instructions file for this repository. If your coding agent expects a different filename, create a local symlink to `AGENT.md` instead of copying it.
+
+```bash
+ln -s AGENT.md CLAUDE.md
+ln -s AGENT.md GEMINI.md
+ln -s AGENT.md COPILOT.md
+```
+
+Quick summary:
 
 1. Create `src/main/java/.../services/<service>/` with a Controller, Service, and `model/` package
-2. Pick the right protocol (see the protocol table in CLAUDE.md)
+2. Pick the right protocol (see the protocol table in `AGENT.md`)
 3. Register the service in `ServiceRegistry`
 4. Add config in `EmulatorConfig.java` and `application.yml`
 5. Add `*IntegrationTest.java` tests

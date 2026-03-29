@@ -78,7 +78,15 @@ feat!: change default storage mode to persistent
 
 ## Architecture
 
-See [CLAUDE.md](CLAUDE.md) for a detailed description of the three-layer architecture (Controller → Service → Storage), the AWS wire protocol mapping, and conventions for adding new services.
+See [AGENT.md](AGENT.md) for a detailed description of the three-layer architecture (Controller → Service → Storage), the AWS wire protocol mapping, and conventions for adding new services.
+
+`AGENT.md` is the canonical agent instructions file for this repository. If your coding agent expects a different filename, create a local symlink to `AGENT.md` instead of copying the file.
+
+```bash
+ln -s AGENT.md CLAUDE.md
+ln -s AGENT.md GEMINI.md
+ln -s AGENT.md COPILOT.md
+```
 
 ## Adding a New AWS Service
 
