@@ -186,17 +186,14 @@ class S3ServiceTest {
         s3Service.putObject("test-bucket", "root.txt", "r".getBytes(), null, null);
 
         S3Service.ListObjectsResult result = s3Service.listObjectsWithPrefixes("test-bucket", null, "/", 1000);
-        assertEquals(1, result.objects().size(), "only root.txt has no delimiter in its key");
-        assertEquals("root.txt", result.objects().get(0).getKey());
-        assertEquals(2, result.commonPrefixes().size());
-        assertTrue(result.commonPrefixes().contains("docs/"));
-        assertTrue(result.commonPrefixes().contains("images/"));
+        List<String> rootKeys = result.objects().stream().map(S3Object::getKey).toList();
+        assertEquals(List.of("root.txt"), rootKeys);
+        assertEquals(List.of("docs/", "images/"), result.commonPrefixes());
 
         S3Service.ListObjectsResult docsResult = s3Service.listObjectsWithPrefixes("test-bucket", "docs/", "/", 1000);
-        assertEquals(1, docsResult.objects().size(), "only docs/a.txt is at this level");
-        assertEquals("docs/a.txt", docsResult.objects().get(0).getKey());
-        assertEquals(1, docsResult.commonPrefixes().size());
-        assertTrue(docsResult.commonPrefixes().contains("docs/sub/"));
+        List<String> docKeys = docsResult.objects().stream().map(S3Object::getKey).toList();
+        assertEquals(List.of("docs/a.txt"), docKeys);
+        assertEquals(List.of("docs/sub/"), docsResult.commonPrefixes());
     }
 
     @Test

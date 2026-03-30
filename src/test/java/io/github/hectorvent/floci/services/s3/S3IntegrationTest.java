@@ -158,7 +158,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(11)
+    @Order(12)
     void listObjectsWithDelimiterReturnsCommonPrefixes() {
         given()
             .queryParam("delimiter", "/")
@@ -174,7 +174,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(12)
+    @Order(13)
     void copyObject() {
         given()
             .header("x-amz-copy-source", "/test-bucket/greeting.txt")
@@ -200,7 +200,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(14)
     void deleteObject() {
         given()
         .when()
@@ -217,7 +217,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(15)
     void deleteNonEmptyBucketFails() {
         given()
         .when()

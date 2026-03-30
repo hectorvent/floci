@@ -449,7 +449,10 @@ public class S3Service {
 
             allObjects = directObjects;
             commonPrefixes = new ArrayList<>(prefixSet);
+            Collections.sort(commonPrefixes);
         }
+
+        allObjects.sort(Comparator.comparing(S3Object::getKey));
 
         if (maxKeys > 0 && allObjects.size() > maxKeys) {
             allObjects = allObjects.subList(0, maxKeys);
