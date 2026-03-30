@@ -44,12 +44,16 @@ class DynamoDbServiceTest {
                 5L, 5L);
     }
 
+    private ObjectNode attributeValue(String type, String value) {
+        ObjectNode attrValue = mapper.createObjectNode();
+        attrValue.put(type, value);
+        return attrValue;
+    }
+
     private ObjectNode item(String... kvPairs) {
         ObjectNode node = mapper.createObjectNode();
         for (int i = 0; i < kvPairs.length; i += 2) {
-            ObjectNode attrValue = mapper.createObjectNode();
-            attrValue.put("S", kvPairs[i + 1]);
-            node.set(kvPairs[i], attrValue);
+            node.set(kvPairs[i], attributeValue("S", kvPairs[i + 1]));
         }
         return node;
     }
@@ -214,6 +218,36 @@ class DynamoDbServiceTest {
         DynamoDbService.QueryResult results = service.query("Orders", null, exprValues,
                 "customerId = :pk AND begins_with(orderId, :sk)", null, null);
         assertEquals(2, results.items().size());
+    }
+
+    @Test
+    void queryAppliesFilterExpressionAfterKeyCondition() {
+        createOrdersTable();
+
+        ObjectNode first = item("customerId", "c1", "orderId", "o1");
+        first.set("total", attributeValue("N", "100"));
+        service.putItem("Orders", first);
+
+        ObjectNode second = item("customerId", "c1", "orderId", "o2");
+        second.set("total", attributeValue("N", "100"));
+        service.putItem("Orders", second);
+
+        ObjectNode third = item("customerId", "c1", "orderId", "o3");
+        third.set("total", attributeValue("N", "99"));
+        service.putItem("Orders", third);
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":pk", attributeValue("S", "c1"));
+        exprValues.set(":min", attributeValue("N", "100"));
+
+        DynamoDbService.QueryResult results = service.query("Orders", null, exprValues,
+                "customerId = :pk", "total >= :min", null);
+
+        assertEquals(2, results.items().size());
+        assertEquals(3, results.scannedCount());
+        assertEquals(List.of("o1", "o2"), results.items().stream()
+                .map(result -> result.get("orderId").get("S").asText())
+                .toList());
     }
 
     @Test

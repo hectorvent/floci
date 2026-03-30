@@ -487,6 +487,14 @@ public class DynamoDbService {
         }
 
         int scannedCount = results.size();
+
+        if (filterExpression != null) {
+            results = results.stream()
+                    .filter(item -> matchesFilterExpression(item, filterExpression,
+                            exprAttrNames, expressionAttrValues))
+                    .toList();
+        }
+
         JsonNode lastEvaluatedKey = null;
 
         if (limit != null && limit > 0 && results.size() > limit) {
