@@ -445,8 +445,9 @@ public class S3Controller {
 
     private Response handleCorsPreFlight(String bucket, String origin,
                                           String requestMethod, String requestHeadersStr) {
-        if (origin == null || origin.isBlank()) {
-            // Not a CORS preflight — return a plain 200
+        if (origin == null || origin.isBlank()
+                || requestMethod == null || requestMethod.isBlank()) {
+            // Not a valid CORS preflight — return a plain 200 with no CORS headers
             return Response.ok().build();
         }
         List<String> requestHeaders = (requestHeadersStr != null && !requestHeadersStr.isBlank())
