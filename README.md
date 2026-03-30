@@ -52,7 +52,7 @@
 | KMS (sign, verify, re-encrypt) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**24 services. 408/408 SDK tests passing. Free forever.**
+**25 services. 408/408 SDK tests passing. Free forever.**
 
 ## Architecture Overview
 
@@ -64,7 +64,7 @@ flowchart LR
         Router["HTTP Router\n(JAX-RS / Vert.x)"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis\nEventBridge · CloudWatch\nStep Functions · CloudFormation\nACM · API Gateway"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · CloudWatch\nStep Functions · CloudFormation\nACM · API Gateway"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -114,6 +114,7 @@ flowchart LR
 | **RDS** | 14 | **Real Docker containers** | PostgreSQL & MySQL, IAM auth, JDBC-compatible |
 | **ACM** | 8 | In-process | Certificate issuance, validation lifecycle |
 | **SES** | 14 | In-process | Send email / raw email, identity verification, DKIM attributes |
+| **OpenSearch** | 24 | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
 
 > **Lambda, ElastiCache, and RDS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS.
 

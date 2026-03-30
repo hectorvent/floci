@@ -57,6 +57,8 @@ floci:
       acm:
         mode: memory
         flush-interval-ms: 5000
+      opensearch:
+        flush-interval-ms: 5000
 
   auth:
     validate-signatures: false
@@ -129,3 +131,9 @@ floci:
       validation-wait-seconds: 0
     ses:
       enabled: true
+    opensearch:
+      enabled: true
+      mode: mock
+      default-image: "opensearchproject/opensearch:2"
+      proxy-base-port: 9400
+      proxy-max-port: 9499

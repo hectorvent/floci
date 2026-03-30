@@ -70,6 +70,7 @@ public interface EmulatorConfig {
         CloudWatchMetricsStorageConfig cloudwatchmetrics();
         SecretsManagerStorageConfig secretsmanager();
         AcmStorageConfig acm();
+        OpenSearchStorageConfig opensearch();
     }
 
     interface SsmStorageConfig {
@@ -146,6 +147,13 @@ public interface EmulatorConfig {
         long flushIntervalMs();
     }
 
+    interface OpenSearchStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
     interface WalConfig {
         @WithDefault("30000")
         long compactionIntervalMs();
@@ -186,6 +194,7 @@ public interface EmulatorConfig {
         CloudFormationServiceConfig cloudformation();
         AcmServiceConfig acm();
         SesServiceConfig ses();
+        OpenSearchServiceConfig opensearch();
     }
 
     interface SsmServiceConfig {
@@ -343,6 +352,25 @@ public interface EmulatorConfig {
     interface SesServiceConfig {
         @WithDefault("true")
         boolean enabled();
+    }
+
+    interface OpenSearchServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("mock")
+        String mode();
+
+        @WithDefault("opensearchproject/opensearch:2")
+        String defaultImage();
+
+        @WithDefault("9400")
+        int proxyBasePort();
+
+        @WithDefault("9499")
+        int proxyMaxPort();
+
+        Optional<String> dockerNetwork();
     }
 
     interface LambdaServiceConfig {

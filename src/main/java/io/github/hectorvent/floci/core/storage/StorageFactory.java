@@ -108,6 +108,7 @@ public class StorageFactory {
             case "cloudwatchlogs" -> config.storage().services().cloudwatchlogs().mode();
             case "cloudwatchmetrics" -> config.storage().services().cloudwatchmetrics().mode();
             case "secretsmanager" -> config.storage().services().secretsmanager().mode();
+            case "opensearch" -> config.storage().services().opensearch().mode().orElse(config.storage().mode());
             default -> config.storage().mode();
         };
     }
@@ -121,6 +122,7 @@ public class StorageFactory {
             case "cloudwatchlogs" -> config.storage().services().cloudwatchlogs().flushIntervalMs();
             case "cloudwatchmetrics" -> config.storage().services().cloudwatchmetrics().flushIntervalMs();
             case "secretsmanager" -> config.storage().services().secretsmanager().flushIntervalMs();
+            case "opensearch" -> config.storage().services().opensearch().flushIntervalMs();
             default -> 5000L;
         };
     }

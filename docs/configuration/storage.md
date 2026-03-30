@@ -72,6 +72,8 @@ Override the global mode for individual services via environment variables:
 | `FLOCI_STORAGE_SERVICES_CLOUDWATCHMETRICS_FLUSH_INTERVAL_MS`    | `5000`   | CloudWatch Metrics flush interval (ms) |
 | `FLOCI_STORAGE_SERVICES_SECRETSMANAGER_MODE`                    | `memory` | Secrets Manager storage mode           |
 | `FLOCI_STORAGE_SERVICES_SECRETSMANAGER_FLUSH_INTERVAL_MS`       | `5000`   | Secrets Manager flush interval (ms)    |
+| `FLOCI_STORAGE_SERVICES_OPENSEARCH_MODE`                        | global default | OpenSearch storage mode           |
+| `FLOCI_STORAGE_SERVICES_OPENSEARCH_FLUSH_INTERVAL_MS`           | `5000`         | OpenSearch flush interval (ms)    |
 
 ## Environment Variable Override
 

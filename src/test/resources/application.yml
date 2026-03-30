@@ -40,6 +40,8 @@ floci:
       secretsmanager:
         mode: memory
         flush-interval-ms: 60000
+      opensearch:
+        flush-interval-ms: 60000
 
   auth:
     validate-signatures: false
@@ -98,3 +100,6 @@ floci:
       enabled: true
     cloudformation:
       enabled: true
+    opensearch:
+      enabled: true
+      mode: mock
