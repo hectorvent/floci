@@ -69,6 +69,7 @@ nav:
     - SSM Parameter Store: services/ssm.md
     - SQS: services/sqs.md
     - SNS: services/sns.md
+    - SES: services/ses.md
     - S3: services/s3.md
     - DynamoDB: services/dynamodb.md
     - Lambda: services/lambda.md
