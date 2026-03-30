@@ -1019,7 +1019,7 @@ public class S3Service {
         }
 
         String region = regionResolver != null ? regionResolver.getDefaultRegion() : "us-east-1";
-        String eventJson = buildS3EventJson(bucketName, key, eventName, obj, region);
+        String eventJson = buildS3EventJson(bucketName, key, eventName, obj, region, bucket.isVersioningEnabled());
 
         for (QueueNotification qn : config.getQueueConfigurations()) {
             if (qn.events().stream().anyMatch(p -> matchesEvent(p, eventName))) {
@@ -1058,7 +1058,7 @@ public class S3Service {
     }
 
     private String buildS3EventJson(String bucketName, String key, String eventName,
-                                    S3Object obj, String region) {
+                                    S3Object obj, String region, boolean isVersionEnabled) {
         try {
             String eventTime = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
             long size = obj != null ? obj.getSize() : 0;
@@ -1073,7 +1073,10 @@ public class S3Service {
             objectNode.put("key", key);
             objectNode.put("size", size);
             objectNode.put("eTag", eTag);
-
+            if(isVersionEnabled) {
+                String versionId = obj !=null && obj.getVersionId()!=null ? obj.getVersionId() : "";
+                objectNode.put("versionId", versionId);
+            }
             ObjectNode s3Node = objectMapper.createObjectNode();
             s3Node.put("s3SchemaVersion", "1.0");
             s3Node.put("configurationId", "emulator");
