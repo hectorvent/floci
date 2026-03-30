@@ -277,6 +277,35 @@ class DynamoDbIntegrationTest {
 
     @Test
     @Order(12)
+    void queryWithFilterExpressionAndLimitReturnsLastEvaluatedKey() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk",
+                    "FilterExpression": "total >= :min",
+                    "Limit": 2,
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"},
+                        ":min": {"N": "50"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(1))
+            .body("ScannedCount", equalTo(2))
+            .body("Items[0].sk.S", equalTo("order-001"))
+            .body("LastEvaluatedKey.pk.S", equalTo("user-1"))
+            .body("LastEvaluatedKey.sk.S", equalTo("order-002"));
+    }
+
+    @Test
+    @Order(13)
     void scan() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.Scan")
@@ -293,7 +322,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(14)
     void deleteItem() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteItem")
@@ -333,7 +362,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(15)
     void deleteTable() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
