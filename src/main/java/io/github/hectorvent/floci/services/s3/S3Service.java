@@ -925,7 +925,20 @@ public class S3Service {
             List<String> allowedHeaders = rule.getOrDefault("AllowedHeader", List.of());
             List<String> exposeHeaders  = rule.getOrDefault("ExposeHeader",  List.of());
             List<String> maxAgeList     = rule.getOrDefault("MaxAgeSeconds", List.of());
-            int maxAge = maxAgeList.isEmpty() ? 0 : Integer.parseInt(maxAgeList.get(0));
+            int maxAge = 0;
+            if (!maxAgeList.isEmpty()) {
+                String maxAgeRaw = maxAgeList.get(0);
+                if (maxAgeRaw != null) {
+                    String trimmed = maxAgeRaw.trim();
+                    if (!trimmed.isEmpty()) {
+                        try {
+                            maxAge = Integer.parseInt(trimmed);
+                        } catch (NumberFormatException ignored) {
+                            // Treat invalid MaxAgeSeconds as no max-age (equivalent to 0)
+                        }
+                    }
+                }
+            }
 
             boolean originMatches = allowedOrigins.contains("*")
                 || (origin != null && allowedOrigins.stream().anyMatch(ao -> matchesCorsOrigin(ao, origin)));
