@@ -15,6 +15,7 @@ Floci also serves OIDC well-known endpoints, making it compatible with JWT valid
 | **User Operations** | SignUp, ConfirmSignUp, GetUser, UpdateUserAttributes, ChangePassword, ForgotPassword, ConfirmForgotPassword |
 | **Authentication** | InitiateAuth, AdminInitiateAuth, RespondToAuthChallenge |
 | **User Listing** | ListUsers |
+| **Groups** | CreateGroup, GetGroup, ListGroups, DeleteGroup, AdminAddUserToGroup, AdminRemoveUserFromGroup, AdminListGroupsForUser |
 
 ## OIDC Well-Known Endpoints
 
@@ -63,6 +64,26 @@ aws cognito-idp initiate-auth \
   --client-id $CLIENT_ID \
   --auth-parameters USERNAME=alice@example.com,PASSWORD=Perm1234! \
   --endpoint-url $AWS_ENDPOINT
+
+# Create a group
+aws cognito-idp create-group \
+  --user-pool-id $POOL_ID \
+  --group-name admin \
+  --description "Admin group" \
+  --endpoint-url $AWS_ENDPOINT
+
+# Add user to group
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id $POOL_ID \
+  --group-name admin \
+  --username alice@example.com \
+  --endpoint-url $AWS_ENDPOINT
+
+# List groups for user
+aws cognito-idp admin-list-groups-for-user \
+  --user-pool-id $POOL_ID \
+  --username alice@example.com \
+  --endpoint-url $AWS_ENDPOINT
 ```
 
 ## JWT Validation
@@ -78,5 +99,7 @@ The OIDC discovery endpoint returns:
 ```
 http://localhost:4566/.well-known/openid-configuration
 ```
+
+Tokens include the `cognito:groups` claim as a JSON array when the authenticated user belongs to one or more groups.
 
 This allows libraries like `jsonwebtoken`, `jose`, or Spring Security to validate tokens against Floci the same way they would against real Cognito.

@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import com.fasterxml.jackson.core.type.TypeReference;
+import io.github.hectorvent.floci.services.cognito.model.CognitoGroup;
 import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
 import io.github.hectorvent.floci.services.cognito.model.UserPool;
 import io.github.hectorvent.floci.services.cognito.model.UserPoolClient;
@@ -16,6 +17,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class CognitoService {
@@ -25,15 +27,30 @@ public class CognitoService {
     private final StorageBackend<String, UserPool> poolStore;
     private final StorageBackend<String, UserPoolClient> clientStore;
     private final StorageBackend<String, CognitoUser> userStore;
+    private final StorageBackend<String, CognitoGroup> groupStore;
 
     @Inject
     public CognitoService(StorageFactory storageFactory) {
-        this.poolStore = storageFactory.create("cognito", "cognito-pools.json",
-                new TypeReference<Map<String, UserPool>>() {});
-        this.clientStore = storageFactory.create("cognito", "cognito-clients.json",
-                new TypeReference<Map<String, UserPoolClient>>() {});
-        this.userStore = storageFactory.create("cognito", "cognito-users.json",
-                new TypeReference<Map<String, CognitoUser>>() {});
+        this(
+            storageFactory.create("cognito", "cognito-pools.json",
+                    new TypeReference<Map<String, UserPool>>() {}),
+            storageFactory.create("cognito", "cognito-clients.json",
+                    new TypeReference<Map<String, UserPoolClient>>() {}),
+            storageFactory.create("cognito", "cognito-users.json",
+                    new TypeReference<Map<String, CognitoUser>>() {}),
+            storageFactory.create("cognito", "cognito-groups.json",
+                    new TypeReference<Map<String, CognitoGroup>>() {})
+        );
+    }
+
+    CognitoService(StorageBackend<String, UserPool> poolStore,
+                   StorageBackend<String, UserPoolClient> clientStore,
+                   StorageBackend<String, CognitoUser> userStore,
+                   StorageBackend<String, CognitoGroup> groupStore) {
+        this.poolStore = poolStore;
+        this.clientStore = clientStore;
+        this.userStore = userStore;
+        this.groupStore = groupStore;
     }
 
     // ──────────────────────────── User Pools ────────────────────────────
@@ -58,6 +75,9 @@ public class CognitoService {
     }
 
     public void deleteUserPool(String id) {
+        String prefix = id + "::";
+        groupStore.scan(k -> k.startsWith(prefix))
+                .forEach(g -> groupStore.delete(groupKey(id, g.getGroupName())));
         poolStore.delete(id);
     }
 
@@ -127,6 +147,13 @@ public class CognitoService {
     }
 
     public void adminDeleteUser(String userPoolId, String username) {
+        CognitoUser user = adminGetUser(userPoolId, username);
+        for (String groupName : new ArrayList<>(user.getGroupNames())) {
+            groupStore.get(groupKey(userPoolId, groupName)).ifPresent(group -> {
+                group.removeUserName(username);
+                groupStore.put(groupKey(userPoolId, groupName), group);
+            });
+        }
         userStore.delete(userKey(userPoolId, username));
     }
 
@@ -150,6 +177,82 @@ public class CognitoService {
     public List<CognitoUser> listUsers(String userPoolId) {
         String prefix = userPoolId + "::";
         return userStore.scan(k -> k.startsWith(prefix));
+    }
+
+    // ──────────────────────────── Groups ────────────────────────────
+
+    public CognitoGroup createGroup(String userPoolId, String groupName, String description,
+                                     Integer precedence, String roleArn) {
+        describeUserPool(userPoolId);
+        validateGroupName(groupName);
+        if (groupStore.get(groupKey(userPoolId, groupName)).isPresent()) {
+            throw new AwsException("GroupExistsException",
+                    "A group with the name " + groupName + " already exists.", 400);
+        }
+        CognitoGroup group = new CognitoGroup();
+        group.setGroupName(groupName);
+        group.setUserPoolId(userPoolId);
+        group.setDescription(description);
+        group.setPrecedence(precedence);
+        group.setRoleArn(roleArn);
+        groupStore.put(groupKey(userPoolId, groupName), group);
+        LOG.infov("Created Cognito group: {0} in pool {1}", groupName, userPoolId);
+        return group;
+    }
+
+    public CognitoGroup getGroup(String userPoolId, String groupName) {
+        validateGroupName(groupName);
+        return groupStore.get(groupKey(userPoolId, groupName))
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                        "Group not found: " + groupName, 404));
+    }
+
+    public List<CognitoGroup> listGroups(String userPoolId) {
+        describeUserPool(userPoolId);
+        String prefix = userPoolId + "::";
+        return groupStore.scan(k -> k.startsWith(prefix));
+    }
+
+    public void deleteGroup(String userPoolId, String groupName) {
+        CognitoGroup group = getGroup(userPoolId, groupName);
+        for (String username : new ArrayList<>(group.getUserNames())) {
+            userStore.get(userKey(userPoolId, username)).ifPresent(user -> {
+                user.getGroupNames().remove(groupName);
+                userStore.put(userKey(userPoolId, username), user);
+            });
+        }
+        groupStore.delete(groupKey(userPoolId, groupName));
+        LOG.infov("Deleted Cognito group: {0} from pool {1}", groupName, userPoolId);
+    }
+
+    public void adminAddUserToGroup(String userPoolId, String groupName, String username) {
+        CognitoGroup group = getGroup(userPoolId, groupName);
+        CognitoUser user = adminGetUser(userPoolId, username);
+        if (group.addUserName(username)) {
+            groupStore.put(groupKey(userPoolId, groupName), group);
+        }
+        if (!user.getGroupNames().contains(groupName)) {
+            user.getGroupNames().add(groupName);
+            userStore.put(userKey(userPoolId, username), user);
+        }
+    }
+
+    public void adminRemoveUserFromGroup(String userPoolId, String groupName, String username) {
+        CognitoGroup group = getGroup(userPoolId, groupName);
+        CognitoUser user = adminGetUser(userPoolId, username);
+        if (group.removeUserName(username)) {
+            groupStore.put(groupKey(userPoolId, groupName), group);
+        }
+        if (user.getGroupNames().remove(groupName)) {
+            userStore.put(userKey(userPoolId, username), user);
+        }
+    }
+
+    public List<CognitoGroup> adminListGroupsForUser(String userPoolId, String username) {
+        CognitoUser user = adminGetUser(userPoolId, username);
+        return user.getGroupNames().stream()
+                .flatMap(gn -> groupStore.get(groupKey(userPoolId, gn)).stream())
+                .toList();
     }
 
     // ──────────────────────────── Self-Service Registration ────────────────────────────
@@ -391,13 +494,20 @@ public class CognitoService {
 
         long now = System.currentTimeMillis() / 1000L;
         String email = user.getAttributes().getOrDefault("email", user.getUsername());
+        String groupsFragment = "";
+        if (!user.getGroupNames().isEmpty()) {
+            String groupsJson = user.getGroupNames().stream()
+                    .map(g -> "\"" + escapeJsonString(g) + "\"")
+                    .collect(Collectors.joining(",", "[", "]"));
+            groupsFragment = ",\"cognito:groups\":" + groupsJson;
+        }
         String payloadJson = String.format(
                 "{\"sub\":\"%s\",\"event_id\":\"%s\",\"token_use\":\"%s\",\"auth_time\":%d," +
                 "\"iss\":\"https://cognito-idp.local/%s\",\"exp\":%d,\"iat\":%d," +
-                "\"username\":\"%s\",\"email\":\"%s\",\"cognito:username\":\"%s\"}",
+                "\"username\":\"%s\",\"email\":\"%s\",\"cognito:username\":\"%s\"%s}",
                 UUID.randomUUID(), UUID.randomUUID(), type, now,
                 pool.getId(), now + 3600, now,
-                user.getUsername(), email, user.getUsername()
+                user.getUsername(), email, user.getUsername(), groupsFragment
         );
         String payload = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(payloadJson.getBytes(StandardCharsets.UTF_8));
@@ -481,6 +591,35 @@ public class CognitoService {
         }
     }
 
+    private void validateGroupName(String groupName) {
+        if (groupName == null || groupName.isEmpty()) {
+            throw new AwsException("InvalidParameterException", "GroupName is required", 400);
+        }
+    }
+
+    private String escapeJsonString(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\b' -> sb.append("\\b");
+                case '\f' -> sb.append("\\f");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        return sb.toString();
+    }
+
     private String extractJsonField(String json, String field) {
         String search = "\"" + field + "\":\"";
         int start = json.indexOf(search);
@@ -493,5 +632,9 @@ public class CognitoService {
 
     private String userKey(String poolId, String username) {
         return poolId + "::" + username;
+    }
+
+    private String groupKey(String poolId, String groupName) {
+        return poolId + "::" + groupName;
     }
 }

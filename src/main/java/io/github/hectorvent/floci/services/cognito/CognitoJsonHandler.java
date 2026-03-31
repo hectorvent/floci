@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hectorvent.floci.services.cognito.model.CognitoGroup;
 import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
 import io.github.hectorvent.floci.services.cognito.model.UserPool;
 import io.github.hectorvent.floci.services.cognito.model.UserPoolClient;
@@ -54,6 +55,13 @@ public class CognitoJsonHandler {
             case "ConfirmForgotPassword" -> handleConfirmForgotPassword(request);
             case "GetUser" -> handleGetUser(request);
             case "UpdateUserAttributes" -> handleUpdateUserAttributes(request);
+            case "CreateGroup" -> handleCreateGroup(request);
+            case "GetGroup" -> handleGetGroup(request);
+            case "ListGroups" -> handleListGroups(request);
+            case "DeleteGroup" -> handleDeleteGroup(request);
+            case "AdminAddUserToGroup" -> handleAdminAddUserToGroup(request);
+            case "AdminRemoveUserFromGroup" -> handleAdminRemoveUserFromGroup(request);
+            case "AdminListGroupsForUser" -> handleAdminListGroupsForUser(request);
             default -> Response.status(400)
                     .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
                     .build();
@@ -339,6 +347,81 @@ public class CognitoJsonHandler {
             attr.put("Name", k);
             attr.put("Value", v);
         });
+        return node;
+    }
+
+    private Response handleCreateGroup(JsonNode request) {
+        String userPoolId = request.path("UserPoolId").asText();
+        String groupName = request.path("GroupName").asText();
+        String description = request.path("Description").asText(null);
+        JsonNode precNode = request.path("Precedence");
+        Integer precedence = precNode.isMissingNode() ? null : precNode.asInt();
+        String roleArn = request.path("RoleArn").asText(null);
+        CognitoGroup group = service.createGroup(userPoolId, groupName, description, precedence, roleArn);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("Group", groupToNode(group));
+        return Response.ok(response).build();
+    }
+
+    private Response handleGetGroup(JsonNode request) {
+        CognitoGroup group = service.getGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("Group", groupToNode(group));
+        return Response.ok(response).build();
+    }
+
+    private Response handleListGroups(JsonNode request) {
+        List<CognitoGroup> groups = service.listGroups(request.path("UserPoolId").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("Groups");
+        groups.forEach(g -> items.add(groupToNode(g)));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDeleteGroup(JsonNode request) {
+        service.deleteGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminAddUserToGroup(JsonNode request) {
+        service.adminAddUserToGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText(),
+                request.path("Username").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminRemoveUserFromGroup(JsonNode request) {
+        service.adminRemoveUserFromGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText(),
+                request.path("Username").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminListGroupsForUser(JsonNode request) {
+        List<CognitoGroup> groups = service.adminListGroupsForUser(
+                request.path("UserPoolId").asText(),
+                request.path("Username").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("Groups");
+        groups.forEach(g -> items.add(groupToNode(g)));
+        return Response.ok(response).build();
+    }
+
+    private ObjectNode groupToNode(CognitoGroup g) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("GroupName", g.getGroupName());
+        node.put("UserPoolId", g.getUserPoolId());
+        if (g.getDescription() != null) node.put("Description", g.getDescription());
+        if (g.getPrecedence() != null) node.put("Precedence", g.getPrecedence());
+        if (g.getRoleArn() != null) node.put("RoleArn", g.getRoleArn());
+        node.put("CreationDate", g.getCreationDate());
+        node.put("LastModifiedDate", g.getLastModifiedDate());
         return node;
     }
 
