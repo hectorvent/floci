@@ -10,8 +10,11 @@ data/
 .classpath
 .vscode/
 .DS_Store
+.zed/settings.json
 
 CLAUDE.md
+GEMINI.md
+COPILOT.md
 .claude
 
 posts

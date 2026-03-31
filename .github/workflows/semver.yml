@@ -12,6 +12,20 @@ on:
     branches:
       - 'release/[0-9]+.x'
       - 'release/[0-9]+.[0-9]+.x'
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+      - '.mvn/**'
+      - 'mvnw'
+      - 'mvnw.cmd'
+      - 'Dockerfile'
+      - 'Dockerfile.jvm-package'
+      - 'Dockerfile.native'
+      - 'Dockerfile.native-package'
+      - 'docker-compose.yml'
+      - 'docker-compose-test.yml'
+      - '.releaserc.json'
+      - '.github/workflows/semver.yml'
 
 permissions:
   contents: write
