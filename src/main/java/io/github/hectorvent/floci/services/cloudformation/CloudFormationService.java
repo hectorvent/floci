@@ -48,7 +48,7 @@ public class CloudFormationService {
 
     public List<Stack> describeStacks(String stackName, String region) {
         if (stackName != null && !stackName.isBlank()) {
-            Stack stack = stacks.get(key(stackName, region));
+            Stack stack = resolveStack(stackName, region);
             if (stack == null) {
                 throw new AwsException("ValidationError",
                         "Stack with id " + stackName + " does not exist", 400);
@@ -143,7 +143,7 @@ public class CloudFormationService {
     // ── DeleteStack ───────────────────────────────────────────────────────────
 
     public void deleteStack(String stackName, String region) {
-        Stack stack = stacks.get(key(stackName, region));
+        Stack stack = resolveStack(stackName, region);
         if (stack == null) {
             return; // Already gone — no-op
         }
@@ -468,13 +468,58 @@ public class CloudFormationService {
         stack.getEvents().add(event);
     }
 
-    private Stack getStackOrThrow(String stackName, String region) {
-        Stack stack = stacks.get(key(stackName, region));
+    private Stack getStackOrThrow(String stackNameOrArn, String region) {
+        Stack stack = resolveStack(stackNameOrArn, region);
         if (stack == null) {
             throw new AwsException("ValidationError",
-                    "Stack with id " + stackName + " does not exist", 400);
+                    "Stack with id " + stackNameOrArn + " does not exist", 400);
         }
         return stack;
+    }
+
+    /**
+     * Resolves a stack by name or ARN. When an ARN is provided the stack name
+     * is extracted from the ARN path segment ({@code …:stack/<name>/<id>}).
+     * Falls back to a linear scan matching on stackId for robustness.
+     */
+    private Stack resolveStack(String stackNameOrArn, String region) {
+        // Try direct name lookup first (fast path)
+        Stack stack = stacks.get(key(stackNameOrArn, region));
+        if (stack != null) {
+            return stack;
+        }
+
+        // If input looks like an ARN, extract the stack name and retry
+        if (stackNameOrArn != null && stackNameOrArn.startsWith("arn:")) {
+            String extractedName = extractStackNameFromArn(stackNameOrArn);
+            if (extractedName != null) {
+                stack = stacks.get(key(extractedName, region));
+                if (stack != null) {
+                    return stack;
+                }
+            }
+            // Fallback: scan by stackId in case the ARN format is unexpected
+            for (Stack s : stacks.values()) {
+                if (stackNameOrArn.equals(s.getStackId())) {
+                    return s;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Extracts the stack name from a CloudFormation stack ARN.
+     * Expected format: {@code arn:aws:cloudformation:REGION:ACCOUNT:stack/STACK_NAME/UUID}
+     */
+    private static String extractStackNameFromArn(String arn) {
+        int stackSegment = arn.indexOf(":stack/");
+        if (stackSegment < 0) {
+            return null;
+        }
+        String afterStack = arn.substring(stackSegment + ":stack/".length());
+        int slash = afterStack.indexOf('/');
+        return slash > 0 ? afterStack.substring(0, slash) : afterStack;
     }
 
     private static String key(String stackName, String region) {
