@@ -599,4 +599,89 @@ class DynamoDbServiceTest {
         node.set("M", inner);
         return node;
     }
+
+    private ObjectNode numberSetAttributeValue(String... values) {
+        ObjectNode node = mapper.createObjectNode();
+        var arrayNode = mapper.createArrayNode();
+        for (String v : values) {
+            arrayNode.add(v);
+        }
+        node.set("NS", arrayNode);
+        return node;
+    }
+
+    private ObjectNode binarySetAttributeValue(String... base64Values) {
+        ObjectNode node = mapper.createObjectNode();
+        var arrayNode = mapper.createArrayNode();
+        for (String v : base64Values) {
+            arrayNode.add(v);
+        }
+        node.set("BS", arrayNode);
+        return node;
+    }
+
+    @Test
+    void scanContainsOnNumberSetWithNumericNormalization() {
+        createUsersTable();
+        ObjectNode u1 = item("userId", "u1");
+        u1.set("scores", numberSetAttributeValue("1", "2", "3"));
+        service.putItem("Users", u1);
+
+        ObjectNode u2 = item("userId", "u2");
+        u2.set("scores", numberSetAttributeValue("4", "5"));
+        service.putItem("Users", u2);
+
+        // Search for "1.0" — should match "1" via numeric comparison
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":v", attributeValue("N", "1.0"));
+
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(scores, :v)", null, exprValues, null, null);
+        assertEquals(1, result.items().size(), "contains() on NS should match 1.0 == 1 numerically");
+    }
+
+    @Test
+    void scanContainsOnBinarySet() {
+        createUsersTable();
+        ObjectNode u1 = item("userId", "u1");
+        u1.set("bins", binarySetAttributeValue("AQID", "BAUG"));  // base64 for [1,2,3] and [4,5,6]
+        service.putItem("Users", u1);
+
+        ObjectNode u2 = item("userId", "u2");
+        u2.set("bins", binarySetAttributeValue("BwgJ"));
+        service.putItem("Users", u2);
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":v", attributeValue("B", "AQID"));
+
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(bins, :v)", null, exprValues, null, null);
+        assertEquals(1, result.items().size());
+    }
+
+    @Test
+    void scanContainsOnListWithNumericElements() {
+        createUsersTable();
+        ObjectNode u1 = item("userId", "u1");
+        var list = mapper.createArrayNode();
+        list.add(attributeValue("N", "10"));
+        list.add(attributeValue("N", "20"));
+        ObjectNode listNode = mapper.createObjectNode();
+        listNode.set("L", list);
+        u1.set("values", listNode);
+        service.putItem("Users", u1);
+
+        ObjectNode u2 = item("userId", "u2");
+        var list2 = mapper.createArrayNode();
+        list2.add(attributeValue("N", "30"));
+        ObjectNode listNode2 = mapper.createObjectNode();
+        listNode2.set("L", list2);
+        u2.set("values", listNode2);
+        service.putItem("Users", u2);
+
+        // Search for N:10.0 — should match N:10 via type-aware comparison
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":v", attributeValue("N", "10.0"));
+
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(values, :v)", null, exprValues, null, null);
+        assertEquals(1, result.items().size(), "contains() on List with N elements should use type-aware numeric comparison");
+    }
 }

@@ -1099,10 +1099,12 @@ public class DynamoDbService {
                 JsonNode attrNode = item.get(attrName);
                 if (attrNode == null) return false;
                 // List type: check if any element in the list matches the search value
+                // Use type-aware comparison to handle N, BOOL, NULL, and nested types correctly
                 if (attrNode.has("L")) {
+                    JsonNode searchAttrValue = exprAttrValues != null
+                            ? exprAttrValues.get(args[1].trim()) : null;
                     for (JsonNode element : attrNode.get("L")) {
-                        String elementValue = extractScalarValue(element);
-                        if (searchValue.equals(elementValue)) return true;
+                        if (attributeValuesEqual(element, searchAttrValue)) return true;
                     }
                     return false;
                 }
@@ -1113,11 +1115,14 @@ public class DynamoDbService {
                     }
                     return false;
                 }
-                // NS (Number Set): check if the set contains the value
+                // NS (Number Set): compare numerically for equivalence (e.g. "1" == "1.0")
                 if (attrNode.has("NS")) {
-                    for (JsonNode element : attrNode.get("NS")) {
-                        if (searchValue.equals(element.asText())) return true;
-                    }
+                    try {
+                        java.math.BigDecimal target = new java.math.BigDecimal(searchValue);
+                        for (JsonNode element : attrNode.get("NS")) {
+                            if (target.compareTo(new java.math.BigDecimal(element.asText())) == 0) return true;
+                        }
+                    } catch (NumberFormatException ignored) {}
                     return false;
                 }
                 // BS (Binary Set): check if the set contains the value (base64)
@@ -1168,6 +1173,27 @@ public class DynamoDbService {
             return extractScalarValue(exprAttrValues.get(placeholder));
         }
         return placeholder;
+    }
+
+    private boolean attributeValuesEqual(JsonNode a, JsonNode b) {
+        if (a == null || b == null) return a == b;
+        // Compare by DynamoDB type
+        for (String type : new String[]{"S", "B", "BOOL", "NULL"}) {
+            if (a.has(type) && b.has(type)) {
+                return a.get(type).asText().equals(b.get(type).asText());
+            }
+        }
+        // Numeric comparison
+        if (a.has("N") && b.has("N")) {
+            try {
+                return new java.math.BigDecimal(a.get("N").asText())
+                        .compareTo(new java.math.BigDecimal(b.get("N").asText())) == 0;
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        }
+        // Different types are never equal
+        return false;
     }
 
     private int compareValues(String a, String b) {
