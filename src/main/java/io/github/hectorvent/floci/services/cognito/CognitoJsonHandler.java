@@ -355,7 +355,7 @@ public class CognitoJsonHandler {
         String groupName = request.path("GroupName").asText();
         String description = request.path("Description").asText(null);
         JsonNode precNode = request.path("Precedence");
-        Integer precedence = precNode.isMissingNode() ? null : precNode.asInt();
+        Integer precedence = precNode.isMissingNode() || precNode.isNull() ? null : precNode.asInt();
         String roleArn = request.path("RoleArn").asText(null);
         CognitoGroup group = service.createGroup(userPoolId, groupName, description, precedence, roleArn);
         ObjectNode response = objectMapper.createObjectNode();

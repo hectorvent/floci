@@ -201,6 +201,7 @@ public class CognitoService {
     }
 
     public CognitoGroup getGroup(String userPoolId, String groupName) {
+        describeUserPool(userPoolId);
         validateGroupName(groupName);
         return groupStore.get(groupKey(userPoolId, groupName))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
