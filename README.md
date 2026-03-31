@@ -248,6 +248,10 @@ services:
 
 Without this, SQS returns `http://localhost:4566/...` in QueueUrl responses, which resolves to the wrong container.
 
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=hectorvent/floci&type=Date)](https://star-history.com/#hectorvent/floci&Date)
+
 ## Contributors
 
 <a href="https://github.com/hectorvent/floci/graphs/contributors">
