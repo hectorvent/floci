@@ -16,29 +16,18 @@ floci:
       compaction-interval-ms: 60000
     services:
       ssm:
-        mode: memory
         flush-interval-ms: 60000
-      sqs:
-        mode: memory
-      s3:
-        mode: memory
       dynamodb:
-        mode: memory
         flush-interval-ms: 60000
       sns:
-        mode: memory
         flush-interval-ms: 60000
       lambda:
-        mode: memory
         flush-interval-ms: 60000
       cloudwatchlogs:
-        mode: memory
         flush-interval-ms: 60000
       cloudwatchmetrics:
-        mode: memory
         flush-interval-ms: 60000
       secretsmanager:
-        mode: memory
         flush-interval-ms: 60000
       opensearch:
         flush-interval-ms: 60000

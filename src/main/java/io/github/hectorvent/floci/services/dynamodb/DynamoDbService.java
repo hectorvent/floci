@@ -486,16 +486,25 @@ public class DynamoDbService {
             }
         }
 
-        int scannedCount = results.size();
+        List<JsonNode> evaluatedItems = results;
         JsonNode lastEvaluatedKey = null;
 
-        if (limit != null && limit > 0 && results.size() > limit) {
-            JsonNode lastItem = results.get(limit - 1);
+        if (limit != null && limit > 0 && evaluatedItems.size() > limit) {
+            JsonNode lastItem = evaluatedItems.get(limit - 1);
             lastEvaluatedKey = buildKeyNode(table, lastItem, pkName, skName);
-            results = results.subList(0, limit);
+            evaluatedItems = new ArrayList<>(evaluatedItems.subList(0, limit));
         }
 
-        return new QueryResult(results, scannedCount, lastEvaluatedKey);
+        int scannedCount = evaluatedItems.size();
+
+        if (filterExpression != null) {
+            evaluatedItems = evaluatedItems.stream()
+                    .filter(item -> matchesFilterExpression(item, filterExpression,
+                            exprAttrNames, expressionAttrValues))
+                    .toList();
+        }
+
+        return new QueryResult(evaluatedItems, scannedCount, lastEvaluatedKey);
     }
 
     public ScanResult scan(String tableName, String filterExpression,

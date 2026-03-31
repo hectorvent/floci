@@ -29,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -552,11 +553,15 @@ public class S3Controller {
     @Path("/{bucket}")
     @Produces(MediaType.APPLICATION_XML)
     public Response handleBucketPost(@PathParam("bucket") String bucket,
+                                      @HeaderParam("Content-Type") String contentType,
                                       @Context UriInfo uriInfo,
                                       byte[] body) {
         try {
             if (hasQueryParam(uriInfo, "delete")) {
                 return handleDeleteObjects(bucket, body);
+            }
+            if (contentType != null && contentType.startsWith("multipart/form-data")) {
+                return handlePresignedPost(bucket, contentType, body);
             }
             return xmlErrorResponse(new AwsException("InvalidArgument",
                     "POST on bucket requires ?delete parameter.", 400));
@@ -1253,6 +1258,258 @@ public class S3Controller {
             } catch (Exception e2) {
                 return null;
             }
+        }
+    }
+
+    private Response handlePresignedPost(String bucket, String contentType, byte[] body) {
+        String boundary = extractBoundary(contentType);
+        if (boundary == null) {
+            throw new AwsException("InvalidArgument",
+                    "Could not determine multipart boundary from Content-Type.", 400);
+        }
+
+        Map<String, String> fields = new LinkedHashMap<>();
+        byte[] fileData = null;
+        String fileContentType = null;
+
+        byte[] boundaryBytes = ("--" + boundary).getBytes(StandardCharsets.UTF_8);
+        List<byte[]> parts = splitMultipartParts(body, boundaryBytes);
+
+        for (byte[] part : parts) {
+            int headerEnd = indexOfDoubleNewline(part);
+            if (headerEnd < 0) {
+                continue;
+            }
+            String headers = new String(part, 0, headerEnd, StandardCharsets.UTF_8);
+            int bodyStart = headerEnd + 4; // skip \r\n\r\n
+            byte[] partBody = Arrays.copyOfRange(part, bodyStart, part.length);
+
+            // Trim trailing \r\n from part body
+            if (partBody.length >= 2
+                    && partBody[partBody.length - 2] == '\r'
+                    && partBody[partBody.length - 1] == '\n') {
+                partBody = Arrays.copyOf(partBody, partBody.length - 2);
+            }
+
+            String disposition = extractHeaderValue(headers, "Content-Disposition");
+            if (disposition == null) {
+                continue;
+            }
+            String fieldName = extractDispositionParam(disposition, "name");
+            if (fieldName == null) {
+                continue;
+            }
+
+            String filename = extractDispositionParam(disposition, "filename");
+            if (filename != null) {
+                fileData = partBody;
+                String partContentType = extractHeaderValue(headers, "Content-Type");
+                if (partContentType != null) {
+                    fileContentType = partContentType.trim();
+                }
+            } else {
+                fields.put(fieldName, new String(partBody, StandardCharsets.UTF_8));
+            }
+        }
+
+        String key = fields.get("key");
+        if (key == null || key.isEmpty()) {
+            throw new AwsException("InvalidArgument",
+                    "Bucket POST must contain a field named 'key'.", 400);
+        }
+
+        if (fileData == null) {
+            throw new AwsException("InvalidArgument",
+                    "Bucket POST must contain a file field.", 400);
+        }
+
+        // Validate content-length-range from policy if present
+        String policy = fields.get("policy");
+        if (policy != null && !policy.isEmpty()) {
+            validateContentLengthRange(policy, fileData.length);
+        }
+
+        // Use Content-Type from form fields, fall back to file part Content-Type
+        String objectContentType = fields.get("Content-Type");
+        if (objectContentType == null || objectContentType.isEmpty()) {
+            objectContentType = fileContentType;
+        }
+        if (objectContentType == null || objectContentType.isEmpty()) {
+            objectContentType = "application/octet-stream";
+        }
+
+        S3Object obj = s3Service.putObject(bucket, key, fileData, objectContentType, null);
+        LOG.infov("Presigned POST upload: {0}/{1} ({2} bytes)", bucket, key, fileData.length);
+
+        String xml = new XmlBuilder()
+                .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                .start("PostResponse")
+                .elem("Location", bucket + "/" + key)
+                .elem("Bucket", bucket)
+                .elem("Key", key)
+                .elem("ETag", obj.getETag())
+                .end("PostResponse")
+                .build();
+        return Response.status(204)
+                .header("ETag", obj.getETag())
+                .header("Location", bucket + "/" + key)
+                .build();
+    }
+
+    private void validateContentLengthRange(String policyBase64, int contentLength) {
+        try {
+            String decoded = new String(java.util.Base64.getDecoder().decode(policyBase64), StandardCharsets.UTF_8);
+            // Parse conditions array from the policy JSON to find content-length-range
+            int condIdx = decoded.indexOf("\"conditions\"");
+            if (condIdx < 0) {
+                return;
+            }
+            // Look for content-length-range condition: ["content-length-range", min, max]
+            String lower = decoded.toLowerCase(Locale.ROOT);
+            int rangeIdx = lower.indexOf("content-length-range");
+            if (rangeIdx < 0) {
+                return;
+            }
+            // Find the enclosing array bracket
+            int bracketStart = decoded.lastIndexOf('[', rangeIdx);
+            int bracketEnd = decoded.indexOf(']', rangeIdx);
+            if (bracketStart < 0 || bracketEnd < 0) {
+                return;
+            }
+            String rangeArray = decoded.substring(bracketStart, bracketEnd + 1);
+            // Extract min and max values
+            String[] tokens = rangeArray.replaceAll("[\\[\\]\"]", "").split(",");
+            if (tokens.length >= 3) {
+                long min = Long.parseLong(tokens[1].trim());
+                long max = Long.parseLong(tokens[2].trim());
+                if (contentLength < min || contentLength > max) {
+                    throw new AwsException("EntityTooLarge",
+                            "Your proposed upload exceeds the maximum allowed size.", 400);
+                }
+            }
+        } catch (AwsException e) {
+            throw e;
+        } catch (Exception e) {
+            // If policy parsing fails, skip validation (match AWS lenient behavior for emulator)
+            LOG.debugv("Failed to parse presigned POST policy: {0}", e.getMessage());
+        }
+    }
+
+    private static String extractBoundary(String contentType) {
+        if (contentType == null) {
+            return null;
+        }
+        for (String part : contentType.split(";")) {
+            String trimmed = part.trim();
+            if (trimmed.toLowerCase(Locale.ROOT).startsWith("boundary=")) {
+                String boundary = trimmed.substring("boundary=".length()).trim();
+                if (boundary.startsWith("\"") && boundary.endsWith("\"")) {
+                    boundary = boundary.substring(1, boundary.length() - 1);
+                }
+                return boundary;
+            }
+        }
+        return null;
+    }
+
+    private static List<byte[]> splitMultipartParts(byte[] body, byte[] boundary) {
+        java.util.ArrayList<byte[]> parts = new java.util.ArrayList<>();
+        int pos = indexOf(body, boundary, 0);
+        if (pos < 0) {
+            return parts;
+        }
+        // Skip past the first boundary line
+        pos += boundary.length;
+        // Skip the CRLF or -- after boundary
+        if (pos < body.length - 1 && body[pos] == '-' && body[pos + 1] == '-') {
+            return parts; // closing boundary immediately
+        }
+        if (pos < body.length - 1 && body[pos] == '\r' && body[pos + 1] == '\n') {
+            pos += 2;
+        }
+
+        while (pos < body.length) {
+            int nextBoundary = indexOf(body, boundary, pos);
+            if (nextBoundary < 0) {
+                break;
+            }
+            parts.add(Arrays.copyOfRange(body, pos, nextBoundary));
+            pos = nextBoundary + boundary.length;
+            // Check for closing boundary --
+            if (pos < body.length - 1 && body[pos] == '-' && body[pos + 1] == '-') {
+                break;
+            }
+            // Skip CRLF after boundary
+            if (pos < body.length - 1 && body[pos] == '\r' && body[pos + 1] == '\n') {
+                pos += 2;
+            }
+        }
+        return parts;
+    }
+
+    private static int indexOf(byte[] data, byte[] pattern, int fromIndex) {
+        outer:
+        for (int i = fromIndex; i <= data.length - pattern.length; i++) {
+            for (int j = 0; j < pattern.length; j++) {
+                if (data[i + j] != pattern[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    private static int indexOfDoubleNewline(byte[] data) {
+        for (int i = 0; i < data.length - 3; i++) {
+            if (data[i] == '\r' && data[i + 1] == '\n' && data[i + 2] == '\r' && data[i + 3] == '\n') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static String extractHeaderValue(String headers, String headerName) {
+        String lowerHeaders = headers.toLowerCase(Locale.ROOT);
+        String lowerName = headerName.toLowerCase(Locale.ROOT) + ":";
+        int idx = lowerHeaders.indexOf(lowerName);
+        if (idx < 0) {
+            return null;
+        }
+        int valueStart = idx + lowerName.length();
+        int lineEnd = headers.indexOf('\r', valueStart);
+        if (lineEnd < 0) {
+            lineEnd = headers.indexOf('\n', valueStart);
+        }
+        if (lineEnd < 0) {
+            lineEnd = headers.length();
+        }
+        return headers.substring(valueStart, lineEnd).trim();
+    }
+
+    private static String extractDispositionParam(String disposition, String paramName) {
+        String search = paramName + "=";
+        int idx = disposition.indexOf(search);
+        if (idx < 0) {
+            return null;
+        }
+        int valueStart = idx + search.length();
+        if (valueStart >= disposition.length()) {
+            return null;
+        }
+        if (disposition.charAt(valueStart) == '"') {
+            valueStart++;
+            int valueEnd = disposition.indexOf('"', valueStart);
+            if (valueEnd < 0) {
+                return disposition.substring(valueStart);
+            }
+            return disposition.substring(valueStart, valueEnd);
+        } else {
+            int valueEnd = disposition.indexOf(';', valueStart);
+            if (valueEnd < 0) {
+                valueEnd = disposition.length();
+            }
+            return disposition.substring(valueStart, valueEnd).trim();
         }
     }
 

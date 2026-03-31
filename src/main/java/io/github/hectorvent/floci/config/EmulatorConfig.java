@@ -76,74 +76,64 @@ public interface EmulatorConfig {
     }
 
     interface SsmStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface SqsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
     }
 
     interface S3StorageConfig {
-        @WithDefault("hybrid")
-        String mode();
+        Optional<String> mode();
     }
 
     interface DynamoDbStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface SnsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface LambdaStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface CloudWatchLogsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface CloudWatchMetricsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface SecretsManagerStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface AcmStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();

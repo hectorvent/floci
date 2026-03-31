@@ -108,7 +108,7 @@ public class AslExecutor {
                         }
                     } catch (FailStateException e) {
                         exec.setStatus("FAILED");
-                        exec.setStopDate(System.currentTimeMillis() / 1000L);
+                        exec.setStopDate(System.currentTimeMillis() / 1000.0);
                         String failError = e.error != null ? e.error : "States.Runtime";
                         String failCause = e.cause != null ? e.cause : "";
                         exec.setError(failError);
@@ -119,7 +119,7 @@ public class AslExecutor {
                         return;
                     } catch (Exception e) {
                         exec.setStatus("FAILED");
-                        exec.setStopDate(System.currentTimeMillis() / 1000L);
+                        exec.setStopDate(System.currentTimeMillis() / 1000.0);
                         String runtimeError = "States.Runtime";
                         String runtimeCause = e.getMessage() != null ? e.getMessage() : "Unknown error";
                         exec.setError(runtimeError);
@@ -133,7 +133,7 @@ public class AslExecutor {
 
                 exec.setStatus("SUCCEEDED");
                 exec.setOutput(currentInput.toString());
-                exec.setStopDate(System.currentTimeMillis() / 1000L);
+                exec.setStopDate(System.currentTimeMillis() / 1000.0);
                 addEvent(history, eventId, "ExecutionSucceeded", null,
                         Map.of("output", currentInput.toString()));
                 onUpdate.accept(exec, history);
@@ -141,7 +141,7 @@ public class AslExecutor {
             } catch (Exception e) {
                 LOG.warnv("ASL execution failed for {0}: {1}", exec.getExecutionArn(), e.getMessage());
                 exec.setStatus("FAILED");
-                exec.setStopDate(System.currentTimeMillis() / 1000L);
+                exec.setStopDate(System.currentTimeMillis() / 1000.0);
                 onUpdate.accept(exec, history);
             }
         });
@@ -669,7 +669,7 @@ public class AslExecutor {
         execution.put("Id", exec.getExecutionArn());
         execution.put("Name", exec.getName());
         execution.put("RoleArn", sm.getRoleArn());
-        execution.put("StartTime", java.time.Instant.ofEpochSecond(exec.getStartDate()).toString());
+        execution.put("StartTime", java.time.Instant.ofEpochMilli((long) (exec.getStartDate() * 1000)).toString());
         if (exec.getInput() != null) {
             execution.set("Input", parseInput(exec.getInput()));
         }
