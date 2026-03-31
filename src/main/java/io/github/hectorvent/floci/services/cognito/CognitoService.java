@@ -211,7 +211,9 @@ public class CognitoService {
     public List<CognitoGroup> listGroups(String userPoolId) {
         describeUserPool(userPoolId);
         String prefix = userPoolId + "::";
-        return groupStore.scan(k -> k.startsWith(prefix));
+        List<CognitoGroup> groups = new ArrayList<>(groupStore.scan(k -> k.startsWith(prefix)));
+        groups.sort(Comparator.comparing(CognitoGroup::getGroupName));
+        return groups;
     }
 
     public void deleteGroup(String userPoolId, String groupName) {
@@ -250,6 +252,7 @@ public class CognitoService {
     }
 
     public List<CognitoGroup> adminListGroupsForUser(String userPoolId, String username) {
+        describeUserPool(userPoolId);
         CognitoUser user = adminGetUser(userPoolId, username);
         return user.getGroupNames().stream()
                 .flatMap(gn -> groupStore.get(groupKey(userPoolId, gn)).stream())
@@ -593,7 +596,7 @@ public class CognitoService {
     }
 
     private void validateGroupName(String groupName) {
-        if (groupName == null || groupName.isEmpty()) {
+        if (groupName == null || groupName.isBlank()) {
             throw new AwsException("InvalidParameterException", "GroupName is required", 400);
         }
     }
