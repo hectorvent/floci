@@ -232,4 +232,47 @@ class CognitoServiceTest {
         assertTrue(payloadJson.contains("\"cognito:groups\":[\"admins\"]"),
                 "JWT payload should contain cognito:groups claim with the group name");
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void jwtEscapesSpecialCharsInGroupName() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(pool.getId(), "test-client");
+
+        String specialGroup = "group\"with\\special\nchars";
+        service.createGroup(pool.getId(), specialGroup, null, null, null);
+        service.adminAddUserToGroup(pool.getId(), specialGroup, "alice");
+
+        Map<String, Object> authResult = service.initiateAuth(
+                client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+
+        Map<String, Object> auth = (Map<String, Object>) authResult.get("AuthenticationResult");
+        String token = (String) auth.get("AccessToken");
+        String payloadJson = new String(
+                Base64.getUrlDecoder().decode(token.split("\\.")[1]), StandardCharsets.UTF_8);
+
+        assertTrue(payloadJson.contains("cognito:groups"),
+                "JWT should contain cognito:groups claim");
+        assertTrue(payloadJson.contains("group\\\"with\\\\special\\nchars"),
+                "Group name should be properly JSON-escaped in JWT payload");
+    }
+
+    // =========================================================================
+    // deleteUserPool cascades groups
+    // =========================================================================
+
+    @Test
+    void deleteUserPoolCascadesGroups() {
+        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
+        service.createGroup(pool.getId(), "editors", "Editor group", 2, null);
+
+        service.deleteUserPool(pool.getId());
+
+        assertThrows(AwsException.class, () ->
+                service.getGroup(pool.getId(), "admins"));
+        assertThrows(AwsException.class, () ->
+                service.getGroup(pool.getId(), "editors"));
+    }
 }
