@@ -109,13 +109,10 @@ public class Message {
                 dos.writeInt(typeBytes.length);
                 dos.write(typeBytes);
 
-                if ("Binary".equals(val.getDataType()) || val.getDataType().startsWith("Binary.")) {
-                    dos.write(2);
-                    // For now, emulator assumes string values for simplicity, but if it were binary we'd decode it.
-                    // Actually, the SDK encodes Binary attributes as base64 in StringValue if sent via JSON.
-                    byte[] valBytes = java.util.Base64.getDecoder().decode(val.getStringValue());
-                    dos.writeInt(valBytes.length);
-                    dos.write(valBytes);
+                if (val.getBinaryValue() != null) {
+                    dos.write(2); // Binary type
+                    dos.writeInt(val.getBinaryValue().length);
+                    dos.write(val.getBinaryValue());
                 } else {
                     dos.write(1); // String or Number
                     byte[] valBytes = val.getStringValue().getBytes(java.nio.charset.StandardCharsets.UTF_8);

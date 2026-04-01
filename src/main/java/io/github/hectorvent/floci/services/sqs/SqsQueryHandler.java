@@ -11,6 +11,7 @@ import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -131,8 +132,14 @@ public class SqsQueryHandler {
             if (name == null) break;
             String dataType = getParam(params, "MessageAttribute." + i + ".Value.DataType");
             String stringValue = getParam(params, "MessageAttribute." + i + ".Value.StringValue");
-            if (dataType != null && stringValue != null) {
-                messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+            String binaryValueBase64 = getParam(params, "MessageAttribute." + i + ".Value.BinaryValue");
+            if (dataType != null) {
+                if (binaryValueBase64 != null) {
+                    byte[] binaryValue = Base64.getDecoder().decode(binaryValueBase64);
+                    messageAttributes.put(name, new MessageAttributeValue(binaryValue, dataType));
+                } else if (stringValue != null) {
+                    messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+                }
             }
         }
 
@@ -189,9 +196,13 @@ public class SqsQueryHandler {
                     xml.start("MessageAttribute")
                        .elem("Name", entry.getKey())
                        .start("Value")
-                       .elem("DataType", entry.getValue().getDataType())
-                       .elem("StringValue", entry.getValue().getStringValue())
-                       .end("Value")
+                       .elem("DataType", entry.getValue().getDataType());
+                    if (entry.getValue().getBinaryValue() != null) {
+                        xml.elem("BinaryValue", Base64.getEncoder().encodeToString(entry.getValue().getBinaryValue()));
+                    } else {
+                        xml.elem("StringValue", entry.getValue().getStringValue());
+                    }
+                    xml.end("Value")
                        .end("MessageAttribute");
                 }
             }
@@ -257,8 +268,14 @@ public class SqsQueryHandler {
                 if (name == null) break;
                 String dataType = getParam(params, "SendMessageBatchRequestEntry." + i + ".MessageAttribute." + j + ".Value.DataType");
                 String stringValue = getParam(params, "SendMessageBatchRequestEntry." + i + ".MessageAttribute." + j + ".Value.StringValue");
-                if (dataType != null && stringValue != null) {
-                    messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+                String binaryValueBase64 = getParam(params, "SendMessageBatchRequestEntry." + i + ".MessageAttribute." + j + ".Value.BinaryValue");
+                if (dataType != null) {
+                    if (binaryValueBase64 != null) {
+                        byte[] binaryValue = Base64.getDecoder().decode(binaryValueBase64);
+                        messageAttributes.put(name, new MessageAttributeValue(binaryValue, dataType));
+                    } else if (stringValue != null) {
+                        messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+                    }
                 }
             }
 
@@ -268,6 +285,9 @@ public class SqsQueryHandler {
                    .elem("Id", id)
                    .elem("MessageId", msg.getMessageId())
                    .elem("MD5OfMessageBody", msg.getMd5OfBody());
+                if (msg.getMd5OfMessageAttributes() != null) {
+                    xml.elem("MD5OfMessageAttributes", msg.getMd5OfMessageAttributes());
+                }
                 if (msg.getSequenceNumber() > 0) {
                     xml.elem("SequenceNumber", msg.getSequenceNumber());
                 }
