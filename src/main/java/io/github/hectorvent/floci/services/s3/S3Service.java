@@ -908,6 +908,15 @@ public class S3Service {
                 .toList();
     }
 
+    public MultipartUpload listParts(String bucket, String key, String uploadId) {
+        MultipartUpload upload = multipartUploads.get(uploadId);
+        if (upload == null || !upload.getBucket().equals(bucket) || !upload.getKey().equals(key)) {
+            throw new AwsException("NoSuchUpload",
+                    "The specified multipart upload does not exist.", 404);
+        }
+        return upload;
+    }
+
     // --- Notification Configuration ---
 
     public void putBucketNotificationConfiguration(String bucketName, NotificationConfiguration config) {

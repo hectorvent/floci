@@ -368,6 +368,9 @@ public class S3Controller {
     public Response getObject(@PathParam("bucket") String bucket,
                               @PathParam("key") String key,
                               @QueryParam("versionId") String versionId,
+                              @QueryParam("uploadId") String uploadId,
+                              @QueryParam("max-parts") Integer maxPartsQuery,
+                              @QueryParam("part-number-marker") String partNumberMarkerQuery,
                               @HeaderParam("x-amz-object-attributes") String objectAttributesHeader,
                               @HeaderParam("x-amz-max-parts") Integer maxParts,
                               @HeaderParam("x-amz-part-number-marker") Integer partNumberMarker,
@@ -379,6 +382,9 @@ public class S3Controller {
                               @Context UriInfo uriInfo,
                               @Context HttpHeaders httpHeaders) {
         try {
+            if (uploadId != null) {
+                return handleListParts(bucket, key, uploadId, maxPartsQuery, partNumberMarkerQuery);
+            }
             if (hasQueryParam(uriInfo, "tagging")) {
                 return handleGetObjectTagging(bucket, key);
             }
@@ -677,6 +683,63 @@ public class S3Controller {
         }
         builder.end("DeleteResult");
         return Response.ok(builder.build()).type(MediaType.APPLICATION_XML).build();
+    }
+
+    private Response handleListParts(String bucket, String key, String uploadId,
+                                      Integer maxPartsParam, String partNumberMarkerParam) {
+        MultipartUpload upload = s3Service.listParts(bucket, key, uploadId);
+        int maxPartsLimit = (maxPartsParam != null && maxPartsParam > 0) ? maxPartsParam : 1000;
+        int markerValue = 0;
+        if (partNumberMarkerParam != null && !partNumberMarkerParam.isBlank()) {
+            try {
+                markerValue = Integer.parseInt(partNumberMarkerParam.trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        final int marker = markerValue;
+
+        List<Part> sortedParts = upload.getParts().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .filter(e -> e.getKey() > marker)
+                .limit(maxPartsLimit + 1L)
+                .map(Map.Entry::getValue)
+                .toList();
+
+        boolean truncated = sortedParts.size() > maxPartsLimit;
+        List<Part> page = truncated ? sortedParts.subList(0, maxPartsLimit) : sortedParts;
+        String nextMarker = truncated ? String.valueOf(page.getLast().getPartNumber()) : null;
+
+        XmlBuilder xml = new XmlBuilder()
+                .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                .start("ListPartsResult", AwsNamespaces.S3)
+                .elem("Bucket", bucket)
+                .elem("Key", key)
+                .elem("UploadId", uploadId)
+                .elem("PartNumberMarker", String.valueOf(marker))
+                .elem("MaxParts", maxPartsLimit)
+                .elem("IsTruncated", truncated);
+        if (truncated) {
+            xml.elem("NextPartNumberMarker", nextMarker);
+        }
+        for (Part part : page) {
+            xml.start("Part")
+               .elem("PartNumber", part.getPartNumber())
+               .elem("LastModified", ISO_FORMAT.format(part.getLastModified()))
+               .elem("ETag", part.getETag())
+               .elem("Size", part.getSize())
+               .end("Part");
+        }
+        xml.start("Initiator")
+           .elem("ID", "owner")
+           .elem("DisplayName", "owner")
+           .end("Initiator")
+           .start("Owner")
+           .elem("ID", "owner")
+           .elem("DisplayName", "owner")
+           .end("Owner")
+           .elem("StorageClass", upload.getStorageClass());
+        xml.end("ListPartsResult");
+        return Response.ok(xml.build()).type(MediaType.APPLICATION_XML).build();
     }
 
     private Response handleListMultipartUploads(String bucket) {
