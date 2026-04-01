@@ -12,6 +12,7 @@ public class NotificationConfiguration {
 
     private List<QueueNotification> queueConfigurations = new ArrayList<>();
     private List<TopicNotification> topicConfigurations = new ArrayList<>();
+    private boolean eventBridgeEnabled;
 
     public NotificationConfiguration() {}
 
@@ -25,7 +26,10 @@ public class NotificationConfiguration {
         this.topicConfigurations = topicConfigurations != null ? topicConfigurations : new ArrayList<>();
     }
 
+    public boolean isEventBridgeEnabled() { return eventBridgeEnabled; }
+    public void setEventBridgeEnabled(boolean eventBridgeEnabled) { this.eventBridgeEnabled = eventBridgeEnabled; }
+
     public boolean isEmpty() {
-        return queueConfigurations.isEmpty() && topicConfigurations.isEmpty();
+        return queueConfigurations.isEmpty() && topicConfigurations.isEmpty() && !eventBridgeEnabled;
     }
 }

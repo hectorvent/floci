@@ -8,6 +8,7 @@ import io.github.hectorvent.floci.core.common.XmlBuilder;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.s3.model.*;
+import io.github.hectorvent.floci.services.eventbridge.EventBridgeService;
 import io.github.hectorvent.floci.services.sns.SnsService;
 import io.github.hectorvent.floci.services.sqs.SqsService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -44,13 +45,16 @@ public class S3Service {
 
     private final SqsService sqsService;
     private final SnsService snsService;
+    private final EventBridgeService eventBridgeService;
     private final RegionResolver regionResolver;
     private final String baseUrl;
     private final ObjectMapper objectMapper;
 
     @Inject
     public S3Service(StorageFactory storageFactory, EmulatorConfig config,
-                     SqsService sqsService, SnsService snsService, RegionResolver regionResolver,
+                     SqsService sqsService, SnsService snsService,
+                     EventBridgeService eventBridgeService,
+                     RegionResolver regionResolver,
                      ObjectMapper objectMapper) {
         this(
                 storageFactory.create("s3", "s3-buckets.json",
@@ -61,7 +65,7 @@ public class S3Service {
                         }),
                 Path.of(config.storage().persistentPath()).resolve("s3"),
                 "memory".equals(config.storage().services().s3().mode().orElse(config.storage().mode())),
-                sqsService, snsService, regionResolver, config.effectiveBaseUrl(), objectMapper
+                sqsService, snsService, eventBridgeService, regionResolver, config.effectiveBaseUrl(), objectMapper
         );
     }
 
@@ -71,13 +75,14 @@ public class S3Service {
     S3Service(StorageBackend<String, Bucket> bucketStore,
               StorageBackend<String, S3Object> objectStore,
               Path dataRoot, boolean inMemory) {
-        this(bucketStore, objectStore, dataRoot, inMemory, null, null, null, "http://localhost:4566",
+        this(bucketStore, objectStore, dataRoot, inMemory, null, null, null, null, "http://localhost:4566",
                 new ObjectMapper());
     }
 
     private S3Service(StorageBackend<String, Bucket> bucketStore,
                       StorageBackend<String, S3Object> objectStore,
                       Path dataRoot, boolean inMemory, SqsService sqsService, SnsService snsService,
+                      EventBridgeService eventBridgeService,
                       RegionResolver regionResolver, String baseUrl, ObjectMapper objectMapper) {
         this.bucketStore = bucketStore;
         this.objectStore = objectStore;
@@ -85,6 +90,7 @@ public class S3Service {
         this.inMemory = inMemory;
         this.sqsService = sqsService;
         this.snsService = snsService;
+        this.eventBridgeService = eventBridgeService;
         this.regionResolver = regionResolver;
         this.baseUrl = baseUrl;
         this.objectMapper = objectMapper;
@@ -1054,7 +1060,7 @@ public class S3Service {
     }
 
     private void fireNotifications(String bucketName, String key, String eventName, S3Object obj) {
-        if (sqsService == null && snsService == null) {
+        if (sqsService == null && snsService == null && eventBridgeService == null) {
             return;
         }
         Bucket bucket = bucketStore.get(bucketName).orElse(null);
@@ -1089,6 +1095,43 @@ public class S3Service {
                     LOG.warnv("Failed to deliver S3 event to SNS {0}: {1}", tn.topicArn(), e.getMessage());
                 }
             }
+        }
+
+        if (config.isEventBridgeEnabled() && eventBridgeService != null) {
+            try {
+                String detailType = eventName.startsWith("ObjectCreated") ? "Object Created" : "Object Deleted";
+                Map<String, Object> entry = new java.util.HashMap<>();
+                entry.put("Source", "aws.s3");
+                entry.put("DetailType", detailType);
+                entry.put("Detail", buildS3EventBridgeDetail(bucketName, key, eventName, obj, region));
+                eventBridgeService.putEvents(List.of(entry), region);
+                LOG.debugv("Fired S3 event {0} to EventBridge default bus", eventName);
+            } catch (Exception e) {
+                LOG.warnv("Failed to deliver S3 event to EventBridge: {0}", e.getMessage());
+            }
+        }
+    }
+
+    private String buildS3EventBridgeDetail(String bucketName, String key, String eventName,
+                                            S3Object obj, String region) {
+        try {
+            long size = obj != null ? obj.getSize() : 0;
+            String eTag = obj != null && obj.getETag() != null ? obj.getETag().replace("\"", "") : "";
+            ObjectNode detail = objectMapper.createObjectNode();
+            detail.put("version", "0");
+            ObjectNode bucketNode = detail.putObject("bucket");
+            bucketNode.put("name", bucketName);
+            ObjectNode objectNode = detail.putObject("object");
+            objectNode.put("key", key);
+            objectNode.put("size", size);
+            objectNode.put("etag", eTag);
+            detail.put("request-id", UUID.randomUUID().toString());
+            detail.put("requester", "aws:emulator");
+            detail.put("source-ip-address", "127.0.0.1");
+            detail.put("reason", eventName);
+            return objectMapper.writeValueAsString(detail);
+        } catch (Exception e) {
+            return "{}";
         }
     }
 

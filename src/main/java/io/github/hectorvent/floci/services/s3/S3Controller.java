@@ -818,6 +818,8 @@ public class S3Controller {
                 }
             }
 
+            config.setEventBridgeEnabled(xml.contains("<EventBridgeConfiguration"));
+
             s3Service.putBucketNotificationConfiguration(bucket, config);
             return Response.ok().build();
         } catch (AwsException e) {
