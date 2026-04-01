@@ -8,10 +8,8 @@ ENV FLOCI_VERSION=${VERSION}
 WORKDIR /app
 
 RUN mkdir -p /app/data \
-    && chown 1001 /app \
-    && chmod "g+rwX" /app \
-    && chown 1001:root /app \
-    && chown 1001:root /app/data
+    && chown -R 1001:root /app \
+    && chmod -R g+rwX /app
 
 VOLUME /app/data
 

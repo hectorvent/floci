@@ -18,7 +18,9 @@ FROM quay.io/quarkus/quarkus-micro-image:2.0
 
 USER root
 WORKDIR /app
-RUN mkdir -p /app/data && chown 1001:root /app /app/data
+RUN mkdir -p /app/data \
+    && chown -R 1001:root /app \
+    && chmod -R g+rwX /app
 VOLUME /app/data
 
 EXPOSE 4566
