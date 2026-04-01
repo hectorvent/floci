@@ -79,6 +79,66 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
+    void createTableWithGsiAndLsi() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "IndexTable",
+                    "KeySchema": [
+                        {"AttributeName": "pk", "KeyType": "HASH"},
+                        {"AttributeName": "sk", "KeyType": "RANGE"}
+                    ],
+                    "AttributeDefinitions": [
+                        {"AttributeName": "pk", "AttributeType": "S"},
+                        {"AttributeName": "sk", "AttributeType": "S"},
+                        {"AttributeName": "gsiPk", "AttributeType": "S"}
+                    ],
+                    "GlobalSecondaryIndexes": [
+                        {
+                            "IndexName": "gsi-1",
+                            "KeySchema": [
+                                {"AttributeName": "gsiPk", "KeyType": "HASH"},
+                                {"AttributeName": "sk", "KeyType": "RANGE"}
+                            ],
+                            "Projection": {"ProjectionType": "ALL"}
+                        }
+                    ],
+                    "LocalSecondaryIndexes": [
+                        {
+                            "IndexName": "lsi-1",
+                            "KeySchema": [
+                                {"AttributeName": "pk", "KeyType": "HASH"},
+                                {"AttributeName": "gsiPk", "KeyType": "RANGE"}
+                            ],
+                            "Projection": {"ProjectionType": "KEYS_ONLY"}
+                        }
+                    ]
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("TableDescription.GlobalSecondaryIndexes.size()", equalTo(1))
+            .body("TableDescription.GlobalSecondaryIndexes[0].IndexName", equalTo("gsi-1"))
+            .body("TableDescription.LocalSecondaryIndexes.size()", equalTo(1))
+            .body("TableDescription.LocalSecondaryIndexes[0].IndexName", equalTo("lsi-1"));
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "IndexTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     @Order(3)
     void describeTable() {
         given()
@@ -251,6 +311,61 @@ class DynamoDbIntegrationTest {
 
     @Test
     @Order(11)
+    void queryWithFilterExpression() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk",
+                    "FilterExpression": "total >= :min",
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"},
+                        ":min": {"N": "50"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(1))
+            .body("ScannedCount", equalTo(3))
+            .body("Items[0].sk.S", equalTo("order-001"));
+    }
+
+    @Test
+    @Order(12)
+    void queryWithFilterExpressionAndLimitReturnsLastEvaluatedKey() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk",
+                    "FilterExpression": "total >= :min",
+                    "Limit": 2,
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"},
+                        ":min": {"N": "50"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(1))
+            .body("ScannedCount", equalTo(2))
+            .body("Items[0].sk.S", equalTo("order-001"))
+            .body("LastEvaluatedKey.pk.S", equalTo("user-1"))
+            .body("LastEvaluatedKey.sk.S", equalTo("order-002"));
+    }
+
+    @Test
+    @Order(13)
     void scan() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.Scan")
@@ -267,7 +382,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(12)
+    @Order(14)
     void deleteItem() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteItem")
@@ -307,7 +422,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(15)
     void deleteTable() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")

@@ -3,7 +3,9 @@ package io.github.hectorvent.floci.services.cloudformation;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
 import io.github.hectorvent.floci.services.dynamodb.DynamoDbService;
 import io.github.hectorvent.floci.services.dynamodb.model.AttributeDefinition;
+import io.github.hectorvent.floci.services.dynamodb.model.GlobalSecondaryIndex;
 import io.github.hectorvent.floci.services.dynamodb.model.KeySchemaElement;
+import io.github.hectorvent.floci.services.dynamodb.model.LocalSecondaryIndex;
 import io.github.hectorvent.floci.services.iam.IamService;
 import io.github.hectorvent.floci.services.kms.KmsService;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
@@ -142,7 +144,7 @@ public class CloudFormationResourceProvisioner {
         if (bucketName == null || bucketName.isBlank()) {
             bucketName = "cfn-" + UUID.randomUUID().toString().substring(0, 12).toLowerCase();
         }
-        s3Service.createBucket(bucketName);
+        s3Service.createBucket(bucketName, region);
         r.setPhysicalId(bucketName);
         r.getAttributes().put("Arn", "arn:aws:s3:::" + bucketName);
         r.getAttributes().put("DomainName", bucketName + ".s3.amazonaws.com");
@@ -196,6 +198,8 @@ public class CloudFormationResourceProvisioner {
 
         List<KeySchemaElement> keySchema = new ArrayList<>();
         List<AttributeDefinition> attrDefs = new ArrayList<>();
+        List<GlobalSecondaryIndex> gsis = new ArrayList<>();
+        List<LocalSecondaryIndex> lsis = new ArrayList<>();
 
         if (props != null && props.has("KeySchema")) {
             for (JsonNode ks : props.get("KeySchema")) {
@@ -212,12 +216,52 @@ public class CloudFormationResourceProvisioner {
             }
         }
 
+        if (props != null && props.has("GlobalSecondaryIndexes")) {
+            for (JsonNode gsiNode : props.get("GlobalSecondaryIndexes")) {
+                String indexName = engine.resolve(gsiNode.get("IndexName"));
+                List<KeySchemaElement> gsiKeySchema = new ArrayList<>();
+                if (gsiNode.has("KeySchema")) {
+                    for (JsonNode ks : gsiNode.get("KeySchema")) {
+                        String attrName = engine.resolve(ks.get("AttributeName"));
+                        String keyType = engine.resolve(ks.get("KeyType"));
+                        gsiKeySchema.add(new KeySchemaElement(attrName, keyType));
+                    }
+                }
+                String projectionType = "ALL";
+                JsonNode projection = gsiNode.get("Projection");
+                if (projection != null && projection.has("ProjectionType")) {
+                    projectionType = engine.resolve(projection.get("ProjectionType"));
+                }
+                gsis.add(new GlobalSecondaryIndex(indexName, gsiKeySchema, null, projectionType));
+            }
+        }
+
+        if (props != null && props.has("LocalSecondaryIndexes")) {
+            for (JsonNode lsiNode : props.get("LocalSecondaryIndexes")) {
+                String indexName = engine.resolve(lsiNode.get("IndexName"));
+                List<KeySchemaElement> lsiKeySchema = new ArrayList<>();
+                if (lsiNode.has("KeySchema")) {
+                    for (JsonNode ks : lsiNode.get("KeySchema")) {
+                        String attrName = engine.resolve(ks.get("AttributeName"));
+                        String keyType = engine.resolve(ks.get("KeyType"));
+                        lsiKeySchema.add(new KeySchemaElement(attrName, keyType));
+                    }
+                }
+                String projectionType = "ALL";
+                JsonNode projection = lsiNode.get("Projection");
+                if (projection != null && projection.has("ProjectionType")) {
+                    projectionType = engine.resolve(projection.get("ProjectionType"));
+                }
+                lsis.add(new LocalSecondaryIndex(indexName, lsiKeySchema, null, projectionType));
+            }
+        }
+
         if (keySchema.isEmpty()) {
             keySchema.add(new KeySchemaElement("id", "HASH"));
             attrDefs.add(new AttributeDefinition("id", "S"));
         }
 
-        var table = dynamoDbService.createTable(tableName, keySchema, attrDefs, null, null, region);
+        var table = dynamoDbService.createTable(tableName, keySchema, attrDefs, null, null, gsis, lsis, region);
         r.setPhysicalId(tableName);
         r.getAttributes().put("Arn", table.getTableArn());
         r.getAttributes().put("StreamArn", table.getTableArn() + "/stream/2024-01-01T00:00:00.000");

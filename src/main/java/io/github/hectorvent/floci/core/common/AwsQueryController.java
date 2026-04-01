@@ -7,6 +7,7 @@ import io.github.hectorvent.floci.services.iam.IamQueryHandler;
 import io.github.hectorvent.floci.services.iam.StsQueryHandler;
 import io.github.hectorvent.floci.services.rds.RdsQueryHandler;
 import io.github.hectorvent.floci.services.sns.SnsQueryHandler;
+import io.github.hectorvent.floci.services.ses.SesQueryHandler;
 import io.github.hectorvent.floci.services.sqs.SqsQueryHandler;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -104,6 +105,7 @@ public class AwsQueryController {
     private final RdsQueryHandler rdsQueryHandler;
     private final SqsQueryHandler sqsQueryHandler;
     private final SnsQueryHandler snsQueryHandler;
+    private final SesQueryHandler sesQueryHandler;
     private final IamQueryHandler iamQueryHandler;
     private final StsQueryHandler stsQueryHandler;
     private final CloudWatchMetricsQueryHandler cloudWatchMetricsQueryHandler;
@@ -114,6 +116,7 @@ public class AwsQueryController {
                               ElastiCacheQueryHandler elastiCacheQueryHandler,
                               RdsQueryHandler rdsQueryHandler,
                               SqsQueryHandler sqsQueryHandler, SnsQueryHandler snsQueryHandler,
+                              SesQueryHandler sesQueryHandler,
                               IamQueryHandler iamQueryHandler, StsQueryHandler stsQueryHandler,
                               CloudWatchMetricsQueryHandler cloudWatchMetricsQueryHandler,
                               RegionResolver regionResolver) {
@@ -122,6 +125,7 @@ public class AwsQueryController {
         this.rdsQueryHandler = rdsQueryHandler;
         this.sqsQueryHandler = sqsQueryHandler;
         this.snsQueryHandler = snsQueryHandler;
+        this.sesQueryHandler = sesQueryHandler;
         this.iamQueryHandler = iamQueryHandler;
         this.stsQueryHandler = stsQueryHandler;
         this.cloudWatchMetricsQueryHandler = cloudWatchMetricsQueryHandler;
@@ -153,6 +157,7 @@ public class AwsQueryController {
             case "sts" -> stsQueryHandler.handle(action, formParams);
             case "elasticache" -> elastiCacheQueryHandler.handle(action, formParams);
             case "rds" -> rdsQueryHandler.handle(action, formParams);
+            case "email" -> sesQueryHandler.handle(action, formParams, region);
             case "monitoring" -> cloudWatchMetricsQueryHandler.handle(action, formParams, region);
             case "cloudformation" -> cloudFormationQueryHandler.handle(action, formParams, region);
             default -> xmlErrorResponse("UnknownService",
@@ -191,7 +196,16 @@ public class AwsQueryController {
             "SetStackPolicy", "GetStackPolicy", "ListStackSets", "DescribeStackSet", "CreateStackSet"
     );
 
-    private static final Set<String> QUERY_PROTOCOL_SERVICES = Set.of("sqs", "sns", "iam", "sts", "elasticache", "rds", "monitoring", "cloudformation");
+    private static final Set<String> SES_ACTIONS = Set.of(
+            "VerifyEmailIdentity", "VerifyEmailAddress", "VerifyDomainIdentity",
+            "DeleteIdentity", "ListIdentities", "GetIdentityVerificationAttributes",
+            "SendEmail", "SendRawEmail", "GetSendQuota", "GetSendStatistics",
+            "GetAccountSendingEnabled", "ListVerifiedEmailAddresses", "DeleteVerifiedEmailAddress",
+            "SetIdentityNotificationTopic", "GetIdentityNotificationAttributes",
+            "GetIdentityDkimAttributes"
+    );
+
+    private static final Set<String> QUERY_PROTOCOL_SERVICES = Set.of("sqs", "sns", "iam", "sts", "elasticache", "rds", "monitoring", "cloudformation", "email");
 
     private String resolveService(String authorization, String action) {
         if (authorization != null && !authorization.isEmpty()) {
@@ -227,6 +241,9 @@ public class AwsQueryController {
         }
         if (CLOUDFORMATION_ACTIONS.contains(action)) {
             return "cloudformation";
+        }
+        if (SES_ACTIONS.contains(action)) {
+            return "email";
         }
         // SQS actions are numerous and not enumerated — fall back to sqs only for
         // requests that arrived without an Authorization header (raw/test clients)

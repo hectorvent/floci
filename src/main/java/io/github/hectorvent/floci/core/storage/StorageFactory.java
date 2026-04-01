@@ -65,6 +65,9 @@ public class StorageFactory {
             default -> throw new IllegalArgumentException("Unknown storage mode: " + mode);
         };
 
+        // load because loadAll() may run before the service is initialized
+        backend.load();
+
         allBackends.add(backend);
         return backend;
     }
@@ -95,17 +98,19 @@ public class StorageFactory {
     }
 
     private String resolveMode(String serviceName) {
+        String globalMode = config.storage().mode();
         return switch (serviceName) {
-            case "ssm" -> config.storage().services().ssm().mode();
-            case "sqs" -> config.storage().services().sqs().mode();
-            case "s3" -> config.storage().services().s3().mode();
-            case "dynamodb" -> config.storage().services().dynamodb().mode();
-            case "sns" -> config.storage().services().sns().mode();
-            case "lambda" -> config.storage().services().lambda().mode();
-            case "cloudwatchlogs" -> config.storage().services().cloudwatchlogs().mode();
-            case "cloudwatchmetrics" -> config.storage().services().cloudwatchmetrics().mode();
-            case "secretsmanager" -> config.storage().services().secretsmanager().mode();
-            default -> config.storage().mode();
+            case "ssm" -> config.storage().services().ssm().mode().orElse(globalMode);
+            case "sqs" -> config.storage().services().sqs().mode().orElse(globalMode);
+            case "s3" -> config.storage().services().s3().mode().orElse(globalMode);
+            case "dynamodb" -> config.storage().services().dynamodb().mode().orElse(globalMode);
+            case "sns" -> config.storage().services().sns().mode().orElse(globalMode);
+            case "lambda" -> config.storage().services().lambda().mode().orElse(globalMode);
+            case "cloudwatchlogs" -> config.storage().services().cloudwatchlogs().mode().orElse(globalMode);
+            case "cloudwatchmetrics" -> config.storage().services().cloudwatchmetrics().mode().orElse(globalMode);
+            case "secretsmanager" -> config.storage().services().secretsmanager().mode().orElse(globalMode);
+            case "opensearch" -> config.storage().services().opensearch().mode().orElse(globalMode);
+            default -> globalMode;
         };
     }
 
@@ -118,6 +123,7 @@ public class StorageFactory {
             case "cloudwatchlogs" -> config.storage().services().cloudwatchlogs().flushIntervalMs();
             case "cloudwatchmetrics" -> config.storage().services().cloudwatchmetrics().flushIntervalMs();
             case "secretsmanager" -> config.storage().services().secretsmanager().flushIntervalMs();
+            case "opensearch" -> config.storage().services().opensearch().flushIntervalMs();
             default -> 5000L;
         };
     }

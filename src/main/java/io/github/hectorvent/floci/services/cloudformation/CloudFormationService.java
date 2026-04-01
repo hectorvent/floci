@@ -129,6 +129,18 @@ public class CloudFormationService {
         return executor.submit(() -> executeTemplate(stack, templateBody, params, isCreate, region));
     }
 
+    // ── DeleteChangeSet ───────────────────────────────────────────────────────
+
+    public void deleteChangeSet(String stackName, String changeSetName, String region) {
+        Stack stack = getStackOrThrow(stackName, region);
+        ChangeSet cs = stack.getChangeSets().get(changeSetName);
+        if (cs == null) {
+            throw new AwsException("ChangeSetNotFoundException",
+                    "ChangeSet [" + changeSetName + "] does not exist", 400);
+        }
+        stack.getChangeSets().remove(changeSetName);
+    }
+
     // ── DeleteStack ───────────────────────────────────────────────────────────
 
     public void deleteStack(String stackName, String region) {
@@ -189,6 +201,10 @@ public class CloudFormationService {
             // Resolve conditions first
             Map<String, Boolean> conditions = resolveConditions(template, resolvedParams, stack, region);
 
+            // Mappings
+            Map<String, JsonNode> mappings = new HashMap<>();
+            template.path("Mappings").fields().forEachRemaining(e -> mappings.put(e.getKey(), e.getValue()));
+
             // Process resources in order
             JsonNode resources = template.path("Resources");
             Map<String, String> physicalIds = new LinkedHashMap<>();
@@ -213,7 +229,7 @@ public class CloudFormationService {
 
                     CloudFormationTemplateEngine engine = new CloudFormationTemplateEngine(
                             config.defaultAccountId(), region, stack.getStackName(),
-                            stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, objectMapper);
+                            stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper);
 
                     StackResource resource = stack.getResources().get(logicalId);
                     if (resource == null) {
@@ -240,7 +256,7 @@ public class CloudFormationService {
             stack.getOutputs().clear();
             CloudFormationTemplateEngine finalEngine = new CloudFormationTemplateEngine(
                     config.defaultAccountId(), region, stack.getStackName(),
-                    stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, objectMapper);
+                    stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper);
 
             JsonNode outputs = template.path("Outputs");
             if (outputs.isObject()) {

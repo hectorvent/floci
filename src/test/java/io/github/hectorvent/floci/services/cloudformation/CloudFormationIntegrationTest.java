@@ -1,6 +1,10 @@
 package io.github.hectorvent.floci.services.cloudformation;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.RestAssured;
+import io.restassured.config.EncoderConfig;
+import io.restassured.http.ContentType;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -12,19 +16,42 @@ import java.util.zip.ZipOutputStream;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.not;
 
 @QuarkusTest
 class CloudFormationIntegrationTest {
+
+    private static final String DYNAMODB_CONTENT_TYPE = "application/x-amz-json-1.0";
+
+    @BeforeAll
+    static void configureRestAssured() {
+        RestAssured.config = RestAssured.config().encoderConfig(
+                EncoderConfig.encoderConfig()
+                        .encodeContentTypeAs(DYNAMODB_CONTENT_TYPE, ContentType.TEXT));
+    }
 
     @Test
     void createStack_withS3AndSqs() {
         String template = """
             {
+              "Mappings": {
+                "Env": {
+                  "us-east-1": {
+                    "Name": "test"
+                  }
+                }
+              },
               "Resources": {
                 "MyBucket": {
                   "Type": "AWS::S3::Bucket",
                   "Properties": {
-                    "BucketName": "cf-test-bucket"
+                    "BucketName": {
+                       "Fn::Sub": ["cf-${env}-bucket", {
+                         "env": {
+                            "Fn::FindInMap": ["Env", { "Ref" : "AWS::Region" }, "Name"]
+                         }
+                       }]
+                    }
                   }
                 },
                 "MyQueue": {
@@ -304,5 +331,193 @@ class CloudFormationIntegrationTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    void createStack_withDynamoDbGsiAndLsi() {
+        String template = """
+            {
+                "Resources": {
+                    "MyTable": {
+                        "Type": "AWS::DynamoDB::Table",
+                        "Properties": {
+                            "TableName": "cf-index-table",
+                            "AttributeDefinitions": [
+                                {"AttributeName": "pk", "AttributeType": "S"},
+                                {"AttributeName": "sk", "AttributeType": "S"},
+                                {"AttributeName": "gsiPk", "AttributeType": "S"}
+                            ],
+                            "KeySchema": [
+                                {"AttributeName": "pk", "KeyType": "HASH"},
+                                {"AttributeName": "sk", "KeyType": "RANGE"}
+                            ],
+                            "GlobalSecondaryIndexes": [
+                                {
+                                    "IndexName": "gsi-1",
+                                    "KeySchema": [
+                                        {"AttributeName": "gsiPk", "KeyType": "HASH"},
+                                        {"AttributeName": "sk", "KeyType": "RANGE"}
+                                    ],
+                                    "Projection": {"ProjectionType": "ALL"}
+                                }
+                            ],
+                            "LocalSecondaryIndexes": [
+                                {
+                                    "IndexName": "lsi-1",
+                                    "KeySchema": [
+                                        {"AttributeName": "pk", "KeyType": "HASH"},
+                                        {"AttributeName": "gsiPk", "KeyType": "RANGE"}
+                                    ],
+                                    "Projection": {"ProjectionType": "KEYS_ONLY"}
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+            """;
+
+        // 1. Create Stack
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "test-dynamo-index-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // 2. Verify GSI and LSI via DescribeTable
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DescribeTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "cf-index-table"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Table.GlobalSecondaryIndexes.size()", equalTo(1))
+            .body("Table.GlobalSecondaryIndexes[0].IndexName", equalTo("gsi-1"))
+            .body("Table.LocalSecondaryIndexes.size()", equalTo(1))
+            .body("Table.LocalSecondaryIndexes[0].IndexName", equalTo("lsi-1"));
+    }
+
+    @Test
+    void deleteChangeSet_removesChangeSet() {
+        String template = """
+            {
+              "Resources": {
+                "MyBucket": {
+                  "Type": "AWS::S3::Bucket",
+                  "Properties": {
+                    "BucketName": "cs-delete-test-bucket"
+                  }
+                }
+              }
+            }
+            """;
+
+        // 1. Create a ChangeSet (implicitly creates the stack)
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateChangeSet")
+            .formParam("StackName", "cs-delete-stack")
+            .formParam("ChangeSetName", "my-changeset")
+            .formParam("ChangeSetType", "CREATE")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<Id>"));
+
+        // 2. Verify ChangeSet exists
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeChangeSet")
+            .formParam("StackName", "cs-delete-stack")
+            .formParam("ChangeSetName", "my-changeset")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<ChangeSetName>my-changeset</ChangeSetName>"));
+
+        // 3. Delete the ChangeSet
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DeleteChangeSet")
+            .formParam("StackName", "cs-delete-stack")
+            .formParam("ChangeSetName", "my-changeset")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<DeleteChangeSetResult/>"));
+
+        // 4. Verify ChangeSet no longer exists
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeChangeSet")
+            .formParam("StackName", "cs-delete-stack")
+            .formParam("ChangeSetName", "my-changeset")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body(containsString("ChangeSetNotFoundException"));
+
+        // 5. Verify ChangeSet is absent from ListChangeSets
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListChangeSets")
+            .formParam("StackName", "cs-delete-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(not(containsString("my-changeset")));
+    }
+
+    @Test
+    void deleteChangeSet_nonExistentChangeSet_returnsError() {
+        String template = """
+            {
+              "Resources": {
+                "MyBucket": {
+                  "Type": "AWS::S3::Bucket",
+                  "Properties": {
+                    "BucketName": "cs-error-test-bucket"
+                  }
+                }
+              }
+            }
+            """;
+
+        // Create a stack via CreateChangeSet so the stack exists
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateChangeSet")
+            .formParam("StackName", "cs-error-stack")
+            .formParam("ChangeSetName", "existing-changeset")
+            .formParam("ChangeSetType", "CREATE")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Attempt to delete a changeset that does not exist
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DeleteChangeSet")
+            .formParam("StackName", "cs-error-stack")
+            .formParam("ChangeSetName", "nonexistent-changeset")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body(containsString("ChangeSetNotFoundException"));
     }
 }

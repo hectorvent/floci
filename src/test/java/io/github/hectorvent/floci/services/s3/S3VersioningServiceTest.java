@@ -22,8 +22,8 @@ class S3VersioningServiceTest {
 
     @BeforeEach
     void setUp() {
-        s3Service = new S3Service(new InMemoryStorage<>(), new InMemoryStorage<>(), tempDir);
-        s3Service.createBucket("versioned-bucket");
+        s3Service = new S3Service(new InMemoryStorage<>(), new InMemoryStorage<>(), tempDir, true);
+        s3Service.createBucket("versioned-bucket", "us-east-1");
     }
 
     @Test
@@ -153,6 +153,17 @@ class S3VersioningServiceTest {
         List<S3Object> versions = s3Service.listObjectVersions("versioned-bucket", null, 100);
         assertEquals(2, versions.size());
         assertTrue(versions.stream().anyMatch(S3Object::isDeleteMarker));
+    }
+
+    @Test
+    void getObjectWithNonExistentVersionIdThrowsNoSuchVersion() {
+        s3Service.putBucketVersioning("versioned-bucket", "Enabled");
+        s3Service.putObject("versioned-bucket", "test.txt",
+                "data".getBytes(StandardCharsets.UTF_8), "text/plain", null);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                s3Service.getObject("versioned-bucket", "test.txt", "fake-version-id"));
+        assertEquals("NoSuchVersion", ex.getErrorCode());
     }
 
     @Test

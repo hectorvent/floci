@@ -45,6 +45,9 @@ public class ServiceRegistry {
             case "cognito-idp" -> config.services().cognito().enabled();
             case "states" -> config.services().stepfunctions().enabled();
             case "cloudformation" -> config.services().cloudformation().enabled();
+            case "acm" -> config.services().acm().enabled();
+            case "email" -> config.services().ses().enabled();
+            case "es" -> config.services().opensearch().enabled();
             default -> true;
         };
     }
@@ -71,6 +74,9 @@ public class ServiceRegistry {
         if (config.services().cognito().enabled()) enabled.add("cognito-idp");
         if (config.services().stepfunctions().enabled()) enabled.add("states");
         if (config.services().cloudformation().enabled()) enabled.add("cloudformation");
+        if (config.services().acm().enabled()) enabled.add("acm");
+        if (config.services().ses().enabled()) enabled.add("email");
+        if (config.services().opensearch().enabled()) enabled.add("es");
         return enabled;
     }
 

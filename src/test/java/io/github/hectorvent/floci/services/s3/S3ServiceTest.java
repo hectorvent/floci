@@ -2,6 +2,8 @@ package io.github.hectorvent.floci.services.s3;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesResult;
+import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
 import io.github.hectorvent.floci.services.s3.model.Bucket;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -25,32 +29,44 @@ class S3ServiceTest {
     @BeforeEach
     void setUp() {
         Path dataRoot = tempDir.resolve("s3");
-        s3Service = new S3Service(new InMemoryStorage<>(), new InMemoryStorage<>(), dataRoot);
+        s3Service = new S3Service(new InMemoryStorage<>(), new InMemoryStorage<>(), dataRoot, false);
     }
 
     @Test
     void createBucket() {
-        Bucket bucket = s3Service.createBucket("test-bucket");
+        Bucket bucket = s3Service.createBucket("test-bucket", "us-east-1");
         assertEquals("test-bucket", bucket.getName());
         assertNotNull(bucket.getCreationDate());
     }
 
     @Test
+    void createBucketStoresRegion() {
+        s3Service.createBucket("eu-bucket", "eu-central-1");
+        assertEquals("eu-central-1", s3Service.getBucketRegion("eu-bucket"));
+    }
+
+    @Test
+    void createBucketNullRegionWhenNotProvided() {
+        s3Service.createBucket("default-bucket", null);
+        assertNull(s3Service.getBucketRegion("default-bucket"));
+    }
+
+    @Test
     void createDuplicateBucketThrows() {
-        s3Service.createBucket("test-bucket");
-        assertThrows(AwsException.class, () -> s3Service.createBucket("test-bucket"));
+        s3Service.createBucket("test-bucket", "us-east-1");
+        assertThrows(AwsException.class, () -> s3Service.createBucket("test-bucket", "us-east-1"));
     }
 
     @Test
     void deleteBucket() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.deleteBucket("test-bucket");
         assertThrows(AwsException.class, () -> s3Service.deleteBucket("test-bucket"));
     }
 
     @Test
     void deleteNonEmptyBucketThrows() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "file.txt", "hello".getBytes(), "text/plain", null);
         assertThrows(AwsException.class, () -> s3Service.deleteBucket("test-bucket"));
     }
@@ -62,16 +78,23 @@ class S3ServiceTest {
 
     @Test
     void listBuckets() {
-        s3Service.createBucket("bucket-a");
-        s3Service.createBucket("bucket-b");
+        s3Service.createBucket("bucket-a", "us-east-1");
+        s3Service.createBucket("bucket-b", "us-east-1");
 
         List<Bucket> buckets = s3Service.listBuckets();
         assertEquals(2, buckets.size());
     }
 
     @Test
+    void putObjectLastModifiedHasSecondPrecision() {
+        s3Service.createBucket("test-bucket", null);
+        S3Object obj = s3Service.putObject("test-bucket", "file.txt", "data".getBytes(), null, null);
+        assertEquals(0, obj.getLastModified().getNano());
+    }
+
+    @Test
     void putAndGetObject() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         byte[] data = "Hello World".getBytes(StandardCharsets.UTF_8);
         S3Object put = s3Service.putObject("test-bucket", "greeting.txt", data, "text/plain", null);
 
@@ -85,7 +108,7 @@ class S3ServiceTest {
 
     @Test
     void putObjectWritesFileToDisk() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         byte[] data = "file content".getBytes(StandardCharsets.UTF_8);
         s3Service.putObject("test-bucket", "docs/readme.txt", data, "text/plain", null);
 
@@ -96,7 +119,7 @@ class S3ServiceTest {
 
     @Test
     void deleteObjectRemovesFileFromDisk() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "file.txt", "data".getBytes(), null, null);
 
         Path filePath = tempDir.resolve("s3/test-bucket/file.txt");
@@ -108,7 +131,7 @@ class S3ServiceTest {
 
     @Test
     void deleteBucketRemovesDirectory() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "file.txt", "data".getBytes(), null, null);
         s3Service.deleteObject("test-bucket", "file.txt");
         s3Service.deleteBucket("test-bucket");
@@ -118,7 +141,7 @@ class S3ServiceTest {
 
     @Test
     void getObjectNotFoundThrows() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         AwsException ex = assertThrows(AwsException.class, () ->
                 s3Service.getObject("test-bucket", "missing.txt"));
         assertEquals("NoSuchKey", ex.getErrorCode());
@@ -132,7 +155,7 @@ class S3ServiceTest {
 
     @Test
     void deleteObject() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "file.txt", "data".getBytes(), null, null);
         s3Service.deleteObject("test-bucket", "file.txt");
 
@@ -142,7 +165,7 @@ class S3ServiceTest {
 
     @Test
     void listObjects() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "docs/a.txt", "a".getBytes(), null, null);
         s3Service.putObject("test-bucket", "docs/b.txt", "b".getBytes(), null, null);
         s3Service.putObject("test-bucket", "images/pic.jpg", "img".getBytes(), null, null);
@@ -162,8 +185,8 @@ class S3ServiceTest {
 
     @Test
     void copyObject() {
-        s3Service.createBucket("source-bucket");
-        s3Service.createBucket("dest-bucket");
+        s3Service.createBucket("source-bucket", "us-east-1");
+        s3Service.createBucket("dest-bucket", "us-east-1");
         s3Service.putObject("source-bucket", "original.txt", "content".getBytes(), "text/plain", null);
 
         S3Object copy = s3Service.copyObject("source-bucket", "original.txt", "dest-bucket", "copy.txt");
@@ -178,7 +201,7 @@ class S3ServiceTest {
 
     @Test
     void copyObjectSameBucket() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "original.txt", "data".getBytes(), null, null);
         s3Service.copyObject("test-bucket", "original.txt", "test-bucket", "copy.txt");
 
@@ -187,21 +210,72 @@ class S3ServiceTest {
 
     @Test
     void headObject() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "file.txt", "hello".getBytes(), "text/plain", null);
 
         S3Object head = s3Service.headObject("test-bucket", "file.txt");
         assertEquals(5, head.getSize());
         assertEquals("text/plain", head.getContentType());
+        assertNull(head.getData());
     }
 
     @Test
     void putObjectOverwrites() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", "us-east-1");
         s3Service.putObject("test-bucket", "file.txt", "v1".getBytes(), null, null);
         s3Service.putObject("test-bucket", "file.txt", "v2".getBytes(), null, null);
 
         S3Object obj = s3Service.getObject("test-bucket", "file.txt");
         assertArrayEquals("v2".getBytes(), obj.getData());
+    }
+
+    @Test
+    void putObjectPersistsMetadataStorageClassAndChecksum() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+
+        S3Object stored = s3Service.putObject("test-bucket", "docs/file.txt", "payload".getBytes(StandardCharsets.UTF_8),
+                "text/plain", Map.of("owner", "team-a"), "STANDARD_IA", null, null, null);
+
+        S3Object head = s3Service.headObject("test-bucket", "docs/file.txt");
+        assertEquals("STANDARD_IA", head.getStorageClass());
+        assertEquals("team-a", head.getMetadata().get("owner"));
+        assertNotNull(head.getChecksum());
+        assertNotNull(head.getChecksum().getChecksumSHA256());
+        assertEquals("FULL_OBJECT", head.getChecksum().getChecksumType());
+        assertEquals(stored.getETag(), head.getETag());
+    }
+
+    @Test
+    void getObjectAttributesReturnsRequestedFields() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+        s3Service.putObject("test-bucket", "report.txt", "payload".getBytes(StandardCharsets.UTF_8),
+                "text/plain", Map.of("env", "dev"), "GLACIER", null, null, null);
+
+        GetObjectAttributesResult attributes = s3Service.getObjectAttributes("test-bucket", "report.txt", null,
+                Set.of(ObjectAttributeName.E_TAG, ObjectAttributeName.OBJECT_SIZE,
+                        ObjectAttributeName.STORAGE_CLASS, ObjectAttributeName.CHECKSUM),
+                null, null);
+
+        assertNotNull(attributes.getETag());
+        assertEquals(7L, attributes.getObjectSize());
+        assertEquals("GLACIER", attributes.getStorageClass());
+        assertNotNull(attributes.getChecksum());
+        assertNotNull(attributes.getChecksum().getChecksumSHA256());
+        assertNull(attributes.getObjectParts());
+    }
+
+    @Test
+    void copyObjectCanReplaceMetadata() {
+        s3Service.createBucket("source-bucket", "us-east-1");
+        s3Service.createBucket("dest-bucket", "us-east-1");
+        s3Service.putObject("source-bucket", "original.txt", "content".getBytes(StandardCharsets.UTF_8),
+                "text/plain", Map.of("owner", "source"), "STANDARD", null, null, null);
+
+        S3Object copy = s3Service.copyObject("source-bucket", "original.txt", "dest-bucket", "copy.txt",
+                "REPLACE", Map.of("owner", "dest"), "STANDARD_IA", "application/json");
+
+        assertEquals("application/json", copy.getContentType());
+        assertEquals("STANDARD_IA", copy.getStorageClass());
+        assertEquals("dest", copy.getMetadata().get("owner"));
     }
 }

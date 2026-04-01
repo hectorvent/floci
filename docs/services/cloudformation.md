@@ -22,6 +22,7 @@
 | `DescribeChangeSet` | Get change set details |
 | `ExecuteChangeSet` | Apply a change set |
 | `ListChangeSets` | List change sets for a stack |
+| `DeleteChangeSet` | Delete a change set |
 | `SetStackPolicy` | Set a stack policy |
 | `GetStackPolicy` | Retrieve the current stack policy |
 | `ListStackSets` | List StackSets |
@@ -64,5 +65,29 @@ aws cloudformation update-stack \
 # Delete
 aws cloudformation delete-stack \
   --stack-name my-stack \
+  --endpoint-url $AWS_ENDPOINT
+
+# Create a change set
+aws cloudformation create-change-set \
+  --stack-name my-stack \
+  --change-set-name my-change-set \
+  --template-body file://template.yml \
+  --endpoint-url $AWS_ENDPOINT
+
+# List change sets
+aws cloudformation list-change-sets \
+  --stack-name my-stack \
+  --endpoint-url $AWS_ENDPOINT
+
+# Describe a change set
+aws cloudformation describe-change-set \
+  --stack-name my-stack \
+  --change-set-name my-change-set \
+  --endpoint-url $AWS_ENDPOINT
+
+# Delete a change set
+aws cloudformation delete-change-set \
+  --stack-name my-stack \
+  --change-set-name my-change-set \
   --endpoint-url $AWS_ENDPOINT
 ```

@@ -59,7 +59,7 @@ public class EventBridgeService {
                         new TypeReference<Map<String, Rule>>() {}),
                 storageFactory.create("eventbridge", "eventbridge-targets.json",
                         new TypeReference<Map<String, List<Target>>>() {}),
-                regionResolver, lambdaService, sqsService, snsService, objectMapper, config.baseUrl()
+                regionResolver, lambdaService, sqsService, snsService, objectMapper, config.effectiveBaseUrl()
         );
     }
 

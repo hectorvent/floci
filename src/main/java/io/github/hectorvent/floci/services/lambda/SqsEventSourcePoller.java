@@ -62,7 +62,7 @@ public class SqsEventSourcePoller {
         this.functionStore = functionStore;
         this.esmStore = esmStore;
         this.pollIntervalMs = config.services().lambda().pollIntervalMs();
-        this.baseUrl = config.baseUrl();
+        this.baseUrl = config.effectiveBaseUrl();
         this.objectMapper = objectMapper;
     }
 

@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.sns;
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
 import io.github.hectorvent.floci.services.sns.model.Subscription;
 import io.github.hectorvent.floci.services.sns.model.Topic;
+import io.github.hectorvent.floci.services.sqs.model.MessageAttributeValue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -44,6 +45,10 @@ public class SnsJsonHandler {
             case "ListSubscriptions" -> handleListSubscriptions(request, region);
             case "ListSubscriptionsByTopic" -> handleListSubscriptionsByTopic(request, region);
             case "Publish" -> handlePublish(request, region);
+            case "PublishBatch" -> handlePublishBatch(request, region);
+            case "GetSubscriptionAttributes" -> handleGetSubscriptionAttributes(request, region);
+            case "SetSubscriptionAttributes" -> handleSetSubscriptionAttributes(request, region);
+            case "ConfirmSubscription" -> handleConfirmSubscription(request, region);
             case "TagResource" -> handleTagResource(request, region);
             case "UntagResource" -> handleUntagResource(request, region);
             case "ListTagsForResource" -> handleListTagsForResource(request, region);
@@ -146,18 +151,21 @@ public class SnsJsonHandler {
     private Response handlePublish(JsonNode request, String region) {
         String topicArn = request.path("TopicArn").asText(null);
         String targetArn = request.path("TargetArn").asText(null);
+        String phoneNumber = request.path("PhoneNumber").asText(null);
         String message = request.path("Message").asText(null);
         String subject = request.path("Subject").asText(null);
 
-        Map<String, String> attributes = new HashMap<>();
+        Map<String, MessageAttributeValue> attributes = new HashMap<>();
         JsonNode attrsNode = request.path("MessageAttributes");
         if (attrsNode.isObject()) {
             attrsNode.fields().forEachRemaining(entry -> {
-                attributes.put(entry.getKey(), entry.getValue().path("StringValue").asText());
+                String dataType = entry.getValue().path("DataType").asText("String");
+                String stringValue = entry.getValue().path("StringValue").asText();
+                attributes.put(entry.getKey(), new MessageAttributeValue(stringValue, dataType));
             });
         }
 
-        String messageId = snsService.publish(topicArn, targetArn, message, subject, attributes, region);
+        String messageId = snsService.publish(topicArn, targetArn, phoneNumber, message, subject, attributes, region);
         ObjectNode response = objectMapper.createObjectNode();
         response.put("MessageId", messageId);
         return Response.ok(response).build();
@@ -200,6 +208,84 @@ public class SnsJsonHandler {
             tag.put("Value", entry.getValue());
             tagsArray.add(tag);
         }
+        return Response.ok(response).build();
+    }
+
+    private Response handlePublishBatch(JsonNode request, String region) {
+        String topicArn = request.path("TopicArn").asText(null);
+        List<Map<String, Object>> entries = new ArrayList<>();
+
+        JsonNode entriesNode = request.path("PublishBatchRequestEntries");
+        if (entriesNode.isArray()) {
+            for (JsonNode entryNode : entriesNode) {
+                Map<String, Object> entry = new HashMap<>();
+                entry.put("Id", entryNode.path("Id").asText(null));
+                entry.put("Message", entryNode.path("Message").asText(null));
+                entry.put("Subject", entryNode.path("Subject").asText(null));
+                entry.put("MessageGroupId", entryNode.path("MessageGroupId").asText(null));
+                entry.put("MessageDeduplicationId", entryNode.path("MessageDeduplicationId").asText(null));
+
+                JsonNode attrsNode = entryNode.path("MessageAttributes");
+                if (attrsNode.isObject()) {
+                    Map<String, String> messageAttributes = new HashMap<>();
+                    attrsNode.fields().forEachRemaining(field ->
+                        messageAttributes.put(field.getKey(), field.getValue().path("StringValue").asText())
+                    );
+                    entry.put("MessageAttributes", messageAttributes);
+                }
+
+                entries.add(entry);
+            }
+        }
+
+        SnsService.BatchPublishResult result = snsService.publishBatch(topicArn, entries, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode successful = response.putArray("Successful");
+        for (String[] s : result.successful()) {
+            ObjectNode item = objectMapper.createObjectNode();
+            item.put("Id", s[0]);
+            item.put("MessageId", s[1]);
+            successful.add(item);
+        }
+        ArrayNode failed = response.putArray("Failed");
+        for (String[] f : result.failed()) {
+            ObjectNode item = objectMapper.createObjectNode();
+            item.put("Id", f[0]);
+            item.put("Code", f[1]);
+            item.put("Message", f[2]);
+            item.put("SenderFault", Boolean.parseBoolean(f[3]));
+            failed.add(item);
+        }
+
+        return Response.ok(response).build();
+    }
+
+    private Response handleGetSubscriptionAttributes(JsonNode request, String region) {
+        String subscriptionArn = request.path("SubscriptionArn").asText(null);
+        Map<String, String> attrs = snsService.getSubscriptionAttributes(subscriptionArn, region);
+        ObjectNode response = objectMapper.createObjectNode();
+        ObjectNode attrsNode = response.putObject("Attributes");
+        for (var entry : attrs.entrySet()) {
+            attrsNode.put(entry.getKey(), entry.getValue());
+        }
+        return Response.ok(response).build();
+    }
+
+    private Response handleSetSubscriptionAttributes(JsonNode request, String region) {
+        String subscriptionArn = request.path("SubscriptionArn").asText(null);
+        String attributeName = request.path("AttributeName").asText(null);
+        String attributeValue = request.path("AttributeValue").asText(null);
+        snsService.setSubscriptionAttribute(subscriptionArn, attributeName, attributeValue, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleConfirmSubscription(JsonNode request, String region) {
+        String topicArn = request.path("TopicArn").asText(null);
+        String token = request.path("Token").asText(null);
+        String subscriptionArn = snsService.confirmSubscription(topicArn, token, region);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("SubscriptionArn", subscriptionArn);
         return Response.ok(response).build();
     }
 

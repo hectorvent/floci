@@ -10,17 +10,44 @@ public interface EmulatorConfig {
     @WithDefault("http://localhost:4566")
     String baseUrl();
 
+    /**
+     * When set, overrides the hostname in base-url for URLs returned in API responses
+     * (e.g. SQS QueueUrl, SNS TopicArn). This is needed in multi-container Docker setups
+     * where "localhost" in the response URL would resolve to the wrong container.
+     *
+     * Example: FLOCI_HOSTNAME=floci makes SQS return
+     * http://floci:4566/000000000000/my-queue instead of http://localhost:4566/...
+     *
+     * Equivalent to LocalStack's LOCALSTACK_HOSTNAME.
+     */
+    Optional<String> hostname();
+
+    /**
+     * Returns the effective base URL, taking hostname into account.
+     * If hostname is set, replaces the host in baseUrl with it.
+     */
+    default String effectiveBaseUrl() {
+        return hostname()
+                .map(h -> baseUrl().replaceFirst("://[^:/]+(:\\d+)?", "://" + h + "$1"))
+                .orElse(baseUrl());
+    }
+
     @WithDefault("us-east-1")
     String defaultRegion();
 
     @WithDefault("000000000000")
     String defaultAccountId();
 
+    @WithDefault("512")
+    int maxRequestSize();
+
     StorageConfig storage();
 
     AuthConfig auth();
 
     ServicesConfig services();
+
+    InitHooksConfig initHooks();
 
     interface StorageConfig {
         @WithDefault("hybrid")
@@ -44,69 +71,76 @@ public interface EmulatorConfig {
         CloudWatchLogsStorageConfig cloudwatchlogs();
         CloudWatchMetricsStorageConfig cloudwatchmetrics();
         SecretsManagerStorageConfig secretsmanager();
+        AcmStorageConfig acm();
+        OpenSearchStorageConfig opensearch();
     }
 
     interface SsmStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface SqsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
     }
 
     interface S3StorageConfig {
-        @WithDefault("hybrid")
-        String mode();
+        Optional<String> mode();
     }
 
     interface DynamoDbStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface SnsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface LambdaStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface CloudWatchLogsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface CloudWatchMetricsStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
     }
 
     interface SecretsManagerStorageConfig {
-        @WithDefault("memory")
-        String mode();
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface AcmStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface OpenSearchStorageConfig {
+        Optional<String> mode();
 
         @WithDefault("5000")
         long flushIntervalMs();
@@ -150,6 +184,9 @@ public interface EmulatorConfig {
         CognitoServiceConfig cognito();
         StepFunctionsServiceConfig stepfunctions();
         CloudFormationServiceConfig cloudformation();
+        AcmServiceConfig acm();
+        SesServiceConfig ses();
+        OpenSearchServiceConfig opensearch();
     }
 
     interface SsmServiceConfig {
@@ -295,6 +332,39 @@ public interface EmulatorConfig {
         boolean enabled();
     }
 
+    interface AcmServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /** Seconds to wait before transitioning from PENDING_VALIDATION to ISSUED (0 = immediate) */
+        @WithDefault("0")
+        int validationWaitSeconds();
+    }
+
+    interface SesServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface OpenSearchServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("mock")
+        String mode();
+
+        @WithDefault("opensearchproject/opensearch:2")
+        String defaultImage();
+
+        @WithDefault("9400")
+        int proxyBasePort();
+
+        @WithDefault("9499")
+        int proxyMaxPort();
+
+        Optional<String> dockerNetwork();
+    }
+
     interface LambdaServiceConfig {
         @WithDefault("true")
         boolean enabled();
@@ -330,5 +400,16 @@ public interface EmulatorConfig {
 
         /** Docker network to attach Lambda containers to. Empty = default bridge. */
         Optional<String> dockerNetwork();
+    }
+
+    interface InitHooksConfig {
+        @WithDefault("/bin/bash")
+        String shellExecutable();
+
+        @WithDefault("2")
+        long shutdownGracePeriodSeconds();
+
+        @WithDefault("30")
+        long timeoutSeconds();
     }
 }

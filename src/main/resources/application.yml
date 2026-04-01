@@ -2,11 +2,24 @@ quarkus:
   http:
     port: 4566
     host: 0.0.0.0
+    limits:
+      max-body-size: ${floci.max-request-size}M
   native:
-    additional-build-args: "--initialize-at-run-time=org.apache.hc.client5.http.impl.auth.NTLMEngineImpl,--initialize-at-run-time=com.github.dockerjava.transport.NamedPipeSocket$Kernel32"
+    additional-build-args: >-
+      --initialize-at-run-time=org.apache.hc.client5.http.impl.auth.NTLMEngineImpl,
+      --initialize-at-run-time=com.github.dockerjava.transport.NamedPipeSocket$Kernel32,
+      --initialize-at-run-time=org.bouncycastle.jcajce.provider.drbg.DRBG$Default,
+      --initialize-at-run-time=org.bouncycastle.jcajce.provider.drbg.DRBG$NonceAndIV,
+      --initialize-at-run-time=org.bouncycastle.crypto.prng.SP800SecureRandom,
+      --initialize-at-run-time=org.bouncycastle.jce.provider.BouncyCastleProvider,
+      --initialize-at-run-time=io.github.hectorvent.floci.services.acm.AcmService,
+      --initialize-at-run-time=io.github.hectorvent.floci.services.acm.CertificateGenerator
 
 floci:
+  max-request-size: 512
   base-url: "http://localhost:4566"
+  # hostname: ""  # When set, overrides the hostname in response URLs (e.g. SQS QueueUrl).
+                   # Needed for multi-container Docker setups. Example: FLOCI_HOSTNAME=floci
   default-region: us-east-1
   default-account-id: "000000000000"
   storage:
@@ -17,29 +30,22 @@ floci:
       compaction-interval-ms: 30000
     services:
       ssm:
-        mode: memory
         flush-interval-ms: 5000
-      sqs:
-        mode: memory
-      s3:
-        mode: memory
       dynamodb:
-        mode: memory
         flush-interval-ms: 5000
       sns:
-        mode: memory
         flush-interval-ms: 5000
       lambda:
-        mode: memory
         flush-interval-ms: 5000
       cloudwatchlogs:
-        mode: memory
         flush-interval-ms: 5000
       cloudwatchmetrics:
-        mode: memory
         flush-interval-ms: 5000
       secretsmanager:
-        mode: memory
+        flush-interval-ms: 5000
+      acm:
+        flush-interval-ms: 5000
+      opensearch:
         flush-interval-ms: 5000
 
   auth:
@@ -108,3 +114,14 @@ floci:
       enabled: true
     cloudformation:
       enabled: true
+    acm:
+      enabled: true
+      validation-wait-seconds: 0
+    ses:
+      enabled: true
+    opensearch:
+      enabled: true
+      mode: mock
+      default-image: "opensearchproject/opensearch:2"
+      proxy-base-port: 9400
+      proxy-max-port: 9499

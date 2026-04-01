@@ -109,9 +109,9 @@ public class KmsService {
     // ──────────────────────────── Crypto Ops (Mocks) ────────────────────────────
 
     public byte[] encrypt(String keyId, byte[] plaintext, String region) {
-        resolveKey(keyId, region);
+        KmsKey kmsKey = resolveKey(keyId, region);
         // Local mock: prefix with keyId and base64
-        String mock = "kms:" + keyId + ":" + Base64.getEncoder().encodeToString(plaintext);
+        String mock = "kms:" + kmsKey.getKeyId() + ":" + Base64.getEncoder().encodeToString(plaintext);
         return mock.getBytes(StandardCharsets.UTF_8);
     }
 
@@ -183,15 +183,25 @@ public class KmsService {
 
     private KmsKey resolveKey(String keyIdOrArn, String region) {
         String id = keyIdOrArn;
-        if (id.startsWith("arn:aws:kms:")) {
+        // Alias arn
+        if (id.contains(":alias/")) {
+            String aliasName = id.substring(id.lastIndexOf(":") + 1);
+            String aliasKey = region + "::" + aliasName;
+            id = aliasStore.get(aliasKey)
+                    .map(KmsAlias::getTargetKeyId)
+                    .orElseThrow(() -> new AwsException("NotFoundException", "Alias not found: " + keyIdOrArn, 404));
+        } else if (id.startsWith("arn:aws:kms:")) {
+            // Key arn
             id = id.substring(id.lastIndexOf("/") + 1);
         } else if (id.startsWith("alias/")) {
+            // Alias name
             String aliasKey = region + "::" + id;
             id = aliasStore.get(aliasKey)
                     .map(KmsAlias::getTargetKeyId)
                     .orElseThrow(() -> new AwsException("NotFoundException", "Alias not found: " + keyIdOrArn, 404));
         }
 
+        // Key id
         return keyStore.get(region + "::" + id)
                 .orElseThrow(() -> new AwsException("NotFoundException", "Key not found: " + keyIdOrArn, 404));
     }

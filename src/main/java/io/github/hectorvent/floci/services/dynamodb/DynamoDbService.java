@@ -486,16 +486,25 @@ public class DynamoDbService {
             }
         }
 
-        int scannedCount = results.size();
+        List<JsonNode> evaluatedItems = results;
         JsonNode lastEvaluatedKey = null;
 
-        if (limit != null && limit > 0 && results.size() > limit) {
-            JsonNode lastItem = results.get(limit - 1);
+        if (limit != null && limit > 0 && evaluatedItems.size() > limit) {
+            JsonNode lastItem = evaluatedItems.get(limit - 1);
             lastEvaluatedKey = buildKeyNode(table, lastItem, pkName, skName);
-            results = results.subList(0, limit);
+            evaluatedItems = new ArrayList<>(evaluatedItems.subList(0, limit));
         }
 
-        return new QueryResult(results, scannedCount, lastEvaluatedKey);
+        int scannedCount = evaluatedItems.size();
+
+        if (filterExpression != null) {
+            evaluatedItems = evaluatedItems.stream()
+                    .filter(item -> matchesFilterExpression(item, filterExpression,
+                            exprAttrNames, expressionAttrValues))
+                    .toList();
+        }
+
+        return new QueryResult(evaluatedItems, scannedCount, lastEvaluatedKey);
     }
 
     public ScanResult scan(String tableName, String filterExpression,
@@ -887,10 +896,40 @@ public class DynamoDbService {
             }
 
             // Resolve the value
-            if (valuePart.startsWith(":") && exprAttrValues != null) {
+            if (valuePart.startsWith("if_not_exists(")) {
+                // if_not_exists(attrRef, fallbackExpr) evaluates to:
+                //   attrRef's current value  — when attrRef exists in the item
+                //   fallbackExpr             — otherwise
+                // The result is always assigned to attrName.
+                String[] args = extractFunctionArgs(valuePart);
+                if (args.length == 2) {
+                    String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
+                    String fallbackExpr = args[1].trim();
+                    JsonNode resolved;
+                    if (item.has(checkAttr)) {
+                        // attrRef exists — evaluate to its current value
+                        resolved = item.get(checkAttr);
+                    } else if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
+                        resolved = exprAttrValues.get(fallbackExpr);
+                    } else {
+                        // fallback is itself an attribute reference
+                        resolved = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
+                    }
+                    if (resolved != null) {
+                        item.set(attrName, resolved);
+                    }
+                }
+            } else if (valuePart.startsWith(":") && exprAttrValues != null) {
                 JsonNode value = exprAttrValues.get(valuePart);
                 if (value != null) {
                     item.set(attrName, value);
+                }
+            } else if (!valuePart.isEmpty()) {
+                // Plain attribute reference: SET a = b  or  SET a = #alias
+                String refAttr = resolveAttributeName(valuePart, exprAttrNames);
+                JsonNode refValue = item.get(refAttr);
+                if (refValue != null) {
+                    item.set(attrName, refValue);
                 }
             }
 
@@ -1033,15 +1072,13 @@ public class DynamoDbService {
 
         if (condLower.startsWith("attribute_exists")) {
             String attr = extractFunctionArg(condition);
-            String attrName = resolveAttributeName(attr, exprAttrNames);
-            // If item is null, attribute cannot exist
-            return item != null && item.has(attrName);
+            String resolvedPath = resolveAttributePath(attr, exprAttrNames);
+            return item != null && resolveNestedAttribute(item, resolvedPath) != null;
         }
         if (condLower.startsWith("attribute_not_exists")) {
             String attr = extractFunctionArg(condition);
-            String attrName = resolveAttributeName(attr, exprAttrNames);
-            // If item is null, attribute definitely doesn't exist
-            return item == null || !item.has(attrName);
+            String resolvedPath = resolveAttributePath(attr, exprAttrNames);
+            return item == null || resolveNestedAttribute(item, resolvedPath) == null;
         }
         if (condLower.startsWith("begins_with")) {
             String[] args = extractFunctionArgs(condition);
@@ -1057,9 +1094,54 @@ public class DynamoDbService {
             String[] args = extractFunctionArgs(condition);
             if (args.length == 2) {
                 String attrName = resolveAttributeName(args[0], exprAttrNames);
-                String substring = resolveExprValue(args[1], exprAttrValues);
-                String actual = item != null ? extractScalarValue(item.get(attrName)) : null;
-                return actual != null && substring != null && actual.contains(substring);
+                if (item == null) return false;
+                JsonNode attrNode = item.get(attrName);
+                if (attrNode == null) return false;
+                // Resolve the raw AttributeValue node for type-aware comparisons
+                JsonNode searchAttrValue = exprAttrValues != null
+                        ? exprAttrValues.get(args[1].trim()) : null;
+                if (searchAttrValue == null) return false;
+                // List type: type-aware element membership check
+                if (attrNode.has("L")) {
+                    for (JsonNode element : attrNode.get("L")) {
+                        if (attributeValuesEqual(element, searchAttrValue)) return true;
+                    }
+                    return false;
+                }
+                // SS (String Set): operand must be S type
+                if (attrNode.has("SS")) {
+                    if (!searchAttrValue.has("S")) return false;
+                    String target = searchAttrValue.get("S").asText();
+                    for (JsonNode element : attrNode.get("SS")) {
+                        if (target.equals(element.asText())) return true;
+                    }
+                    return false;
+                }
+                // NS (Number Set): operand must be N type, compare numerically
+                if (attrNode.has("NS")) {
+                    if (!searchAttrValue.has("N")) return false;
+                    try {
+                        java.math.BigDecimal target = new java.math.BigDecimal(searchAttrValue.get("N").asText());
+                        for (JsonNode element : attrNode.get("NS")) {
+                            if (target.compareTo(new java.math.BigDecimal(element.asText())) == 0) return true;
+                        }
+                    } catch (NumberFormatException ignored) {}
+                    return false;
+                }
+                // BS (Binary Set): operand must be B type
+                if (attrNode.has("BS")) {
+                    if (!searchAttrValue.has("B")) return false;
+                    String target = searchAttrValue.get("B").asText();
+                    for (JsonNode element : attrNode.get("BS")) {
+                        if (target.equals(element.asText())) return true;
+                    }
+                    return false;
+                }
+                // String type: operand must be S type, check substring
+                if (attrNode.has("S") && searchAttrValue.has("S")) {
+                    return attrNode.get("S").asText().contains(searchAttrValue.get("S").asText());
+                }
+                return false;
             }
             return false;
         }
@@ -1100,6 +1182,52 @@ public class DynamoDbService {
         return placeholder;
     }
 
+    private boolean attributeValuesEqual(JsonNode a, JsonNode b) {
+        if (a == null || b == null) return a == b;
+        // Scalar types: S, B, BOOL, NULL
+        for (String type : new String[]{"S", "B", "BOOL", "NULL"}) {
+            if (a.has(type) && b.has(type)) {
+                return a.get(type).asText().equals(b.get(type).asText());
+            }
+            if (a.has(type) || b.has(type)) return false; // type mismatch
+        }
+        // Numeric comparison with normalization
+        if (a.has("N") && b.has("N")) {
+            try {
+                return new java.math.BigDecimal(a.get("N").asText())
+                        .compareTo(new java.math.BigDecimal(b.get("N").asText())) == 0;
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        }
+        if (a.has("N") || b.has("N")) return false;
+        // Map type: compare all entries recursively
+        if (a.has("M") && b.has("M")) {
+            JsonNode aMap = a.get("M");
+            JsonNode bMap = b.get("M");
+            if (aMap.size() != bMap.size()) return false;
+            var fields = aMap.fields();
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                if (!bMap.has(entry.getKey())) return false;
+                if (!attributeValuesEqual(entry.getValue(), bMap.get(entry.getKey()))) return false;
+            }
+            return true;
+        }
+        // List type: compare element by element
+        if (a.has("L") && b.has("L")) {
+            JsonNode aList = a.get("L");
+            JsonNode bList = b.get("L");
+            if (aList.size() != bList.size()) return false;
+            for (int i = 0; i < aList.size(); i++) {
+                if (!attributeValuesEqual(aList.get(i), bList.get(i))) return false;
+            }
+            return true;
+        }
+        // Different types are never equal
+        return false;
+    }
+
     private int compareValues(String a, String b) {
         // Try numeric comparison first
         try {
@@ -1107,6 +1235,48 @@ public class DynamoDbService {
         } catch (NumberFormatException e) {
             return a.compareTo(b);
         }
+    }
+
+    private static final String DOT_ESCAPE = "\uFF0E";
+
+    private String resolveAttributePath(String path, JsonNode exprAttrNames) {
+        // Resolve each segment of a dotted path, e.g. "passengerInformation.#name"
+        // ExpressionAttributeNames may resolve to names containing dots (e.g. "#a" -> "foo.bar").
+        // Escape those dots so resolveNestedAttribute treats them as single keys.
+        String[] segments = path.split("\\.");
+        StringBuilder resolved = new StringBuilder();
+        for (int i = 0; i < segments.length; i++) {
+            if (i > 0) resolved.append(".");
+            String original = segments[i];
+            String resolvedSegment = resolveAttributeName(original, exprAttrNames);
+            if (original.startsWith("#") && resolvedSegment != null) {
+                resolvedSegment = resolvedSegment.replace(".", DOT_ESCAPE);
+            }
+            resolved.append(resolvedSegment);
+        }
+        return resolved.toString();
+    }
+
+    private JsonNode resolveNestedAttribute(JsonNode item, String path) {
+        // Navigate a dotted path through DynamoDB's {"M": {...}} structure
+        String[] segments = path.split("\\.");
+        JsonNode current = item;
+        for (int i = 0; i < segments.length; i++) {
+            if (current == null) return null;
+            String segment = segments[i].replace(DOT_ESCAPE, ".");
+            if (i == 0) {
+                // First segment: resolve against the top-level item map
+                current = current.get(segment);
+            } else {
+                // Subsequent segments: descend into DynamoDB Map type
+                if (current.has("M")) {
+                    current = current.get("M").get(segment);
+                } else {
+                    current = current.get(segment);
+                }
+            }
+        }
+        return current;
     }
 
     private String extractFunctionArg(String funcCall) {
@@ -1191,6 +1361,7 @@ public class DynamoDbService {
         if (attrValue.has("S")) return attrValue.get("S").asText();
         if (attrValue.has("N")) return attrValue.get("N").asText();
         if (attrValue.has("B")) return attrValue.get("B").asText();
+        if (attrValue.has("BOOL")) return attrValue.get("BOOL").asText();
         return attrValue.asText();
     }
 

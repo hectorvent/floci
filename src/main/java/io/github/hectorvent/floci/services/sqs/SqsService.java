@@ -54,7 +54,7 @@ public class SqsService {
                         }),
                 config.services().sqs().defaultVisibilityTimeout(),
                 config.services().sqs().maxMessageSize(),
-                config.baseUrl(),
+                config.effectiveBaseUrl(),
                 regionResolver
         );
     }

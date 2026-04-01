@@ -6,11 +6,11 @@
 
     <groupId>io.github.hectorvent</groupId>
     <artifactId>floci</artifactId>
-    <version>1.0.4</version>
+    <version>1.0.11</version>
     <packaging>jar</packaging>
 
     <name>Floci</name>
-    <description>Fast, free, open-source local AWS emulator supporting SSM, SQS, SNS, S3, DynamoDB, Lambda, API Gateway, Cognito, KMS, Kinesis, Secrets Manager, CloudFormation, Step Functions, IAM, STS, ElastiCache, RDS, EventBridge, and CloudWatch</description>
+    <description>Fast, free, open-source local AWS emulator supporting SSM, SQS, SNS, SES, S3, DynamoDB, Lambda, API Gateway, Cognito, KMS, Kinesis, Secrets Manager, CloudFormation, Step Functions, IAM, STS, ElastiCache, RDS, EventBridge, and CloudWatch</description>
 
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
@@ -83,10 +83,55 @@
             <version>3.4.0</version>
         </dependency>
 
+        <!-- BouncyCastle for X.509 certificate generation and PEM handling (ACM service) -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.83</version>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>1.83</version>
+        </dependency>
+
+        <!-- JSONata expression engine (Step Functions) -->
+        <dependency>
+            <groupId>com.dashjoin</groupId>
+            <artifactId>jsonata</artifactId>
+            <version>0.9.9</version>
+        </dependency>
+
+        <!-- Apache Velocity Template Engine (API Gateway VTL mapping templates) -->
+        <dependency>
+            <groupId>org.apache.velocity</groupId>
+            <artifactId>velocity-engine-core</artifactId>
+            <version>2.4.1</version>
+        </dependency>
+
+        <!-- JSON Schema validation (API Gateway request validation) -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.5.8</version>
+        </dependency>
+
+        <!-- OpenAPI/Swagger parser (API Gateway ImportRestApi) -->
+        <dependency>
+            <groupId>io.swagger.parser.v3</groupId>
+            <artifactId>swagger-parser</artifactId>
+            <version>2.1.38</version>
+        </dependency>
+
         <!-- Testing -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5-mockito</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
