@@ -5,7 +5,7 @@ environment (creating buckets, populating data, configuring resources, etc.) or 
 
 Hook scripts ending with `.sh` are discovered in the following directories:
 
-- **Startup hooks** (`/etc/floci/init/start.d`) run after Floci services are initialized, but before the environment is marked as ready.
+- **Startup hooks** (`/etc/floci/init/start.d`) run after the HTTP server is ready and accepting connections on port 4566. This means hooks can safely make HTTP calls back to Floci (e.g. using the AWS CLI).
 - **Shutdown hooks** (`/etc/floci/init/stop.d`) run when Floci is shutting down, after `destroy()` is triggered.
 
 If a hook directory does not exist or contains no `.sh` scripts, Floci skips it and continues normally.
@@ -22,8 +22,15 @@ Hooks run:
 - With access to configured services and their endpoints
 - With the same environment variables as Floci
 
-Hooks can call Floci service endpoints directly from inside the container. If a hook depends on additional CLI tools,
-make sure those tools are available in the runtime image.
+Hooks can call Floci service endpoints directly from inside the container (e.g. `http://localhost:4566`).
+The published Docker image does not include the AWS CLI. If your hooks require it, extend the image:
+
+```dockerfile
+FROM ghcr.io/hectorvent/floci:latest
+RUN apk add --no-cache aws-cli
+```
+
+If a hook depends on additional CLI tools, make sure those tools are available in the runtime image.
 
 ### Execution Behavior
 
@@ -38,7 +45,8 @@ Execution uses a fail-fast strategy:
 
 - If a script exits with a non-zero status, remaining hooks are not executed.
 - If a script exceeds the configured timeout, it is terminated and remaining hooks are not executed.
-- A hook failure marks the corresponding startup or shutdown phase as **failed**.
+- A startup hook failure triggers application shutdown.
+- A shutdown hook failure is logged but does not prevent the shutdown from completing.
 
 ## Examples
 
