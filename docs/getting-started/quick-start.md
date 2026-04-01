@@ -17,12 +17,12 @@ This guide gets Floci running and verifies that AWS CLI commands work against it
         volumes:
           # Local directory bind mount (default)
           - ./data:/app/data
-          
+    
           # OR named volume (optional):
           # - floci-data:/app/data
-
-#    volumes:
-#      floci-data:
+    
+    # volumes:
+    #   floci-data:
     ```
 
     ```bash
@@ -42,12 +42,12 @@ This guide gets Floci running and verifies that AWS CLI commands work against it
         volumes:
           # Local directory bind mount (default)
           - ./data:/app/data
-          
+    
           # OR named volume (optional):
           # - floci-data:/app/data
-
-#    volumes:
-#      floci-data:
+    
+    # volumes:
+    #   floci-data:
     ```
 
     ```bash
