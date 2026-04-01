@@ -282,12 +282,14 @@ public class DynamoDbJsonHandler {
         String filterExpr = request.has("FilterExpression")
                 ? request.get("FilterExpression").asText() : null;
         Integer limit = request.has("Limit") ? request.get("Limit").asInt() : null;
+        Boolean scanIndexForward = request.has("ScanIndexForward")
+                ? request.get("ScanIndexForward").asBoolean() : null;
         String indexName = request.has("IndexName") ? request.get("IndexName").asText() : null;
         JsonNode exclusiveStartKey = request.has("ExclusiveStartKey")
                 ? request.get("ExclusiveStartKey") : null;
 
         DynamoDbService.QueryResult result = dynamoDbService.query(tableName, keyConditions,
-                exprAttrValues, keyConditionExpr, filterExpr, limit, indexName,
+                exprAttrValues, keyConditionExpr, filterExpr, limit, scanIndexForward, indexName,
                 exclusiveStartKey, exprAttrNames, region);
 
         ObjectNode response = objectMapper.createObjectNode();
