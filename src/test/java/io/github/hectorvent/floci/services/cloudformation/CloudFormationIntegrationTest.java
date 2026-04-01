@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.matchesRegex;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 
@@ -364,5 +365,426 @@ class CloudFormationIntegrationTest {
             .statusCode(200)
             .body("Parameter.Name", equalTo("/app/auto-table-name"))
             .body("Parameter.Value", startsWith("auto-name-stack-MyTable-"));
+    }
+
+    @Test
+    void createStack_explicitNamesPreserved() {
+        // When explicit names are provided, CloudFormation uses them as-is.
+        // See: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-name.html
+        String template = """
+            {
+              "Resources": {
+                "Bucket": {
+                  "Type": "AWS::S3::Bucket",
+                  "Properties": {
+                    "BucketName": "my-explicit-bucket-name"
+                  }
+                },
+                "Queue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "MyExplicitQueueName"
+                  }
+                },
+                "Table": {
+                  "Type": "AWS::DynamoDB::Table",
+                  "Properties": {
+                    "TableName": "MyExplicitTableName",
+                    "AttributeDefinitions": [
+                      {"AttributeName": "id", "AttributeType": "S"}
+                    ],
+                    "KeySchema": [
+                      {"AttributeName": "id", "KeyType": "HASH"}
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "explicit-names-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // Verify explicit names are used as-is in DescribeStackResources
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "explicit-names-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("my-explicit-bucket-name"))
+            .body(containsString("MyExplicitQueueName"))
+            .body(containsString("MyExplicitTableName"))
+            // Must NOT contain auto-generated pattern
+            .body(not(containsString("explicit-names-stack-Bucket-")))
+            .body(not(containsString("explicit-names-stack-Queue-")))
+            .body(not(containsString("explicit-names-stack-Table-")));
+    }
+
+    @Test
+    void createStack_s3AutoName_isLowercase() {
+        // S3 bucket names must be lowercase letters, numbers, periods, and hyphens (max 63 chars).
+        // See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+        String template = """
+            {
+              "Resources": {
+                "MyUpperCaseBucket": {
+                  "Type": "AWS::S3::Bucket",
+                  "Properties": {}
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "S3LowerCase-Stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // The auto-generated name should be all lowercase: s3lowercase-stack-myuppercasebucket-...
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "S3LowerCase-Stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("s3lowercase-stack-myuppercasebucket-"))
+            // Must not contain uppercase variants
+            .body(not(containsString("S3LowerCase-Stack-MyUpperCaseBucket-")));
+    }
+
+    @Test
+    void createStack_sqsAutoName_preservesCase() {
+        // SQS queue names preserve case. AWS example: mystack-myqueue-1VF9BKQH5BJVI
+        // See: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-sqs-queue.html
+        String template = """
+            {
+              "Resources": {
+                "MyMixedCaseQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {}
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "CaseSensitive-Stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // The SQS auto-generated name should preserve case: CaseSensitive-Stack-MyMixedCaseQueue-...
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "CaseSensitive-Stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("CaseSensitive-Stack-MyMixedCaseQueue-"));
+    }
+
+    @Test
+    void createStack_multipleUnnamedResources_uniqueNames() {
+        // Multiple resources of same type without names get unique auto-generated names
+        String template = """
+            {
+              "Resources": {
+                "TableA": {
+                  "Type": "AWS::DynamoDB::Table",
+                  "Properties": {
+                    "AttributeDefinitions": [
+                      {"AttributeName": "id", "AttributeType": "S"}
+                    ],
+                    "KeySchema": [
+                      {"AttributeName": "id", "KeyType": "HASH"}
+                    ]
+                  }
+                },
+                "TableB": {
+                  "Type": "AWS::DynamoDB::Table",
+                  "Properties": {
+                    "AttributeDefinitions": [
+                      {"AttributeName": "id", "AttributeType": "S"}
+                    ],
+                    "KeySchema": [
+                      {"AttributeName": "id", "KeyType": "HASH"}
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "multi-table-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Both tables should have distinct names derived from their logical IDs
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "multi-table-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("multi-table-stack-TableA-"))
+            .body(containsString("multi-table-stack-TableB-"));
+    }
+
+    @Test
+    void createStack_ssmAutoName_followsAwsPattern() {
+        // AWS SSM Parameter auto-name pattern: {stackName}-{logicalId}-{suffix}
+        // See: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ssm-parameter.html
+        String template = """
+            {
+              "Resources": {
+                "MyParam": {
+                  "Type": "AWS::SSM::Parameter",
+                  "Properties": {
+                    "Type": "String",
+                    "Value": "test-value"
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "ssm-auto-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // SSM Parameter physical ID should follow {stackName}-{logicalId}-{suffix} pattern
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "ssm-auto-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("ssm-auto-stack-MyParam-"));
+
+        // Verify SSM Parameter name via SSM API using DescribeStackResources physical ID
+        // We extract the auto-generated name from the stack resource and verify it's accessible
+        var ssmResourceXml = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "ssm-auto-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+
+        // Extract the auto-generated parameter name from the XML response
+        String paramName = ssmResourceXml
+            .split("<PhysicalResourceId>")[1]
+            .split("</PhysicalResourceId>")[0];
+
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("{\"Name\": \"" + paramName + "\", \"WithDecryption\": true}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Value", equalTo("test-value"));
+    }
+
+    @Test
+    void createStack_getAttOnAutoNamedResource() {
+        // Fn::GetAtt should work on auto-named resources (e.g. DynamoDB Arn)
+        String template = """
+            {
+              "Resources": {
+                "AutoTable": {
+                  "Type": "AWS::DynamoDB::Table",
+                  "Properties": {
+                    "AttributeDefinitions": [
+                      {"AttributeName": "pk", "AttributeType": "S"}
+                    ],
+                    "KeySchema": [
+                      {"AttributeName": "pk", "KeyType": "HASH"}
+                    ]
+                  }
+                },
+                "ArnParam": {
+                  "Type": "AWS::SSM::Parameter",
+                  "Properties": {
+                    "Name": "/app/auto-table-arn",
+                    "Type": "String",
+                    "Value": {"Fn::GetAtt": ["AutoTable", "Arn"]}
+                  }
+                }
+              },
+              "Outputs": {
+                "TableArn": {
+                  "Value": {"Fn::GetAtt": ["AutoTable", "Arn"]}
+                },
+                "TableName": {
+                  "Value": {"Ref": "AutoTable"}
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "getatt-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify Outputs contain the auto-generated name and ARN
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "getatt-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<OutputKey>TableArn</OutputKey>"))
+            .body(containsString("<OutputKey>TableName</OutputKey>"))
+            .body(containsString("getatt-stack-AutoTable-"));
+
+        // Verify SSM Parameter received the Arn via GetAtt
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                {"Name": "/app/auto-table-arn", "WithDecryption": true}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Value", startsWith("arn:aws:dynamodb:"));
+    }
+
+    @Test
+    void createStack_snsAutoName_refReturnsArn() {
+        // SNS Ref returns TopicArn. AWS example: arn:aws:sns:us-east-1:123456789012:mystack-mytopic-NZJ5JSMVGFIE
+        // See: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-sns-topic.html
+        String template = """
+            {
+              "Resources": {
+                "MyTopic": {
+                  "Type": "AWS::SNS::Topic",
+                  "Properties": {}
+                }
+              },
+              "Outputs": {
+                "TopicRef": {
+                  "Value": {"Ref": "MyTopic"}
+                },
+                "TopicArn": {
+                  "Value": {"Fn::GetAtt": ["MyTopic", "TopicName"]}
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "sns-auto-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // SNS Ref returns ARN (which contains the auto-generated topic name)
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "sns-auto-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            // Ref returns ARN containing the auto-generated name
+            .body(containsString("arn:aws:sns:"))
+            .body(containsString("sns-auto-stack-MyTopic-"));
+    }
+
+    @Test
+    void createStack_ecrAutoName_isLowercase() {
+        // ECR repository names must be lowercase.
+        // See: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ecr-repository.html
+        String template = """
+            {
+              "Resources": {
+                "MyRepo": {
+                  "Type": "AWS::ECR::Repository",
+                  "Properties": {}
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "ECR-Upper-Stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // ECR auto-name should be lowercase
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "ECR-Upper-Stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("ecr-upper-stack-myrepo-"))
+            .body(not(containsString("ECR-Upper-Stack-MyRepo-")));
     }
 }

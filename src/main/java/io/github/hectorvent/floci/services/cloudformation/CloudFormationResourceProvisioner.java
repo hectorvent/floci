@@ -382,7 +382,7 @@ public class CloudFormationResourceProvisioner {
                                        String region, String stackName) {
         String name = resolveOptional(props, "Name", engine);
         if (name == null || name.isBlank()) {
-            name = "/cfn/" + stackName + "/" + r.getLogicalId();
+            name = generatePhysicalName(stackName, r.getLogicalId(), 2048, false);
         }
         String value = resolveOptional(props, "Value", engine);
         if (value == null) {
