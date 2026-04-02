@@ -110,4 +110,58 @@ class SnsSqsFanoutFifoDeliveryTest {
         assertTrue(bodies.stream().anyMatch(b -> b.contains("batch-msg-1")));
         assertTrue(bodies.stream().anyMatch(b -> b.contains("batch-msg-2")));
     }
+
+    @Test
+    void publishBatch_withTopicContentBasedDedup_deliversToFifoSqsQueue() {
+        // Arrange — topic has ContentBasedDeduplication, queue does NOT
+        sqsService.createQueue("fifo-batch-cbd-queue.fifo", Map.of("FifoQueue", "true"), REGION);
+        String queueArn = "arn:aws:sqs:" + REGION + ":" + ACCOUNT + ":fifo-batch-cbd-queue.fifo";
+
+        snsService.createTopic("fifo-batch-cbd-topic.fifo",
+                Map.of("FifoTopic", "true", "ContentBasedDeduplication", "true"), null, REGION);
+        String topicArn = "arn:aws:sns:" + REGION + ":" + ACCOUNT + ":fifo-batch-cbd-topic.fifo";
+        snsService.subscribe(topicArn, "sqs", queueArn, REGION);
+
+        // Act — no explicit dedup IDs; topic derives them from message content
+        var entries = List.<Map<String, Object>>of(
+                Map.of("Id", "e1", "Message", "cbd-batch-msg-1", "MessageGroupId", "group-a"),
+                Map.of("Id", "e2", "Message", "cbd-batch-msg-2", "MessageGroupId", "group-b")
+        );
+        var result = snsService.publishBatch(topicArn, entries, REGION);
+
+        // Assert
+        assertEquals(2, result.successful().size());
+        assertEquals(0, result.failed().size());
+
+        String queueUrl = BASE_URL + "/" + ACCOUNT + "/fifo-batch-cbd-queue.fifo";
+        List<Message> messages = sqsService.receiveMessage(queueUrl, 10, 30, 0, REGION);
+        assertEquals(2, messages.size());
+
+        List<String> bodies = messages.stream().map(Message::getBody).toList();
+        assertTrue(bodies.stream().anyMatch(b -> b.contains("cbd-batch-msg-1")));
+        assertTrue(bodies.stream().anyMatch(b -> b.contains("cbd-batch-msg-2")));
+    }
+
+    @Test
+    void publish_duplicateMessage_isDeduplicatedAtTopicLevel() {
+        // Arrange
+        sqsService.createQueue("fifo-dedup-queue.fifo", Map.of("FifoQueue", "true"), REGION);
+        String queueArn = "arn:aws:sqs:" + REGION + ":" + ACCOUNT + ":fifo-dedup-queue.fifo";
+
+        snsService.createTopic("fifo-dedup-topic.fifo", Map.of("FifoTopic", "true"), null, REGION);
+        String topicArn = "arn:aws:sns:" + REGION + ":" + ACCOUNT + ":fifo-dedup-topic.fifo";
+        snsService.subscribe(topicArn, "sqs", queueArn, REGION);
+
+        // Act — publish same dedup ID twice
+        snsService.publish(topicArn, null, null, "first",
+                null, null, "group-1", "same-dedup", REGION);
+        snsService.publish(topicArn, null, null, "second",
+                null, null, "group-1", "same-dedup", REGION);
+
+        // Assert — only first message should be delivered
+        String queueUrl = BASE_URL + "/" + ACCOUNT + "/fifo-dedup-queue.fifo";
+        List<Message> messages = sqsService.receiveMessage(queueUrl, 10, 30, 0, REGION);
+        assertEquals(1, messages.size());
+        assertTrue(messages.get(0).getBody().contains("first"));
+    }
 }

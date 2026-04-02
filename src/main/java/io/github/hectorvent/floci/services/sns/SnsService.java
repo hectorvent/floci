@@ -357,6 +357,10 @@ public class SnsService {
                         "MessageGroupId is required for FIFO topics.", "true"});
                 continue;
             }
+            // Derive deduplication ID if ContentBasedDeduplication is enabled and not provided
+            if (isFifo && messageDeduplicationId == null && "true".equals(topic.getAttributes().get("ContentBasedDeduplication"))) {
+                messageDeduplicationId = sha256(message);
+            }
             if (isFifo && messageDeduplicationId != null && isDuplicate(topicArn, messageDeduplicationId)) {
                 successful.add(new String[]{id, UUID.randomUUID().toString()});
                 continue;
