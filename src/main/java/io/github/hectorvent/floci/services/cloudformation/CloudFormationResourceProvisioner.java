@@ -425,14 +425,77 @@ public class CloudFormationResourceProvisioner {
         if (name == null || name.isBlank()) {
             name = generatePhysicalName(stackName, r.getLogicalId(), 512, false);
         }
-        String value = resolveOptional(props, "SecretString", engine);
-        if (value == null) {
-            value = "{}";
-        }
-        var secret = secretsManagerService.createSecret(name, value, null, null, null, List.of(), region);
+        String description = resolveOptional(props, "Description", engine);
+        String value = resolveSecretValue(props, engine);
+        var secret = secretsManagerService.createSecret(name, value, null, description, null, List.of(), region);
         r.setPhysicalId(secret.getArn());
         r.getAttributes().put("Arn", secret.getArn());
         r.getAttributes().put("Name", name);
+    }
+
+    /**
+     * Resolves the secret value from CloudFormation properties.
+     * SecretString and GenerateSecretString are mutually exclusive per AWS spec.
+     * If GenerateSecretString is present, a random password is generated.
+     * If SecretStringTemplate and GenerateStringKey are specified inside
+     * GenerateSecretString, the generated password is embedded in the template JSON.
+     */
+    private String resolveSecretValue(JsonNode props, CloudFormationTemplateEngine engine) {
+        if (props == null) {
+            return "{}";
+        }
+
+        // SecretString takes precedence when explicitly set
+        String secretString = resolveOptional(props, "SecretString", engine);
+        JsonNode genNode = props.get("GenerateSecretString");
+
+        if (secretString != null && genNode != null && !genNode.isNull()) {
+            // AWS rejects this combination; for emulator compatibility, prefer SecretString
+            return secretString;
+        }
+
+        if (secretString != null) {
+            return secretString;
+        }
+
+        if (genNode != null && !genNode.isNull()) {
+            return generateSecretString(genNode);
+        }
+
+        return "{}";
+    }
+
+    private String generateSecretString(JsonNode genNode) {
+        String password = io.github.hectorvent.floci.services.secretsmanager
+                .RandomPasswordGenerator.generate(genNode);
+
+        String template = null;
+        String key = null;
+        JsonNode templateNode = genNode.get("SecretStringTemplate");
+        JsonNode keyNode = genNode.get("GenerateStringKey");
+
+        if (templateNode != null && !templateNode.isNull()) {
+            template = templateNode.asText();
+        }
+        if (keyNode != null && !keyNode.isNull()) {
+            key = keyNode.asText();
+        }
+
+        if (template != null && key != null) {
+            // Insert the generated password into the template JSON
+            try {
+                var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                var tree = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(template);
+                tree.put(key, password);
+                return mapper.writeValueAsString(tree);
+            } catch (Exception e) {
+                // If the template is not valid JSON, fall back to raw password
+                LOG.warnv("Failed to parse SecretStringTemplate: {0}", e.getMessage());
+                return password;
+            }
+        }
+
+        return password;
     }
 
     // ── Nested Stack ──────────────────────────────────────────────────────────

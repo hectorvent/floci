@@ -7,11 +7,17 @@ import io.restassured.http.ContentType;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.matchesRegex;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 
 @QuarkusTest
@@ -19,13 +25,16 @@ class CloudFormationIntegrationTest {
 
     private static final String DYNAMODB_CONTENT_TYPE = "application/x-amz-json-1.0";
     private static final String SSM_CONTENT_TYPE = "application/x-amz-json-1.1";
+    private static final String SM_CONTENT_TYPE = "application/x-amz-json-1.1";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @BeforeAll
     static void configureRestAssured() {
         RestAssured.config = RestAssured.config().encoderConfig(
                 EncoderConfig.encoderConfig()
                         .encodeContentTypeAs(DYNAMODB_CONTENT_TYPE, ContentType.TEXT)
-                        .encodeContentTypeAs(SSM_CONTENT_TYPE, ContentType.TEXT));
+                        .encodeContentTypeAs(SSM_CONTENT_TYPE, ContentType.TEXT)
+                        .encodeContentTypeAs(SM_CONTENT_TYPE, ContentType.TEXT));
     }
 
     @Test
@@ -786,5 +795,424 @@ class CloudFormationIntegrationTest {
             .statusCode(200)
             .body(containsString("ecr-upper-stack-myrepo-"))
             .body(not(containsString("ECR-Upper-Stack-MyRepo-")));
+    }
+
+    // ── Secrets Manager: GenerateSecretString + Description ──────────────────
+
+    @Test
+    void createStack_secretWithGenerateSecretString_defaultPassword() {
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-gen-default",
+                    "GenerateSecretString": {}
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "gen-secret-default")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // Verify secret was created and has a generated value (default 32 chars)
+        String body = given()
+            .header("X-Amz-Target", "secretsmanager.GetSecretValue")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-gen-default\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+
+        try {
+            JsonNode json = OBJECT_MAPPER.readTree(body);
+            String secretString = json.get("SecretString").asText();
+            assertThat(secretString, notNullValue());
+            assertThat(secretString.length(), equalTo(32));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void createStack_secretWithGenerateSecretString_customLength() {
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-gen-len64",
+                    "GenerateSecretString": {
+                      "PasswordLength": 64,
+                      "ExcludePunctuation": true
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "gen-secret-len64")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        String body = given()
+            .header("X-Amz-Target", "secretsmanager.GetSecretValue")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-gen-len64\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+
+        try {
+            JsonNode json = OBJECT_MAPPER.readTree(body);
+            String secretString = json.get("SecretString").asText();
+            assertThat(secretString.length(), equalTo(64));
+            // No punctuation
+            assertThat(secretString, not(matchesRegex(".*[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~].*")));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void createStack_secretWithGenerateSecretString_templateAndKey() {
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-gen-template",
+                    "GenerateSecretString": {
+                      "SecretStringTemplate": "{\\"username\\": \\"admin\\"}",
+                      "GenerateStringKey": "password",
+                      "PasswordLength": 20,
+                      "ExcludePunctuation": true
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "gen-secret-tpl")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        String body = given()
+            .header("X-Amz-Target", "secretsmanager.GetSecretValue")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-gen-template\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+
+        try {
+            JsonNode json = OBJECT_MAPPER.readTree(body);
+            String secretString = json.get("SecretString").asText();
+            assertThat(secretString, notNullValue());
+            // Parse the secret value as JSON
+            JsonNode secretJson = OBJECT_MAPPER.readTree(secretString);
+            assertThat(secretJson.get("username").asText(), equalTo("admin"));
+            assertThat(secretJson.has("password"), equalTo(true));
+            assertThat(secretJson.get("password").asText().length(), equalTo(20));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void createStack_secretWithDescription() {
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-desc-secret",
+                    "Description": "My test secret description",
+                    "SecretString": "my-value"
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "desc-secret-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify description via DescribeSecret
+        given()
+            .header("X-Amz-Target", "secretsmanager.DescribeSecret")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-desc-secret\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Description", equalTo("My test secret description"))
+            .body("Name", equalTo("cfn-desc-secret"));
+    }
+
+    @Test
+    void createStack_secretWithDescriptionAndGenerateSecretString() {
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-desc-gen-secret",
+                    "Description": "Generated secret with desc",
+                    "GenerateSecretString": {
+                      "PasswordLength": 16,
+                      "ExcludeNumbers": true
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "desc-gen-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify description
+        given()
+            .header("X-Amz-Target", "secretsmanager.DescribeSecret")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-desc-gen-secret\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Description", equalTo("Generated secret with desc"));
+
+        // Verify generated value
+        String body = given()
+            .header("X-Amz-Target", "secretsmanager.GetSecretValue")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-desc-gen-secret\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+
+        try {
+            JsonNode json = OBJECT_MAPPER.readTree(body);
+            String secretString = json.get("SecretString").asText();
+            assertThat(secretString.length(), equalTo(16));
+            assertThat(secretString, not(matchesRegex(".*[0-9].*")));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void createStack_secretWithExplicitSecretString_ignoredGenerateSecretString() {
+        // When both SecretString and GenerateSecretString are set, SecretString wins
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-both-secret",
+                    "SecretString": "explicit-value",
+                    "GenerateSecretString": {
+                      "PasswordLength": 64
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "both-secret-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "secretsmanager.GetSecretValue")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-both-secret\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("SecretString", equalTo("explicit-value"));
+    }
+
+    @Test
+    void createStack_secretWithNoSecretStringOrGenerate_defaultsEmptyJson() {
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-no-value-secret"
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "no-value-secret-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "secretsmanager.GetSecretValue")
+            .contentType(SM_CONTENT_TYPE)
+            .body("{\"SecretId\": \"cfn-no-value-secret\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("SecretString", equalTo("{}"));
+    }
+
+    @Test
+    void createStack_secretAutoName_withGenerateSecretString() {
+        String template = """
+            {
+              "Resources": {
+                "AutoSecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "GenerateSecretString": {
+                      "PasswordLength": 10,
+                      "ExcludeLowercase": true,
+                      "ExcludeUppercase": true,
+                      "ExcludePunctuation": true
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "auto-gen-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify resource was created with auto-generated name
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "auto-gen-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("auto-gen-stack-AutoSecret-"))
+            .body(containsString("CREATE_COMPLETE"));
+    }
+
+    @Test
+    void createStack_secretRefReturnsArn() {
+        String template = """
+            {
+              "Resources": {
+                "MySecret": {
+                  "Type": "AWS::SecretsManager::Secret",
+                  "Properties": {
+                    "Name": "cfn-ref-secret",
+                    "GenerateSecretString": {}
+                  }
+                }
+              },
+              "Outputs": {
+                "SecretArn": {
+                  "Value": {"Ref": "MySecret"}
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "ref-secret-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "ref-secret-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("arn:aws:secretsmanager:"));
     }
 }

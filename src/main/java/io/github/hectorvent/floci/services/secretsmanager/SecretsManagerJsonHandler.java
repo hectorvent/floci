@@ -325,98 +325,16 @@ public class SecretsManagerJsonHandler {
      * @see <a href="https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetRandomPassword.html">AWS Secrets Manager – GetRandomPassword</a>
      */
     private Response handleGetRandomPassword(JsonNode request, String region) {
-
-        var excludeCharacters = request.get("ExcludeCharacters");
-        var excludeLowerCase = request.get("ExcludeLowercase");
-        var excludeNumbers = request.get("ExcludeNumbers");
-        var excludePunctuation = request.get("ExcludePunctuation");
-        var excludeUpperCase = request.get("ExcludeUppercase");
-        var includeSpace = request.get("IncludeSpace");
-        var passwordLength = request.get("PasswordLength");
-        var requireEachIncludedType = request.get("RequireEachIncludedType");
-
-        int length = (passwordLength != null && !passwordLength.isNull()) ? passwordLength.asInt(32) : 32;
-        if (length < 1 || length > 4096) {
+        try {
+            String password = RandomPasswordGenerator.generate(request);
+            ObjectNode response = objectMapper.createObjectNode();
+            response.put("RandomPassword", password);
+            return Response.ok(response).build();
+        } catch (IllegalArgumentException e) {
             return Response.status(400)
-                    .entity(new AwsErrorResponse("InvalidParameterException", "PasswordLength must be between 1 and 4096."))
+                    .entity(new AwsErrorResponse("InvalidParameterException", e.getMessage()))
                     .build();
         }
-
-        StringBuilder charset = new StringBuilder();
-        if (excludeLowerCase == null || excludeLowerCase.isNull() || !excludeLowerCase.asBoolean()) {
-            charset.append("abcdefghijklmnopqrstuvwxyz");
-        }
-        if (excludeUpperCase == null || excludeUpperCase.isNull() || !excludeUpperCase.asBoolean()) {
-            charset.append("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-        }
-        if (excludeNumbers == null || excludeNumbers.isNull() || !excludeNumbers.asBoolean()) {
-            charset.append("0123456789");
-        }
-        if (excludePunctuation == null || excludePunctuation.isNull() || !excludePunctuation.asBoolean()) {
-            charset.append("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~");
-        }
-        if (includeSpace != null && !includeSpace.isNull() && includeSpace.asBoolean()) {
-            charset.append(" ");
-        }
-        if (excludeCharacters != null && !excludeCharacters.isNull()) {
-            String excluded = excludeCharacters.asText();
-            for (int i = charset.length() - 1; i >= 0; i--) {
-                if (excluded.indexOf(charset.charAt(i)) >= 0) {
-                    charset.deleteCharAt(i);
-                }
-            }
-        }
-
-        SecureRandom random = new SecureRandom();
-        StringBuilder password = new StringBuilder(length);
-
-        boolean requireEach = requireEachIncludedType == null || requireEachIncludedType.isNull() || requireEachIncludedType.asBoolean();
-        if (requireEach) {
-            List<String> includedTypes = new ArrayList<>();
-            if (excludeLowerCase == null || excludeLowerCase.isNull() || !excludeLowerCase.asBoolean()) {
-                includedTypes.add("abcdefghijklmnopqrstuvwxyz");
-            }
-            if (excludeUpperCase == null || excludeUpperCase.isNull() || !excludeUpperCase.asBoolean()) {
-                includedTypes.add("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-            }
-            if (excludeNumbers == null || excludeNumbers.isNull() || !excludeNumbers.asBoolean()) {
-                includedTypes.add("0123456789");
-            }
-            if (excludePunctuation == null || excludePunctuation.isNull() || !excludePunctuation.asBoolean()) {
-                includedTypes.add("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~");
-            }
-            if (includeSpace != null && !includeSpace.isNull() && includeSpace.asBoolean()) {
-                includedTypes.add(" ");
-            }
-            if (excludeCharacters != null && !excludeCharacters.isNull()) {
-                String excluded = excludeCharacters.asText();
-                includedTypes = includedTypes.stream()
-                        .map(t -> t.chars().filter(c -> excluded.indexOf(c) < 0)
-                                .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append).toString())
-                        .filter(t -> !t.isEmpty())
-                        .collect(java.util.stream.Collectors.toList());
-            }
-            // Seed one char from each required type
-            for (String type : includedTypes) {
-                password.append(type.charAt(random.nextInt(type.length())));
-            }
-        }
-
-        for (int i = password.length(); i < length; i++) {
-            password.append(charset.charAt(random.nextInt(charset.length())));
-        }
-
-        // Shuffle so required chars aren't always at the start
-        for (int i = length - 1; i > 0; i--) {
-            int j = random.nextInt(i + 1);
-            char tmp = password.charAt(i);
-            password.setCharAt(i, password.charAt(j));
-            password.setCharAt(j, tmp);
-        }
-
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("RandomPassword", password.toString());
-        return Response.ok(response).build();
     }
 
     private List<Secret.Tag> parseTags(JsonNode request) {
