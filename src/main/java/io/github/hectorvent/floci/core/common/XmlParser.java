@@ -35,6 +35,41 @@ public final class XmlParser {
     private XmlParser() {}
 
     /**
+     * Reads the text content of the current element if it is a leaf (contains only text).
+     * If the element contains nested child elements (e.g. {@code <Filter><S3Key>...}),
+     * the entire subtree is skipped and {@code null} is returned.
+     *
+     * <p>After this method returns, the reader is positioned on the END_ELEMENT
+     * of the element that was open when the method was called.
+     */
+    private static String readLeafText(XMLStreamReader r) throws XMLStreamException {
+        StringBuilder sb = new StringBuilder();
+        while (r.hasNext()) {
+            int event = r.next();
+            if (event == XMLStreamConstants.CHARACTERS || event == XMLStreamConstants.CDATA) {
+                sb.append(r.getText());
+            } else if (event == XMLStreamConstants.START_ELEMENT) {
+                // Not a leaf — skip the child subtree, then continue
+                // consuming until we reach our own END_ELEMENT.
+                // depth starts at 2: 1 for ourselves (the element readLeafText
+                // was called for) + 1 for the child START we just saw.
+                int depth = 2;
+                while (r.hasNext()) {
+                    int e = r.next();
+                    if (e == XMLStreamConstants.START_ELEMENT) depth++;
+                    else if (e == XMLStreamConstants.END_ELEMENT) {
+                        if (--depth == 0) break;
+                    }
+                }
+                return null;
+            } else if (event == XMLStreamConstants.END_ELEMENT) {
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
      * Extracts the text content of every element whose local name matches {@code elementName}.
      *
      * <pre>{@code
@@ -153,8 +188,10 @@ public final class XmlParser {
                         current = new LinkedHashMap<>();
                         depth = 1;
                     } else if (current != null && depth == 1) {
-                        String text = r.getElementText();
-                        current.computeIfAbsent(local, k -> new ArrayList<>()).add(text);
+                        String text = readLeafText(r);
+                        if (text != null) {
+                            current.computeIfAbsent(local, k -> new ArrayList<>()).add(text);
+                        }
                     } else if (current != null) {
                         depth++;
                     }
@@ -201,8 +238,10 @@ public final class XmlParser {
                         current = new LinkedHashMap<>();
                         depth = 1;
                     } else if (current != null && depth == 1) {
-                        String text = r.getElementText();
-                        current.put(local, text);
+                        String text = readLeafText(r);
+                        if (text != null) {
+                            current.put(local, text);
+                        }
                     } else if (current != null) {
                         depth++;
                     }
