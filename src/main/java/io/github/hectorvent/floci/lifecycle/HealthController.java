@@ -33,7 +33,7 @@ public class HealthController {
     public Response health() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("services", serviceRegistry.getServices());
-        result.put("edition", "floci-open-source");
+        result.put("edition", "floci-always-free");
         result.put("version", version);
 
         return Response.ok(result).build();

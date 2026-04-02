@@ -18,7 +18,7 @@ class HealthControllerIntegrationTest {
             .statusCode(200)
             .contentType("application/json")
             .body("version", notNullValue())
-            .body("edition", equalTo("floci-open-source"))
+            .body("edition", equalTo("floci-always-free"))
             .body("services", notNullValue())
             .body("services.sqs", anyOf(equalTo("running"), equalTo("available")))
             .body("services.s3", anyOf(equalTo("running"), equalTo("available")))
@@ -42,7 +42,7 @@ class HealthControllerIntegrationTest {
             .statusCode(200)
             .contentType("application/json")
             .body("version", notNullValue())
-            .body("edition", equalTo("floci-open-source"))
+            .body("edition", equalTo("floci-always-free"))
             .body("services", notNullValue());
     }
 }
