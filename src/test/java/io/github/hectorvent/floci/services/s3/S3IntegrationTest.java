@@ -907,7 +907,12 @@ class S3IntegrationTest {
             .statusCode(200)
             .body(containsString("QueueConfiguration"))
             .body(containsString("arn:aws:sqs:us-east-1:000000000000:test-queue"))
-            .body(containsString("s3:ObjectCreated:*"));
+            .body(containsString("s3:ObjectCreated:*"))
+            // Verify filter rules are preserved in round-trip
+            .body(containsString("Filter"))
+            .body(containsString("FilterRule"))
+            .body(containsString("<Name>prefix</Name>"))
+            .body(containsString("<Value>incoming/</Value>"));
     }
 
     @Test
@@ -949,7 +954,9 @@ class S3IntegrationTest {
             .statusCode(200)
             .body(containsString("QueueConfiguration"))
             .body(containsString("arn:aws:sqs:us-east-1:000000000000:csv-queue"))
-            .body(containsString("s3:ObjectCreated:Put"));
+            .body(containsString("s3:ObjectCreated:Put"))
+            .body(containsString("<Name>suffix</Name>"))
+            .body(containsString("<Value>.csv</Value>"));
     }
 
     @Test

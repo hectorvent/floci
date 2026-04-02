@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.s3.model.Bucket;
 import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesParts;
 import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesResult;
 import io.github.hectorvent.floci.services.s3.model.MultipartUpload;
+import io.github.hectorvent.floci.services.s3.model.FilterRule;
 import io.github.hectorvent.floci.services.s3.model.NotificationConfiguration;
 import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
 import io.github.hectorvent.floci.services.s3.model.QueueNotification;
@@ -778,6 +779,7 @@ public class S3Controller {
                 for (String event : qn.events()) {
                     xml.elem("Event", event);
                 }
+                appendFilterRules(xml, qn.filterRules());
                 xml.end("QueueConfiguration");
             }
             for (TopicNotification tn : config.getTopicConfigurations()) {
@@ -787,6 +789,7 @@ public class S3Controller {
                 for (String event : tn.events()) {
                     xml.elem("Event", event);
                 }
+                appendFilterRules(xml, tn.filterRules());
                 xml.end("TopicConfiguration");
             }
             xml.end("NotificationConfiguration");
@@ -799,33 +802,24 @@ public class S3Controller {
     private Response handlePutBucketNotification(String bucket, byte[] body) {
         try {
             String xml = new String(body, StandardCharsets.UTF_8);
-            NotificationConfiguration config = new NotificationConfiguration();
-
-            var queueConfigs = XmlParser.extractGroupsMulti(xml, "QueueConfiguration");
-            for (var group : queueConfigs) {
-                String id = group.getOrDefault("Id", List.of("")).get(0);
-                List<String> queueArns = group.get("Queue");
-                List<String> events = group.get("Event");
-                if (queueArns != null && !queueArns.isEmpty() && events != null && !events.isEmpty()) {
-                    config.getQueueConfigurations().add(new QueueNotification(id, queueArns.get(0), events));
-                }
-            }
-
-            var topicConfigs = XmlParser.extractGroupsMulti(xml, "TopicConfiguration");
-            for (var group : topicConfigs) {
-                String id = group.getOrDefault("Id", List.of("")).get(0);
-                List<String> topicArns = group.get("Topic");
-                List<String> events = group.get("Event");
-                if (topicArns != null && !topicArns.isEmpty() && events != null && !events.isEmpty()) {
-                    config.getTopicConfigurations().add(new TopicNotification(id, topicArns.get(0), events));
-                }
-            }
-
+            NotificationConfiguration config = NotificationConfigurationParser.parse(xml);
             s3Service.putBucketNotificationConfiguration(bucket, config);
             return Response.ok().build();
         } catch (AwsException e) {
             return xmlErrorResponse(e);
         }
+    }
+
+    private static void appendFilterRules(XmlBuilder xml, List<FilterRule> rules) {
+        if (rules == null || rules.isEmpty()) return;
+        xml.start("Filter").start("S3Key");
+        for (FilterRule rule : rules) {
+            xml.start("FilterRule")
+               .elem("Name", rule.name())
+               .elem("Value", rule.value())
+               .end("FilterRule");
+        }
+        xml.end("S3Key").end("Filter");
     }
 
     /**

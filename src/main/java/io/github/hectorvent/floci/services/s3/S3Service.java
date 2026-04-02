@@ -1090,7 +1090,7 @@ public class S3Service {
         String eventJson = buildS3EventJson(bucketName, key, eventName, obj, region, bucket.isVersioningEnabled());
 
         for (QueueNotification qn : config.getQueueConfigurations()) {
-            if (qn.events().stream().anyMatch(p -> matchesEvent(p, eventName))) {
+            if (qn.events().stream().anyMatch(p -> matchesEvent(p, eventName)) && qn.matchesKey(key)) {
                 try {
                     sqsService.sendMessage(sqsUrlFromArn(qn.queueArn()), eventJson, 0);
                     LOG.debugv("Fired S3 event {0} to SQS {1}", eventName, qn.queueArn());
@@ -1101,7 +1101,7 @@ public class S3Service {
         }
 
         for (TopicNotification tn : config.getTopicConfigurations()) {
-            if (tn.events().stream().anyMatch(p -> matchesEvent(p, eventName))) {
+            if (tn.events().stream().anyMatch(p -> matchesEvent(p, eventName)) && tn.matchesKey(key)) {
                 try {
                     snsService.publish(tn.topicArn(), null, eventJson, "Amazon S3 Notification", region);
                     LOG.debugv("Fired S3 event {0} to SNS {1}", eventName, tn.topicArn());
