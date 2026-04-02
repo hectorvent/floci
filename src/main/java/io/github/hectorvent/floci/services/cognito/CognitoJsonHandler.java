@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hectorvent.floci.services.cognito.model.CognitoGroup;
 import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
+import io.github.hectorvent.floci.services.cognito.model.ResourceServer;
+import io.github.hectorvent.floci.services.cognito.model.ResourceServerScope;
 import io.github.hectorvent.floci.services.cognito.model.UserPool;
 import io.github.hectorvent.floci.services.cognito.model.UserPoolClient;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -38,6 +41,11 @@ public class CognitoJsonHandler {
             case "DescribeUserPoolClient" -> handleDescribeUserPoolClient(request);
             case "ListUserPoolClients" -> handleListUserPoolClients(request);
             case "DeleteUserPoolClient" -> handleDeleteUserPoolClient(request);
+            case "CreateResourceServer" -> handleCreateResourceServer(request);
+            case "DescribeResourceServer" -> handleDescribeResourceServer(request);
+            case "ListResourceServers" -> handleListResourceServers(request);
+            case "UpdateResourceServer" -> handleUpdateResourceServer(request);
+            case "DeleteResourceServer" -> handleDeleteResourceServer(request);
             case "AdminCreateUser" -> handleAdminCreateUser(request);
             case "AdminGetUser" -> handleAdminGetUser(request);
             case "AdminDeleteUser" -> handleAdminDeleteUser(request);
@@ -54,6 +62,13 @@ public class CognitoJsonHandler {
             case "ConfirmForgotPassword" -> handleConfirmForgotPassword(request);
             case "GetUser" -> handleGetUser(request);
             case "UpdateUserAttributes" -> handleUpdateUserAttributes(request);
+            case "CreateGroup" -> handleCreateGroup(request);
+            case "GetGroup" -> handleGetGroup(request);
+            case "ListGroups" -> handleListGroups(request);
+            case "DeleteGroup" -> handleDeleteGroup(request);
+            case "AdminAddUserToGroup" -> handleAdminAddUserToGroup(request);
+            case "AdminRemoveUserFromGroup" -> handleAdminRemoveUserFromGroup(request);
+            case "AdminListGroupsForUser" -> handleAdminListGroupsForUser(request);
             default -> Response.status(400)
                     .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
                     .build();
@@ -91,7 +106,11 @@ public class CognitoJsonHandler {
     private Response handleCreateUserPoolClient(JsonNode request) {
         UserPoolClient client = service.createUserPoolClient(
                 request.path("UserPoolId").asText(),
-                request.path("ClientName").asText()
+                request.path("ClientName").asText(),
+                request.path("GenerateSecret").asBoolean(false),
+                request.path("AllowedOAuthFlowsUserPoolClient").asBoolean(false),
+                readStringList(request.path("AllowedOAuthFlows")),
+                readStringList(request.path("AllowedOAuthScopes"))
         );
         ObjectNode response = objectMapper.createObjectNode();
         response.set("UserPoolClient", clientToNode(client));
@@ -120,6 +139,56 @@ public class CognitoJsonHandler {
         service.deleteUserPoolClient(
                 request.path("UserPoolId").asText(),
                 request.path("ClientId").asText()
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleCreateResourceServer(JsonNode request) {
+        ResourceServer server = service.createResourceServer(
+                request.path("UserPoolId").asText(),
+                request.path("Identifier").asText(),
+                request.path("Name").asText(),
+                parseScopes(request.path("Scopes"))
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("ResourceServer", resourceServerToNode(server));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDescribeResourceServer(JsonNode request) {
+        ResourceServer server = service.describeResourceServer(
+                request.path("UserPoolId").asText(),
+                request.path("Identifier").asText()
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("ResourceServer", resourceServerToNode(server));
+        return Response.ok(response).build();
+    }
+
+    private Response handleListResourceServers(JsonNode request) {
+        List<ResourceServer> servers = service.listResourceServers(request.path("UserPoolId").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("ResourceServers");
+        servers.forEach(server -> items.add(resourceServerToNode(server)));
+        return Response.ok(response).build();
+    }
+
+    private Response handleUpdateResourceServer(JsonNode request) {
+        ResourceServer server = service.updateResourceServer(
+                request.path("UserPoolId").asText(),
+                request.path("Identifier").asText(),
+                request.path("Name").asText(),
+                parseScopes(request.path("Scopes"))
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("ResourceServer", resourceServerToNode(server));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDeleteResourceServer(JsonNode request) {
+        service.deleteResourceServer(
+                request.path("UserPoolId").asText(),
+                request.path("Identifier").asText()
         );
         return Response.ok(objectMapper.createObjectNode()).build();
     }
@@ -321,9 +390,61 @@ public class CognitoJsonHandler {
         node.put("ClientId", c.getClientId());
         node.put("UserPoolId", c.getUserPoolId());
         node.put("ClientName", c.getClientName());
+        if (c.getClientSecret() != null) {
+            node.put("ClientSecret", c.getClientSecret());
+        }
+        node.put("GenerateSecret", c.isGenerateSecret());
+        node.put("AllowedOAuthFlowsUserPoolClient", c.isAllowedOAuthFlowsUserPoolClient());
+        ArrayNode flows = node.putArray("AllowedOAuthFlows");
+        c.getAllowedOAuthFlows().forEach(flows::add);
+        ArrayNode scopes = node.putArray("AllowedOAuthScopes");
+        c.getAllowedOAuthScopes().forEach(scopes::add);
         node.put("CreationDate", c.getCreationDate());
         node.put("LastModifiedDate", c.getLastModifiedDate());
         return node;
+    }
+
+    private ObjectNode resourceServerToNode(ResourceServer server) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("UserPoolId", server.getUserPoolId());
+        node.put("Identifier", server.getIdentifier());
+        node.put("Name", server.getName());
+        node.put("CreationDate", server.getCreationDate());
+        node.put("LastModifiedDate", server.getLastModifiedDate());
+        ArrayNode scopes = node.putArray("Scopes");
+        for (ResourceServerScope scope : server.getScopes()) {
+            ObjectNode item = scopes.addObject();
+            item.put("ScopeName", scope.getScopeName());
+            if (scope.getScopeDescription() != null) {
+                item.put("ScopeDescription", scope.getScopeDescription());
+            }
+        }
+        return node;
+    }
+
+    private List<ResourceServerScope> parseScopes(JsonNode scopesNode) {
+        if (scopesNode == null || !scopesNode.isArray()) {
+            return List.of();
+        }
+
+        List<ResourceServerScope> scopes = new java.util.ArrayList<>();
+        scopesNode.forEach(item -> {
+            ResourceServerScope scope = new ResourceServerScope();
+            scope.setScopeName(item.path("ScopeName").asText());
+            scope.setScopeDescription(item.path("ScopeDescription").asText(null));
+            scopes.add(scope);
+        });
+        return scopes;
+    }
+
+    private List<String> readStringList(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+
+        List<String> values = new java.util.ArrayList<>();
+        node.forEach(item -> values.add(item.asText()));
+        return values;
     }
 
     private ObjectNode userToNode(CognitoUser u) {
@@ -339,6 +460,81 @@ public class CognitoJsonHandler {
             attr.put("Name", k);
             attr.put("Value", v);
         });
+        return node;
+    }
+
+    private Response handleCreateGroup(JsonNode request) {
+        String userPoolId = request.path("UserPoolId").asText();
+        String groupName = request.path("GroupName").asText();
+        String description = request.path("Description").asText(null);
+        JsonNode precNode = request.path("Precedence");
+        Integer precedence = precNode.isMissingNode() || precNode.isNull() ? null : precNode.asInt();
+        String roleArn = request.path("RoleArn").asText(null);
+        CognitoGroup group = service.createGroup(userPoolId, groupName, description, precedence, roleArn);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("Group", groupToNode(group));
+        return Response.ok(response).build();
+    }
+
+    private Response handleGetGroup(JsonNode request) {
+        CognitoGroup group = service.getGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("Group", groupToNode(group));
+        return Response.ok(response).build();
+    }
+
+    private Response handleListGroups(JsonNode request) {
+        List<CognitoGroup> groups = service.listGroups(request.path("UserPoolId").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("Groups");
+        groups.forEach(g -> items.add(groupToNode(g)));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDeleteGroup(JsonNode request) {
+        service.deleteGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminAddUserToGroup(JsonNode request) {
+        service.adminAddUserToGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText(),
+                request.path("Username").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminRemoveUserFromGroup(JsonNode request) {
+        service.adminRemoveUserFromGroup(
+                request.path("UserPoolId").asText(),
+                request.path("GroupName").asText(),
+                request.path("Username").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminListGroupsForUser(JsonNode request) {
+        List<CognitoGroup> groups = service.adminListGroupsForUser(
+                request.path("UserPoolId").asText(),
+                request.path("Username").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("Groups");
+        groups.forEach(g -> items.add(groupToNode(g)));
+        return Response.ok(response).build();
+    }
+
+    private ObjectNode groupToNode(CognitoGroup g) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("GroupName", g.getGroupName());
+        node.put("UserPoolId", g.getUserPoolId());
+        if (g.getDescription() != null) node.put("Description", g.getDescription());
+        if (g.getPrecedence() != null) node.put("Precedence", g.getPrecedence());
+        if (g.getRoleArn() != null) node.put("RoleArn", g.getRoleArn());
+        node.put("CreationDate", g.getCreationDate());
+        node.put("LastModifiedDate", g.getLastModifiedDate());
         return node;
     }
 

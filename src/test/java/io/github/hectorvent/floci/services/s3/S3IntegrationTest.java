@@ -6,6 +6,10 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import io.restassured.config.DecoderConfig;
+import io.restassured.config.RestAssuredConfig;
+import java.util.Arrays;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
@@ -210,21 +214,6 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(16)
-    void cleanupAndDeleteBucket() {
-        // Delete all objects
-        given().delete("/test-bucket/greeting.txt");
-        given().delete("/test-bucket/data/config.json");
-
-        // Now delete bucket
-        given()
-        .when()
-            .delete("/test-bucket")
-        .then()
-            .statusCode(204);
-    }
-
-    @Test
     @Order(15)
     void getObjectAttributesRejectsUnknownSelector() {
         given()
@@ -237,6 +226,7 @@ class S3IntegrationTest {
     }
 
     @Test
+    @Order(16)
     void getNonExistentBucket() {
         given()
         .when()
@@ -324,5 +314,546 @@ class S3IntegrationTest {
         .then()
             .statusCode(400)
             .body(containsString("InvalidLocationConstraint"));
+    }
+
+    @Test
+    @Order(20)
+    void copyObjectWithNonAsciiKeySucceeds() {
+        String bucket = "copy-nonascii-bucket";
+        String srcKey = "src/テスト画像.png";
+        String dstKey = "dst/テスト画像.png";
+        String encodedSrcKey = "src/%E3%83%86%E3%82%B9%E3%83%88%E7%94%BB%E5%83%8F.png";
+
+        given().put("/" + bucket).then().statusCode(200);
+
+        given()
+            .contentType("application/octet-stream")
+            .body("hello".getBytes())
+        .when()
+            .put("/" + bucket + "/" + srcKey)
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("x-amz-copy-source", "/" + bucket + "/" + encodedSrcKey)
+        .when()
+            .put("/" + bucket + "/" + dstKey)
+        .then()
+            .statusCode(200)
+            .body(containsString("ETag"));
+
+        given()
+        .when()
+            .get("/" + bucket + "/" + dstKey)
+        .then()
+            .statusCode(200)
+            .body(equalTo("hello"));
+
+        given().delete("/" + bucket + "/" + srcKey);
+        given().delete("/" + bucket + "/" + dstKey);
+        given().delete("/" + bucket);
+    }
+
+    @Test
+    @Order(21)
+    void putLargeObject() {
+        // 22 MB – exceeds the old Jackson 20 MB maxStringLength default
+        byte[] largeBody = new byte[22 * 1024 * 1024];
+        Arrays.fill(largeBody, (byte) 'A');
+
+        given()
+        .when()
+            .put("/large-object-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/octet-stream")
+            .body(largeBody)
+        .when()
+            .put("/large-object-bucket/large-file.bin")
+        .then()
+            .statusCode(200)
+            .header("ETag", notNullValue());
+
+        given()
+        .when()
+            .get("/large-object-bucket/large-file.bin")
+        .then()
+            .statusCode(200)
+            .header("Content-Length", String.valueOf(largeBody.length));
+
+        given().delete("/large-object-bucket/large-file.bin");
+        given().delete("/large-object-bucket");
+    }
+
+    @Test
+    @Order(30)
+    void getObjectWithFullRange() {
+        given()
+            .header("Range", "bytes=0-4")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(206)
+            .header("Content-Range", equalTo("bytes 0-4/20"))
+            .header("Content-Length", equalTo("5"))
+            .header("Accept-Ranges", equalTo("bytes"))
+            .body(equalTo("Hello"));
+    }
+
+    @Test
+    @Order(31)
+    void getObjectWithOpenEndedRange() {
+        given()
+            .header("Range", "bytes=15-")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(206)
+            .header("Content-Range", equalTo("bytes 15-19/20"))
+            .body(equalTo("m S3!"));
+    }
+
+    @Test
+    @Order(32)
+    void getObjectWithSuffixRange() {
+        given()
+            .header("Range", "bytes=-4")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(206)
+            .header("Content-Range", equalTo("bytes 16-19/20"))
+            .body(equalTo(" S3!"));
+    }
+
+    @Test
+    @Order(33)
+    void getObjectWithInvalidRange() {
+        given()
+            .header("Range", "bytes=50-100")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(416)
+            .header("Content-Range", equalTo("bytes */20"))
+            .body(containsString("InvalidRange"));
+    }
+
+    @Test
+    @Order(34)
+    void getObjectWithMalformedRangeNoDash() {
+        given()
+            .header("Range", "bytes=0")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(416)
+            .body(containsString("InvalidRange"));
+    }
+
+    @Test
+    @Order(35)
+    void getObjectWithMalformedRangeEmptySuffix() {
+        given()
+            .header("Range", "bytes=-")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(416)
+            .body(containsString("InvalidRange"));
+    }
+
+    @Test
+    @Order(36)
+    void getObjectWithMalformedRangeNonNumeric() {
+        given()
+            .header("Range", "bytes=abc-def")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(416)
+            .body(containsString("InvalidRange"));
+    }
+
+    @Test
+    @Order(37)
+    void getObjectWithMalformedRangeNegativeStart() {
+        given()
+            .header("Range", "bytes=-1-4")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(416)
+            .body(containsString("InvalidRange"));
+    }
+
+    @Test
+    @Order(38)
+    void getObjectWithoutRangeReturnsAcceptRanges() {
+        given()
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(200)
+            .header("Accept-Ranges", equalTo("bytes"));
+    }
+
+    @Test
+    @Order(39)
+    void headObjectReturnsAcceptRanges() {
+        given()
+        .when()
+            .head("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(200)
+            .header("Accept-Ranges", equalTo("bytes"));
+    }
+
+    @Test
+    @Order(50)
+    void getObjectIfNoneMatchReturns304() {
+        String eTag = given()
+            .when().head("/test-bucket/greeting.txt")
+            .then().statusCode(200)
+            .extract().header("ETag");
+
+        given()
+            .header("If-None-Match", eTag)
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(304)
+            .header("ETag", equalTo(eTag));
+    }
+
+    @Test
+    @Order(51)
+    void getObjectIfNoneMatchNonMatchingReturns200() {
+        given()
+            .header("If-None-Match", "\"wrong-etag\"")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(200)
+            .body(equalTo("Hello World from S3!"));
+    }
+
+    @Test
+    @Order(52)
+    void getObjectIfMatchReturns200() {
+        String eTag = given()
+            .when().head("/test-bucket/greeting.txt")
+            .then().statusCode(200)
+            .extract().header("ETag");
+
+        given()
+            .header("If-Match", eTag)
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(200)
+            .body(equalTo("Hello World from S3!"));
+    }
+
+    @Test
+    @Order(53)
+    void getObjectIfMatchWrongEtagReturns412() {
+        given()
+            .header("If-Match", "\"wrong-etag\"")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(412)
+            .body(containsString("PreconditionFailed"));
+    }
+
+    @Test
+    @Order(54)
+    void headObjectIfNoneMatchReturns304() {
+        String eTag = given()
+            .when().head("/test-bucket/greeting.txt")
+            .then().statusCode(200)
+            .extract().header("ETag");
+
+        given()
+            .header("If-None-Match", eTag)
+        .when()
+            .head("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(304);
+    }
+
+    @Test
+    @Order(55)
+    void headObjectIfMatchReturns200() {
+        String eTag = given()
+            .when().head("/test-bucket/greeting.txt")
+            .then().statusCode(200)
+            .extract().header("ETag");
+
+        given()
+            .header("If-Match", eTag)
+        .when()
+            .head("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(56)
+    void headObjectIfMatchWrongEtagReturns412() {
+        given()
+            .header("If-Match", "\"wrong-etag\"")
+        .when()
+            .head("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(412);
+    }
+
+    @Test
+    @Order(57)
+    void headObjectIfModifiedSinceReturns304() {
+        given()
+            .header("If-Modified-Since", "Sun, 24 Mar 2030 00:00:00 GMT")
+        .when()
+            .head("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(304);
+    }
+
+    @Test
+    @Order(58)
+    void headObjectIfUnmodifiedSinceReturns412() {
+        given()
+            .header("If-Unmodified-Since", "Tue, 24 Mar 2020 00:00:00 GMT")
+        .when()
+            .head("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(412);
+    }
+
+    @Test
+    @Order(61)
+    void getObjectIfModifiedSinceReturns304() {
+        given()
+            .header("If-Modified-Since", "Sun, 24 Mar 2030 00:00:00 GMT")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(304);
+    }
+
+    @Test
+    @Order(62)
+    void getObjectIfUnmodifiedSinceReturns412() {
+        given()
+            .header("If-Unmodified-Since", "Tue, 24 Mar 2020 00:00:00 GMT")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(412)
+            .body(containsString("PreconditionFailed"));
+    }
+
+    @Test
+    @Order(63)
+    void getObjectIfMatchWildcardReturns200() {
+        given()
+            .header("If-Match", "*")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(200)
+            .body(equalTo("Hello World from S3!"));
+    }
+
+    @Test
+    @Order(64)
+    void getObjectIfNoneMatchCommaListReturns304() {
+        String eTag = given()
+            .when().head("/test-bucket/greeting.txt")
+            .then().statusCode(200)
+            .extract().header("ETag");
+
+        given()
+            .header("If-None-Match", "\"wrong-etag\", " + eTag + ", \"other\"")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(304);
+    }
+
+    @Test
+    @Order(65)
+    void ifNoneMatchTakesPrecedenceOverIfModifiedSince() {
+        String eTag = given()
+            .when().head("/test-bucket/greeting.txt")
+            .then().statusCode(200)
+            .extract().header("ETag");
+
+        given()
+            .header("If-None-Match", eTag)
+            .header("If-Modified-Since", "Tue, 24 Mar 2020 00:00:00 GMT")
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(304);
+    }
+
+    @Test
+    @Order(66)
+    void notModifiedResponseIncludesLastModified() {
+        String eTag = given()
+            .when().head("/test-bucket/greeting.txt")
+            .then().statusCode(200)
+            .extract().header("ETag");
+
+        given()
+            .header("If-None-Match", eTag)
+        .when()
+            .get("/test-bucket/greeting.txt")
+        .then()
+            .statusCode(304)
+            .header("ETag", equalTo(eTag))
+            .header("Last-Modified", notNullValue());
+    }
+
+    @Test
+    @Order(70)
+    void cleanupAndDeleteBucket() {
+        // Delete all objects
+        given().delete("/test-bucket/greeting.txt");
+        given().delete("/test-bucket/data/config.json");
+
+        // Now delete bucket
+        given()
+        .when()
+            .delete("/test-bucket")
+        .then()
+            .statusCode(204);
+    }
+
+    @Test
+    @Order(80)
+    void createEncodingTestBucket() {
+        given()
+        .when()
+            .put("/encoding-test-bucket")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(81)
+    void putObjectWithContentEncoding() {
+        given()
+            .contentType("text/plain")
+            .header("Content-Encoding", "gzip")
+            .body("compressed-content")
+        .when()
+            .put("/encoding-test-bucket/encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("ETag", notNullValue());
+    }
+
+    @Test
+    @Order(82)
+    void getObjectReturnsContentEncoding() {
+        RestAssuredConfig noDecompress = RestAssuredConfig.config()
+                .decoderConfig(DecoderConfig.decoderConfig().noContentDecoders());
+        given()
+            .config(noDecompress)
+        .when()
+            .get("/encoding-test-bucket/encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(83)
+    void headObjectReturnsContentEncoding() {
+        given()
+        .when()
+            .head("/encoding-test-bucket/encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(84)
+    void copyObjectPreservesContentEncoding() {
+        given()
+            .header("x-amz-copy-source", "/encoding-test-bucket/encoded.txt")
+        .when()
+            .put("/encoding-test-bucket/encoded-copy.txt")
+        .then()
+            .statusCode(200)
+            .body(containsString("CopyObjectResult"));
+
+        given()
+        .when()
+            .head("/encoding-test-bucket/encoded-copy.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(85)
+    void copyObjectReplaceContentEncoding() {
+        given()
+            .header("x-amz-copy-source", "/encoding-test-bucket/encoded.txt")
+            .header("x-amz-metadata-directive", "REPLACE")
+            .header("Content-Encoding", "identity")
+        .when()
+            .put("/encoding-test-bucket/encoded-replace.txt")
+        .then()
+            .statusCode(200)
+            .body(containsString("CopyObjectResult"));
+
+        given()
+        .when()
+            .head("/encoding-test-bucket/encoded-replace.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("identity"));
+    }
+
+    @Test
+    @Order(86)
+    void putObjectWithCompositeEncoding_stripsAwsChunkedToken() {
+        RestAssuredConfig noDecompress = RestAssuredConfig.config()
+                .decoderConfig(DecoderConfig.decoderConfig().noContentDecoders());
+        given()
+            .contentType("text/plain")
+            .header("Content-Encoding", "gzip,aws-chunked")
+            .body("compressed-chunked-content")
+        .when()
+            .put("/encoding-test-bucket/composite-encoded.txt")
+        .then()
+            .statusCode(200);
+
+        given()
+            .config(noDecompress)
+        .when()
+            .head("/encoding-test-bucket/composite-encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(88)
+    void cleanupContentEncodingBucket() {
+        given().delete("/encoding-test-bucket/encoded.txt");
+        given().delete("/encoding-test-bucket/encoded-copy.txt");
+        given().delete("/encoding-test-bucket/encoded-replace.txt");
+        given().delete("/encoding-test-bucket/composite-encoded.txt");
+        given().delete("/encoding-test-bucket");
     }
 }

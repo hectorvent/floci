@@ -6,8 +6,8 @@ on:
       - main
       - develop
     paths:
-      - "docs/**"
-      - "mkdocs.yml"
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:

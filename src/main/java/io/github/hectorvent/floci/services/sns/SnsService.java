@@ -11,13 +11,16 @@ import io.github.hectorvent.floci.services.lambda.model.InvocationType;
 import io.github.hectorvent.floci.services.sns.model.Subscription;
 import io.github.hectorvent.floci.services.sns.model.Topic;
 import io.github.hectorvent.floci.services.sqs.SqsService;
+import io.github.hectorvent.floci.services.sqs.model.MessageAttributeValue;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -25,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -238,19 +242,26 @@ public class SnsService {
         return subscriptionsByTopic(topicArn, region);
     }
 
+    // Since this method is called by S3 and EventBridge, this doesn't need "phoneNumber" parameter.
     public String publish(String topicArn, String targetArn, String message,
                           String subject, String region) {
-        return publish(topicArn, targetArn, message, subject, null, null, null, region);
+        return publish(topicArn, targetArn, null, message, subject, null, null, null, region);
     }
 
-    public String publish(String topicArn, String targetArn, String message,
-                          String subject, Map<String, String> messageAttributes, String region) {
-        return publish(topicArn, targetArn, message, subject, messageAttributes, null, null, region);
+    public String publish(String topicArn, String targetArn, String phoneNumber, String message,
+                          String subject, Map<String, MessageAttributeValue> messageAttributes, String region) {
+        return publish(topicArn, targetArn, phoneNumber, message, subject, messageAttributes, null, null, region);
     }
 
-    public String publish(String topicArn, String targetArn, String message,
-                          String subject, Map<String, String> messageAttributes,
+    public String publish(String topicArn, String targetArn, String phoneNumber, String message,
+                          String subject, Map<String, MessageAttributeValue> messageAttributes,
                           String messageGroupId, String messageDeduplicationId, String region) {
+        // Send SMS
+        if (phoneNumber != null) {
+            return UUID.randomUUID().toString();
+        }
+
+        // Send a message to topic or directly to a target ARN
         String effectiveArn = topicArn != null ? topicArn : targetArn;
         if (effectiveArn == null) {
             throw new AwsException("InvalidParameter", "TopicArn or TargetArn is required.", 400);
@@ -282,6 +293,9 @@ public class SnsService {
         for (Subscription sub : subscriptionsByTopic(effectiveArn, region)) {
             if ("true".equals(sub.getAttributes().get("PendingConfirmation"))) {
                 LOG.debugv("Skipping delivery to pending subscription {0}", sub.getSubscriptionArn());
+                continue;
+            }
+            if (!matchesFilterPolicy(sub, messageAttributes)) {
                 continue;
             }
             deliverMessage(sub, message, subject, messageAttributes, messageId, effectiveArn, messageGroupId);
@@ -349,9 +363,10 @@ public class SnsService {
 
             String messageId = UUID.randomUUID().toString();
             @SuppressWarnings("unchecked")
-            Map<String, String> attrs = (Map<String, String>) entry.get("MessageAttributes");
+            Map<String, MessageAttributeValue> attrs = (Map<String, MessageAttributeValue>) entry.get("MessageAttributes");
             for (Subscription sub : subscriptionsByTopic(topicArn, region)) {
                 if ("true".equals(sub.getAttributes().get("PendingConfirmation"))) continue;
+                if (!matchesFilterPolicy(sub, attrs)) continue;
                 deliverMessage(sub, message, subject, attrs, messageId, topicArn, messageGroupId);
             }
             LOG.debugv("Batch published message {0} (id={1}) to {2}", messageId, id, topicArn);
@@ -386,6 +401,141 @@ public class SnsService {
         return new java.util.LinkedHashMap<>(topic.getTags());
     }
 
+    /**
+     * Evaluates whether a message satisfies the subscription's filter policy.
+     * Returns {@code true} if no filter policy is set.
+     * Returns {@code false} for malformed filter policies (fail closed).
+     * <p>
+     * Only {@code FilterPolicyScope=MessageAttributes} is supported. When scope is
+     * {@code MessageBody}, filtering is skipped and the message is delivered (to avoid
+     * incorrectly dropping messages for an unsupported scope).
+     * <p>
+     * All keys in the policy must match (AND logic). Within each key's rule array,
+     * any matching element is sufficient (OR logic).
+     */
+    private boolean matchesFilterPolicy(Subscription sub, Map<String, MessageAttributeValue> messageAttributes) {
+        String filterPolicyJson = sub.getAttributes().get("FilterPolicy");
+        if (filterPolicyJson == null || filterPolicyJson.isBlank()) {
+            return true;
+        }
+        String scope = sub.getAttributes().getOrDefault("FilterPolicyScope", "MessageAttributes");
+        if ("MessageBody".equals(scope)) {
+            return true;
+        }
+        try {
+            JsonNode filterPolicy = objectMapper.readTree(filterPolicyJson);
+            if (!filterPolicy.isObject()) {
+                LOG.warnv("Invalid FilterPolicy (not a JSON object) for {0}", sub.getSubscriptionArn());
+                return false;
+            }
+            Map<String, MessageAttributeValue> attrs = messageAttributes != null ? messageAttributes : Map.of();
+            var fields = filterPolicy.fields();
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                String key = entry.getKey();
+                JsonNode rules = entry.getValue();
+                MessageAttributeValue attr = attrs.get(key);
+                String actualValue = attr != null ? attr.getStringValue() : null;
+                if (!matchesAttributeRules(actualValue, rules)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            LOG.warnv("Failed to parse filter policy for {0}: {1}", sub.getSubscriptionArn(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Checks if an attribute value matches a single filter policy rule set.
+     * Rules must be a JSON array where ANY element matching means the rule passes (OR logic).
+     * Non-array rules are treated as non-matching.
+     */
+    private boolean matchesAttributeRules(String actualValue, JsonNode rules) {
+        if (!rules.isArray()) {
+            return false;
+        }
+        for (JsonNode rule : rules) {
+            if (rule.isTextual() && rule.asText().equals(actualValue)) {
+                return true;
+            }
+            if (rule.isNumber() && actualValue != null) {
+                try {
+                    if (new BigDecimal(actualValue).compareTo(rule.decimalValue()) == 0) {
+                        return true;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            if (rule.isObject() && matchesObjectRule(rule, actualValue)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Evaluates a single object-type filter rule (exists, prefix, anything-but, numeric)
+     * against the actual attribute value.
+     */
+    private boolean matchesObjectRule(JsonNode rule, String actualValue) {
+        if (rule.has("exists")) {
+            boolean shouldExist = rule.get("exists").asBoolean();
+            return shouldExist ? actualValue != null : actualValue == null;
+        }
+        if (rule.has("prefix") && actualValue != null) {
+            return actualValue.startsWith(rule.get("prefix").asText());
+        }
+        if (rule.has("anything-but") && actualValue != null) {
+            return !containsValue(rule.get("anything-but"), actualValue);
+        }
+        if (rule.has("numeric") && actualValue != null) {
+            try {
+                return evaluateNumericCondition(new BigDecimal(actualValue), rule.get("numeric"));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return false;
+    }
+
+    private boolean containsValue(JsonNode node, String value) {
+        if (node.isArray()) {
+            for (JsonNode element : node) {
+                if (element.asText().equals(value)) return true;
+            }
+            return false;
+        }
+        LOG.warnv("FilterPolicy 'anything-but' expected an array but got a scalar; treating as single-value list");
+        return node.asText().equals(value);
+    }
+
+    /**
+     * Evaluates a numeric condition array against a value.
+     * The conditions array contains alternating operator-target pairs (e.g. [">=", 100, "<", 200]).
+     * All pairs must match for the condition to pass (AND logic).
+     */
+    private boolean evaluateNumericCondition(BigDecimal value, JsonNode conditions) {
+        if (!conditions.isArray() || conditions.size() % 2 != 0) {
+            return false;
+        }
+        for (int i = 0; i < conditions.size(); i += 2) {
+            String op = conditions.get(i).asText();
+            BigDecimal target = conditions.get(i + 1).decimalValue();
+            int cmp = value.compareTo(target);
+            boolean matches = switch (op) {
+                case "=" -> cmp == 0;
+                case ">" -> cmp > 0;
+                case ">=" -> cmp >= 0;
+                case "<" -> cmp < 0;
+                case "<=" -> cmp <= 0;
+                default -> false;
+            };
+            if (!matches) return false;
+        }
+        return true;
+    }
+
     private boolean isDuplicate(String topicArn, String deduplicationId) {
         String cacheKey = topicArn + ":" + deduplicationId;
         Instant now = Instant.now();
@@ -412,7 +562,7 @@ public class SnsService {
     }
 
     private void deliverMessage(Subscription sub, String message, String subject,
-                                Map<String, String> messageAttributes, String messageId,
+                                Map<String, MessageAttributeValue> messageAttributes, String messageId,
                                 String topicArn, String messageGroupId) {
         try {
             switch (sub.getProtocol()) {
@@ -422,10 +572,15 @@ public class SnsService {
                         region = extractRegionFromArn(topicArn);
                     }
                     String queueUrl = sqsArnToUrl(sub.getEndpoint());
-                    String envelope = buildSnsEnvelope(message, subject, messageAttributes, topicArn, messageId);
-                    sqsService.sendMessage(queueUrl, envelope, 0, messageGroupId, null, region);
-                    LOG.debugv("Delivered SNS message to SQS: {0} ({1}) in {2}",
-                            sub.getEndpoint(), queueUrl, region);
+                    boolean rawDelivery = "true".equalsIgnoreCase(sub.getAttributes().get("RawMessageDelivery"));
+                    String body = rawDelivery
+                            ? message
+                            : buildSnsEnvelope(message, subject, messageAttributes, topicArn, messageId);
+                    Map<String, MessageAttributeValue> sqsAttributes = rawDelivery
+                            ? toSqsMessageAttributes(messageAttributes)
+                            : Collections.emptyMap();
+                    sqsService.sendMessage(queueUrl, body, 0, messageGroupId, null, sqsAttributes, region);
+                    LOG.debugv("Delivered SNS message to SQS: {0} ({1}) raw={2}", sub.getEndpoint(), queueUrl, rawDelivery);
                 }
                 case "lambda" -> {
                     String fnName = extractFunctionName(sub.getEndpoint());
@@ -449,7 +604,7 @@ public class SnsService {
     }
 
     private String buildSnsLambdaEvent(String topicArn, String messageId, String message,
-                                       String subject, Map<String, String> messageAttributes,
+                                       String subject, Map<String, MessageAttributeValue> messageAttributes,
                                        String subscriptionArn) {
         try {
             String timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
@@ -472,8 +627,8 @@ public class SnsService {
             if (messageAttributes != null) {
                 for (var entry : messageAttributes.entrySet()) {
                     ObjectNode attr = attrs.putObject(entry.getKey());
-                    attr.put("Type", "String");
-                    attr.put("Value", entry.getValue());
+                    attr.put("Type", entry.getValue().getDataType());
+                    attr.put("Value", entry.getValue().getStringValue());
                 }
             }
             ObjectNode record = objectMapper.createObjectNode();
@@ -500,8 +655,19 @@ public class SnsService {
         return parts.length >= 4 ? parts[3] : null;
     }
 
+    /**
+     * Forwards SNS message attributes as SQS MessageAttributeValue objects
+     * when RawMessageDelivery is enabled, preserving the original DataType.
+     */
+    private Map<String, MessageAttributeValue> toSqsMessageAttributes(Map<String, MessageAttributeValue> snsAttributes) {
+        if (snsAttributes == null || snsAttributes.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return new java.util.HashMap<>(snsAttributes);
+    }
+
     private String buildSnsEnvelope(String message, String subject,
-                                    Map<String, String> messageAttributes,
+                                    Map<String, MessageAttributeValue> messageAttributes,
                                     String topicArn, String messageId) {
         try {
             ObjectNode node = objectMapper.createObjectNode();
@@ -516,8 +682,8 @@ public class SnsService {
             if (messageAttributes != null) {
                 for (var entry : messageAttributes.entrySet()) {
                     ObjectNode attr = attrs.putObject(entry.getKey());
-                    attr.put("Type", "String");
-                    attr.put("Value", entry.getValue());
+                    attr.put("Type", entry.getValue().getDataType());
+                    attr.put("Value", entry.getValue().getStringValue());
                 }
             }
             return objectMapper.writeValueAsString(node);

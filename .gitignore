@@ -11,8 +11,12 @@ data/
 .vscode/
 .zed/settings.json
 .DS_Store
+.zed/settings.json
 
 CLAUDE.md
+GEMINI.md
+COPILOT.md
 .claude
 
 posts
+local

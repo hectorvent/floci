@@ -12,6 +12,8 @@ services:
       - "4566:4566"
     volumes:
       - ./data:/app/data
+      - ./init/start.d:/etc/floci/init/start.d:ro
+      - ./init/stop.d:/etc/floci/init/stop.d:ro
 ```
 
 ## Full Setup (with ElastiCache and RDS)
@@ -38,6 +40,23 @@ services:
 !!! warning "Docker socket"
     Lambda, ElastiCache, and RDS require access to the Docker socket (`/var/run/docker.sock`) to spawn and manage containers. If you don't use these services, you can omit that volume.
 
+## Initialization Hooks
+
+Hook scripts can be mounted into the container to run custom setup and teardown logic:
+
+```yaml
+services:
+  floci:
+    image: hectorvent/floci:latest
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./init/start.d:/etc/floci/init/start.d:ro
+      - ./init/stop.d:/etc/floci/init/stop.d:ro
+```
+
+See [Initialization Hooks](./initialization-hooks.md) for execution behavior and configuration details.
+
 ## Persistence
 
 By default Floci stores all data in memory — data is lost on restart. To persist data to disk, set the storage path and enable persistent mode:
@@ -54,6 +73,28 @@ services:
       FLOCI_STORAGE_MODE: persistent
       FLOCI_STORAGE_PERSISTENT_PATH: /app/data
 ```
+
+### Using Named Volumes
+
+Instead of bind-mounting a local directory, you can use Docker named volumes to keep your project directory clean:
+
+```yaml
+services:
+  floci:
+    image: hectorvent/floci:latest
+    ports:
+      - "4566:4566"
+    volumes:
+      - floci-data:/app/data
+    environment:
+      FLOCI_STORAGE_MODE: persistent
+      FLOCI_STORAGE_PERSISTENT_PATH: /app/data
+
+volumes:
+  floci-data:
+```
+
+Named volumes are managed entirely by Docker and won't create files in your repository. This works with both the JVM and native images.
 
 ## Environment Variables Reference
 
