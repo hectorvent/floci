@@ -153,8 +153,7 @@ public final class XmlParser {
                         current = new LinkedHashMap<>();
                         depth = 1;
                     } else if (current != null && depth == 1) {
-                        String text = r.getElementText();
-                        current.computeIfAbsent(local, k -> new ArrayList<>()).add(text);
+                        readElementIntoMultiMap(r, local, current);
                     } else if (current != null) {
                         depth++;
                     }
@@ -201,8 +200,7 @@ public final class XmlParser {
                         current = new LinkedHashMap<>();
                         depth = 1;
                     } else if (current != null && depth == 1) {
-                        String text = r.getElementText();
-                        current.put(local, text);
+                        readElementIntoMap(r, local, current);
                     } else if (current != null) {
                         depth++;
                     }
@@ -219,5 +217,84 @@ public final class XmlParser {
             r.close();
         } catch (XMLStreamException ignored) {}
         return result;
+    }
+
+    /**
+     * Reads a depth-1 child element and stores its content into a multi-value map.
+     * Text-only elements are stored as {@code elementName → [text]}.
+     * Nested elements (e.g. {@code <Filter>}) are traversed and any leaf
+     * {@code <Name>}/{@code <Value>} pairs found inside are stored directly
+     * into the map (e.g. {@code prefix → [images/]}).
+     */
+    private static void readElementIntoMultiMap(XMLStreamReader r, String elementName,
+                                                 Map<String, List<String>> map) throws XMLStreamException {
+        StringBuilder text = new StringBuilder();
+        boolean textOnly = true;
+        String pendingName = null;
+        int nested = 1;
+        while (r.hasNext()) {
+            int ev = r.next();
+            if (ev == XMLStreamConstants.START_ELEMENT) {
+                if (nested == 1) textOnly = false;
+                nested++;
+                String local = r.getLocalName();
+                if ("Name".equals(local)) {
+                    pendingName = r.getElementText();
+                    nested--;
+                } else if ("Value".equals(local) && pendingName != null) {
+                    String value = r.getElementText();
+                    nested--;
+                    map.computeIfAbsent(pendingName, k -> new ArrayList<>()).add(value);
+                    pendingName = null;
+                }
+            } else if (ev == XMLStreamConstants.END_ELEMENT) {
+                nested--;
+                if (nested == 0) break;
+            } else if (textOnly && (ev == XMLStreamConstants.CHARACTERS || ev == XMLStreamConstants.CDATA)) {
+                text.append(r.getText());
+            }
+        }
+        if (textOnly) {
+            map.computeIfAbsent(elementName, k -> new ArrayList<>()).add(text.toString());
+        }
+    }
+
+    /**
+     * Reads a depth-1 child element and stores its content into a single-value map.
+     * Text-only elements are stored as {@code elementName → text}.
+     * Nested elements are traversed and any leaf {@code <Name>}/{@code <Value>}
+     * pairs are stored directly (e.g. {@code prefix → images/}).
+     */
+    private static void readElementIntoMap(XMLStreamReader r, String elementName,
+                                            Map<String, String> map) throws XMLStreamException {
+        StringBuilder text = new StringBuilder();
+        boolean textOnly = true;
+        String pendingName = null;
+        int nested = 1;
+        while (r.hasNext()) {
+            int ev = r.next();
+            if (ev == XMLStreamConstants.START_ELEMENT) {
+                if (nested == 1) textOnly = false;
+                nested++;
+                String local = r.getLocalName();
+                if ("Name".equals(local)) {
+                    pendingName = r.getElementText();
+                    nested--;
+                } else if ("Value".equals(local) && pendingName != null) {
+                    String value = r.getElementText();
+                    nested--;
+                    map.put(pendingName, value);
+                    pendingName = null;
+                }
+            } else if (ev == XMLStreamConstants.END_ELEMENT) {
+                nested--;
+                if (nested == 0) break;
+            } else if (textOnly && (ev == XMLStreamConstants.CHARACTERS || ev == XMLStreamConstants.CDATA)) {
+                text.append(r.getText());
+            }
+        }
+        if (textOnly) {
+            map.put(elementName, text.toString());
+        }
     }
 }

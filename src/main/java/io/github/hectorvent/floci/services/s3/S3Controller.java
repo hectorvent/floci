@@ -778,6 +778,7 @@ public class S3Controller {
                 for (String event : qn.events()) {
                     xml.elem("Event", event);
                 }
+                appendFilterXml(xml, qn.filterPrefix(), qn.filterSuffix());
                 xml.end("QueueConfiguration");
             }
             for (TopicNotification tn : config.getTopicConfigurations()) {
@@ -787,6 +788,7 @@ public class S3Controller {
                 for (String event : tn.events()) {
                     xml.elem("Event", event);
                 }
+                appendFilterXml(xml, tn.filterPrefix(), tn.filterSuffix());
                 xml.end("TopicConfiguration");
             }
             xml.end("NotificationConfiguration");
@@ -807,7 +809,10 @@ public class S3Controller {
                 List<String> queueArns = group.get("Queue");
                 List<String> events = group.get("Event");
                 if (queueArns != null && !queueArns.isEmpty() && events != null && !events.isEmpty()) {
-                    config.getQueueConfigurations().add(new QueueNotification(id, queueArns.get(0), events));
+                    String prefix = group.containsKey("prefix") ? group.get("prefix").get(0) : null;
+                    String suffix = group.containsKey("suffix") ? group.get("suffix").get(0) : null;
+                    config.getQueueConfigurations().add(
+                            new QueueNotification(id, queueArns.get(0), events, prefix, suffix));
                 }
             }
 
@@ -817,7 +822,10 @@ public class S3Controller {
                 List<String> topicArns = group.get("Topic");
                 List<String> events = group.get("Event");
                 if (topicArns != null && !topicArns.isEmpty() && events != null && !events.isEmpty()) {
-                    config.getTopicConfigurations().add(new TopicNotification(id, topicArns.get(0), events));
+                    String prefix = group.containsKey("prefix") ? group.get("prefix").get(0) : null;
+                    String suffix = group.containsKey("suffix") ? group.get("suffix").get(0) : null;
+                    config.getTopicConfigurations().add(
+                            new TopicNotification(id, topicArns.get(0), events, prefix, suffix));
                 }
             }
 
@@ -826,6 +834,20 @@ public class S3Controller {
         } catch (AwsException e) {
             return xmlErrorResponse(e);
         }
+    }
+
+    private static void appendFilterXml(XmlBuilder xml, String prefix, String suffix) {
+        if (prefix == null && suffix == null) {
+            return;
+        }
+        xml.start("Filter").start("S3Key");
+        if (prefix != null) {
+            xml.start("FilterRule").elem("Name", "prefix").elem("Value", prefix).end("FilterRule");
+        }
+        if (suffix != null) {
+            xml.start("FilterRule").elem("Name", "suffix").elem("Value", suffix).end("FilterRule");
+        }
+        xml.end("S3Key").end("Filter");
     }
 
     /**

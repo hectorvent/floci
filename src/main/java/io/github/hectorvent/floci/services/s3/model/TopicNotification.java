@@ -5,4 +5,5 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.util.List;
 
 @RegisterForReflection
-public record TopicNotification(String id, String topicArn, List<String> events) {}
+public record TopicNotification(String id, String topicArn, List<String> events,
+                                String filterPrefix, String filterSuffix) {}
