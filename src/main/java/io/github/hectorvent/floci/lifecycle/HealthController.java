@@ -16,7 +16,7 @@ import java.util.Map;
  * Returns the Floci version and the status of each enabled service.
  * Compatible with the LocalStack /_localstack/health pattern.
  */
-@Path("/_floci/health")
+@Path("{path:(_floci|_localstack)/health}")
 @Produces(MediaType.APPLICATION_JSON)
 public class HealthController {
 
@@ -32,14 +32,9 @@ public class HealthController {
     @GET
     public Response health() {
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("services", serviceRegistry.getServices());
+        result.put("edition", "floci-open-source");
         result.put("version", version);
-        result.put("edition", "community");
-
-        Map<String, String> services = new LinkedHashMap<>();
-        for (String service : serviceRegistry.getEnabledServices()) {
-            services.put(service, "available");
-        }
-        result.put("services", services);
 
         return Response.ok(result).build();
     }
