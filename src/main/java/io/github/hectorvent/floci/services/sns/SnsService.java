@@ -274,12 +274,12 @@ public class SnsService {
         }
 
         boolean isFifo = "true".equals(topic.getAttributes().get("FifoTopic"));
+        String dedupId = messageDeduplicationId;
         if (isFifo) {
             if (messageGroupId == null || messageGroupId.isBlank()) {
                 throw new AwsException("InvalidParameter",
                         "MessageGroupId is required for FIFO topics.", 400);
             }
-            String dedupId = messageDeduplicationId;
             if (dedupId == null && "true".equals(topic.getAttributes().get("ContentBasedDeduplication"))) {
                 dedupId = sha256(message);
             }
@@ -298,7 +298,7 @@ public class SnsService {
             if (!matchesFilterPolicy(sub, messageAttributes)) {
                 continue;
             }
-            deliverMessage(sub, message, subject, messageAttributes, messageId, effectiveArn, messageGroupId);
+            deliverMessage(sub, message, subject, messageAttributes, messageId, effectiveArn, messageGroupId, dedupId);
         }
         LOG.infov("Published message {0} to topic {1}", messageId, effectiveArn);
         return messageId;
@@ -331,7 +331,8 @@ public class SnsService {
         subscriptionStore.put(key, sub);
     }
 
-    public record BatchPublishResult(List<String[]> successful, List<String[]> failed) {}
+    public record BatchPublishResult(List<String[]> successful, List<String[]> failed) {
+    }
 
     public BatchPublishResult publishBatch(String topicArn, List<Map<String, Object>> entries, String region) {
         String topicStoreKey = topicKey(region, topicArn);
@@ -367,7 +368,7 @@ public class SnsService {
             for (Subscription sub : subscriptionsByTopic(topicArn, region)) {
                 if ("true".equals(sub.getAttributes().get("PendingConfirmation"))) continue;
                 if (!matchesFilterPolicy(sub, attrs)) continue;
-                deliverMessage(sub, message, subject, attrs, messageId, topicArn, messageGroupId);
+                deliverMessage(sub, message, subject, attrs, messageId, topicArn, messageGroupId, messageDeduplicationId);
             }
             LOG.debugv("Batch published message {0} (id={1}) to {2}", messageId, id, topicArn);
             successful.add(new String[]{id, messageId});
@@ -563,7 +564,7 @@ public class SnsService {
 
     private void deliverMessage(Subscription sub, String message, String subject,
                                 Map<String, MessageAttributeValue> messageAttributes, String messageId,
-                                String topicArn, String messageGroupId) {
+                                String topicArn, String messageGroupId, String messageDeduplicationId) {
         try {
             switch (sub.getProtocol()) {
                 case "sqs" -> {
@@ -579,7 +580,7 @@ public class SnsService {
                     Map<String, MessageAttributeValue> sqsAttributes = rawDelivery
                             ? toSqsMessageAttributes(messageAttributes)
                             : Collections.emptyMap();
-                    sqsService.sendMessage(queueUrl, body, 0, messageGroupId, null, sqsAttributes, region);
+                    sqsService.sendMessage(queueUrl, body, 0, messageGroupId, messageDeduplicationId, sqsAttributes, region);
                     LOG.debugv("Delivered SNS message to SQS: {0} ({1}) raw={2}", sub.getEndpoint(), queueUrl, rawDelivery);
                 }
                 case "lambda" -> {
@@ -590,11 +591,9 @@ public class SnsService {
                     lambdaService.invoke(region, fnName, eventJson.getBytes(), InvocationType.Event);
                     LOG.debugv("Delivered SNS message to Lambda: {0}", sub.getEndpoint());
                 }
-                case "email", "email-json" ->
-                    LOG.infov("SNS email delivery (stub): to={0}, subject={1}, message={2}",
-                            sub.getEndpoint(), subject, message);
-                case "sms" ->
-                    LOG.infov("SNS SMS delivery (stub): to={0}, message={1}", sub.getEndpoint(), message);
+                case "email", "email-json" -> LOG.infov("SNS email delivery (stub): to={0}, subject={1}, message={2}",
+                        sub.getEndpoint(), subject, message);
+                case "sms" -> LOG.infov("SNS SMS delivery (stub): to={0}, message={1}", sub.getEndpoint(), message);
                 default -> LOG.debugv("Protocol {0} delivery not implemented, skipping: {1}",
                         sub.getProtocol(), sub.getEndpoint());
             }
