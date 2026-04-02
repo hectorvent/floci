@@ -513,21 +513,14 @@ public class DynamoDbService {
 
     public ScanResult scan(String tableName, String filterExpression,
                             JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                            Integer limit, String startKey) {
+                            JsonNode scanFilter, Integer limit, JsonNode exclusiveStartKey) {
         return scan(tableName, filterExpression, expressionAttrNames, expressionAttrValues,
-                    limit, (JsonNode) null, regionResolver.getDefaultRegion());
+                    scanFilter, limit, exclusiveStartKey, regionResolver.getDefaultRegion());
     }
 
     public ScanResult scan(String tableName, String filterExpression,
                             JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                            Integer limit, String startKey, String region) {
-        return scan(tableName, filterExpression, expressionAttrNames, expressionAttrValues,
-                    limit, (JsonNode) null, region);
-    }
-
-    public ScanResult scan(String tableName, String filterExpression,
-                            JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                            Integer limit, JsonNode exclusiveStartKey, String region) {
+                            JsonNode scanFilter, Integer limit, JsonNode exclusiveStartKey, String region) {
         String storageKey = regionKey(region, tableName);
         TableDefinition table = tableStore.get(storageKey)
                 .orElseThrow(() -> resourceNotFoundException(tableName));
@@ -551,10 +544,14 @@ public class DynamoDbService {
             if (isExpired(item, table)) {
                 continue;
             }
-            if (filterExpression == null
-                    || matchesFilterExpression(item, filterExpression, expressionAttrNames, expressionAttrValues)) {
-                results.add(item);
+            if (filterExpression != null
+                    && !matchesFilterExpression(item, filterExpression, expressionAttrNames, expressionAttrValues)) {
+                continue;
             }
+            if (scanFilter != null && !matchesScanFilter(item, scanFilter)) {
+                continue;
+            }
+            results.add(item);
         }
 
         JsonNode lastEvaluatedKey = null;
@@ -565,6 +562,20 @@ public class DynamoDbService {
         }
 
         return new ScanResult(results, totalScanned, lastEvaluatedKey);
+    }
+
+    private boolean matchesScanFilter(JsonNode item, JsonNode scanFilter) {
+        Iterator<Map.Entry<String, JsonNode>> fields = scanFilter.fields();
+        while (fields.hasNext()) {
+            var entry = fields.next();
+            String attrName = entry.getKey();
+            JsonNode condition = entry.getValue();
+            JsonNode attrValue = item.get(attrName);
+            if (!matchesKeyCondition(attrValue, condition)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // --- Batch Operations ---

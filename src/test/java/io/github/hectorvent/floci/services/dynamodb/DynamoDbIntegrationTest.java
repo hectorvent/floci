@@ -435,6 +435,56 @@ class DynamoDbIntegrationTest {
 
     @Test
     @Order(16)
+    void scanWithScanFilter() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Scan")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "ScanFilter": {
+                        "name": {
+                            "AttributeValueList": [{"S": "Alice"}],
+                            "ComparisonOperator": "EQ"
+                        }
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(1))
+            .body("Items[0].name.S", equalTo("Alice"));
+    }
+
+    @Test
+    @Order(17)
+    void scanWithScanFilterGE() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Scan")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "ScanFilter": {
+                        "age": {
+                            "AttributeValueList": [{"N": "30"}],
+                            "ComparisonOperator": "GE"
+                        }
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(1))
+            .body("Items[0].name.S", equalTo("Alice"));
+    }
+
+    @Test
+    @Order(18)
     void deleteItem() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteItem")
@@ -474,7 +524,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(17)
+    @Order(19)
     void deleteTable() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")

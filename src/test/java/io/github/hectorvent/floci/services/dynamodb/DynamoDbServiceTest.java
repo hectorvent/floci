@@ -333,8 +333,51 @@ class DynamoDbServiceTest {
         service.putItem("Users", item("userId", "u2", "name", "Bob"));
         service.putItem("Users", item("userId", "u3", "name", "Charlie"));
 
-        DynamoDbService.ScanResult result = service.scan("Users", null, null, null, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", null, null, null, null, null, null);
         assertEquals(3, result.items().size());
+    }
+
+    @Test
+    void scanWithScanFilter() {
+        createUsersTable();
+        service.putItem("Users", item("userId", "u1", "name", "Alice"));
+        service.putItem("Users", item("userId", "u2", "name", "Bob"));
+        service.putItem("Users", item("userId", "u3", "name", "Charlie"));
+
+        ObjectNode scanFilter = mapper.createObjectNode();
+        ObjectNode condition = mapper.createObjectNode();
+        condition.put("ComparisonOperator", "EQ");
+        var attrList = mapper.createArrayNode();
+        ObjectNode val = mapper.createObjectNode();
+        val.put("S", "Alice");
+        attrList.add(val);
+        condition.set("AttributeValueList", attrList);
+        scanFilter.set("name", condition);
+
+        DynamoDbService.ScanResult result = service.scan("Users", null, null, null, scanFilter, null, null);
+        assertEquals(1, result.items().size());
+        assertEquals("Alice", result.items().get(0).get("name").get("S").asText());
+    }
+
+    @Test
+    void scanWithScanFilterGE() {
+        createUsersTable();
+        service.putItem("Users", item("userId", "u1", "name", "Alice"));
+        service.putItem("Users", item("userId", "u2", "name", "Bob"));
+        service.putItem("Users", item("userId", "u3", "name", "Charlie"));
+
+        ObjectNode scanFilter = mapper.createObjectNode();
+        ObjectNode condition = mapper.createObjectNode();
+        condition.put("ComparisonOperator", "GE");
+        var attrList = mapper.createArrayNode();
+        ObjectNode val = mapper.createObjectNode();
+        val.put("S", "Bob");
+        attrList.add(val);
+        condition.set("AttributeValueList", attrList);
+        scanFilter.set("name", condition);
+
+        DynamoDbService.ScanResult result = service.scan("Users", null, null, null, scanFilter, null, null);
+        assertEquals(2, result.items().size());
     }
 
     @Test
@@ -344,7 +387,7 @@ class DynamoDbServiceTest {
         service.putItem("Users", item("userId", "u2"));
         service.putItem("Users", item("userId", "u3"));
 
-        DynamoDbService.ScanResult result = service.scan("Users", null, null, null, 2, null);
+        DynamoDbService.ScanResult result = service.scan("Users", null, null, null, null, 2, null);
         assertEquals(2, result.items().size());
     }
 
@@ -354,7 +397,7 @@ class DynamoDbServiceTest {
         assertThrows(AwsException.class, () -> service.getItem("NoTable", item("id", "1")));
         assertThrows(AwsException.class, () -> service.deleteItem("NoTable", item("id", "1")));
         assertThrows(AwsException.class, () -> service.query("NoTable", null, null, null, null, null));
-        assertThrows(AwsException.class, () -> service.scan("NoTable", null, null, null, null, null));
+        assertThrows(AwsException.class, () -> service.scan("NoTable", null, null, null, null, null, null, null));
     }
 
     @Test
