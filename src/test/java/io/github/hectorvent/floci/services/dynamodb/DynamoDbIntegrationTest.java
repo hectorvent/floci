@@ -311,6 +311,58 @@ class DynamoDbIntegrationTest {
 
     @Test
     @Order(11)
+    void queryWithBetweenOnSortKey() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk AND sk BETWEEN :from AND :to",
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"},
+                        ":from": {"S": "order-001"},
+                        ":to": {"S": "order-002"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(2))
+            .body("Items[0].sk.S", equalTo("order-001"))
+            .body("Items[1].sk.S", equalTo("order-002"));
+    }
+
+    @Test
+    @Order(12)
+    void queryWithScanIndexForwardFalse() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "KeyConditionExpression": "pk = :pk AND begins_with(sk, :prefix)",
+                    "ScanIndexForward": false,
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": "user-1"},
+                        ":prefix": {"S": "order"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(2))
+            .body("Items[0].sk.S", equalTo("order-002"))
+            .body("Items[1].sk.S", equalTo("order-001"));
+    }
+
+    @Test
+    @Order(13)
     void queryWithFilterExpression() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.Query")
@@ -336,7 +388,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(12)
+    @Order(14)
     void queryWithFilterExpressionAndLimitReturnsLastEvaluatedKey() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.Query")
@@ -365,7 +417,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(15)
     void scan() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.Scan")
@@ -382,7 +434,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(16)
     void deleteItem() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteItem")
@@ -422,7 +474,7 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
-    @Order(15)
+    @Order(17)
     void deleteTable() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")

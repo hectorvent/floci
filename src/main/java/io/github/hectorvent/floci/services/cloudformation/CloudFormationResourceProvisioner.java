@@ -67,34 +67,35 @@ public class CloudFormationResourceProvisioner {
      * Returns null and logs a warning for unsupported types.
      */
     public StackResource provision(String logicalId, String resourceType, JsonNode properties,
-                                   CloudFormationTemplateEngine engine, String region, String accountId) {
+                                   CloudFormationTemplateEngine engine, String region, String accountId,
+                                   String stackName) {
         StackResource resource = new StackResource();
         resource.setLogicalId(logicalId);
         resource.setResourceType(resourceType);
 
         try {
             switch (resourceType) {
-                case "AWS::S3::Bucket" -> provisionS3Bucket(resource, properties, engine, region, accountId);
-                case "AWS::SQS::Queue" -> provisionSqsQueue(resource, properties, engine, region, accountId);
-                case "AWS::SNS::Topic" -> provisionSnsTopic(resource, properties, engine, region, accountId);
+                case "AWS::S3::Bucket" -> provisionS3Bucket(resource, properties, engine, region, accountId, stackName);
+                case "AWS::SQS::Queue" -> provisionSqsQueue(resource, properties, engine, region, accountId, stackName);
+                case "AWS::SNS::Topic" -> provisionSnsTopic(resource, properties, engine, region, accountId, stackName);
                 case "AWS::DynamoDB::Table", "AWS::DynamoDB::GlobalTable" ->
-                        provisionDynamoTable(resource, properties, engine, region, accountId);
-                case "AWS::Lambda::Function" -> provisionLambda(resource, properties, engine, region, accountId);
-                case "AWS::IAM::Role" -> provisionIamRole(resource, properties, engine, accountId);
-                case "AWS::IAM::User" -> provisionIamUser(resource, properties, engine);
+                        provisionDynamoTable(resource, properties, engine, region, accountId, stackName);
+                case "AWS::Lambda::Function" -> provisionLambda(resource, properties, engine, region, accountId, stackName);
+                case "AWS::IAM::Role" -> provisionIamRole(resource, properties, engine, accountId, stackName);
+                case "AWS::IAM::User" -> provisionIamUser(resource, properties, engine, stackName);
                 case "AWS::IAM::AccessKey" -> provisionIamAccessKey(resource, properties, engine);
                 case "AWS::IAM::Policy", "AWS::IAM::ManagedPolicy" ->
-                        provisionIamPolicy(resource, properties, engine, accountId);
-                case "AWS::IAM::InstanceProfile" -> provisionInstanceProfile(resource, properties, engine, accountId);
-                case "AWS::SSM::Parameter" -> provisionSsmParameter(resource, properties, engine, region);
+                        provisionIamPolicy(resource, properties, engine, accountId, stackName);
+                case "AWS::IAM::InstanceProfile" -> provisionInstanceProfile(resource, properties, engine, accountId, stackName);
+                case "AWS::SSM::Parameter" -> provisionSsmParameter(resource, properties, engine, region, stackName);
                 case "AWS::KMS::Key" -> provisionKmsKey(resource, properties, engine, region, accountId);
                 case "AWS::KMS::Alias" -> provisionKmsAlias(resource, properties, engine, region);
-                case "AWS::SecretsManager::Secret" -> provisionSecret(resource, properties, engine, region, accountId);
+                case "AWS::SecretsManager::Secret" -> provisionSecret(resource, properties, engine, region, accountId, stackName);
                 case "AWS::CloudFormation::Stack" -> provisionNestedStack(resource, properties, engine, region);
                 case "AWS::CDK::Metadata" -> provisionCdkMetadata(resource);
                 case "AWS::S3::BucketPolicy" -> provisionS3BucketPolicy(resource, properties, engine);
                 case "AWS::SQS::QueuePolicy" -> provisionSqsQueuePolicy(resource, properties, engine);
-                case "AWS::ECR::Repository" -> provisionEcrRepository(resource, properties, engine);
+                case "AWS::ECR::Repository" -> provisionEcrRepository(resource, properties, engine, stackName);
                 case "AWS::Route53::HostedZone" -> provisionRoute53HostedZone(resource, properties, engine);
                 case "AWS::Route53::RecordSet" -> provisionRoute53RecordSet(resource, properties, engine);
                 default -> {
@@ -139,10 +140,10 @@ public class CloudFormationResourceProvisioner {
     // ── S3 ────────────────────────────────────────────────────────────────────
 
     private void provisionS3Bucket(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                   String region, String accountId) {
+                                   String region, String accountId, String stackName) {
         String bucketName = resolveOptional(props, "BucketName", engine);
         if (bucketName == null || bucketName.isBlank()) {
-            bucketName = "cfn-" + UUID.randomUUID().toString().substring(0, 12).toLowerCase();
+            bucketName = generatePhysicalName(stackName, r.getLogicalId(), 63, true);
         }
         s3Service.createBucket(bucketName, region);
         r.setPhysicalId(bucketName);
@@ -156,10 +157,10 @@ public class CloudFormationResourceProvisioner {
     // ── SQS ───────────────────────────────────────────────────────────────────
 
     private void provisionSqsQueue(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                   String region, String accountId) {
+                                   String region, String accountId, String stackName) {
         String queueName = resolveOptional(props, "QueueName", engine);
         if (queueName == null || queueName.isBlank()) {
-            queueName = "cfn-" + UUID.randomUUID().toString().substring(0, 12);
+            queueName = generatePhysicalName(stackName, r.getLogicalId(), 80, false);
         }
         Map<String, String> attrs = new HashMap<>();
         if (props != null && props.has("VisibilityTimeout")) {
@@ -176,10 +177,10 @@ public class CloudFormationResourceProvisioner {
     // ── SNS ───────────────────────────────────────────────────────────────────
 
     private void provisionSnsTopic(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                   String region, String accountId) {
+                                   String region, String accountId, String stackName) {
         String topicName = resolveOptional(props, "TopicName", engine);
         if (topicName == null || topicName.isBlank()) {
-            topicName = "cfn-" + UUID.randomUUID().toString().substring(0, 12);
+            topicName = generatePhysicalName(stackName, r.getLogicalId(), 256, false);
         }
         var topic = snsService.createTopic(topicName, Map.of(), Map.of(), region);
         r.setPhysicalId(topic.getTopicArn());
@@ -190,10 +191,10 @@ public class CloudFormationResourceProvisioner {
     // ── DynamoDB ──────────────────────────────────────────────────────────────
 
     private void provisionDynamoTable(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                      String region, String accountId) {
+                                      String region, String accountId, String stackName) {
         String tableName = resolveOptional(props, "TableName", engine);
         if (tableName == null || tableName.isBlank()) {
-            tableName = "cfn-" + UUID.randomUUID().toString().substring(0, 12);
+            tableName = generatePhysicalName(stackName, r.getLogicalId(), 255, false);
         }
 
         List<KeySchemaElement> keySchema = new ArrayList<>();
@@ -270,9 +271,11 @@ public class CloudFormationResourceProvisioner {
     // ── Lambda ────────────────────────────────────────────────────────────────
 
     private void provisionLambda(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                 String region, String accountId) {
-        String funcName = resolveOrDefault(props, "FunctionName", engine,
-                "cfn-func-" + UUID.randomUUID().toString().substring(0, 8));
+                                 String region, String accountId, String stackName) {
+        String funcName = resolveOptional(props, "FunctionName", engine);
+        if (funcName == null || funcName.isBlank()) {
+            funcName = generatePhysicalName(stackName, r.getLogicalId(), 64, false);
+        }
         Map<String, Object> req = new HashMap<>();
         req.put("FunctionName", funcName);
         req.put("Runtime", resolveOrDefault(props, "Runtime", engine, "nodejs18.x"));
@@ -332,10 +335,10 @@ public class CloudFormationResourceProvisioner {
     // ── IAM Role ──────────────────────────────────────────────────────────────
 
     private void provisionIamRole(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                  String accountId) {
+                                  String accountId, String stackName) {
         String roleName = resolveOptional(props, "RoleName", engine);
         if (roleName == null || roleName.isBlank()) {
-            roleName = "cfn-role-" + UUID.randomUUID().toString().substring(0, 8);
+            roleName = generatePhysicalName(stackName, r.getLogicalId(), 64, false);
         }
         String assumeDoc = props != null && props.has("AssumeRolePolicyDocument")
                 ? props.get("AssumeRolePolicyDocument").toString()
@@ -373,10 +376,10 @@ public class CloudFormationResourceProvisioner {
     // ── IAM Policy ────────────────────────────────────────────────────────────
 
     private void provisionIamPolicy(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                    String accountId) {
+                                    String accountId, String stackName) {
         String policyName = resolveOptional(props, "PolicyName", engine);
         if (policyName == null || policyName.isBlank()) {
-            policyName = "cfn-policy-" + UUID.randomUUID().toString().substring(0, 8);
+            policyName = generatePhysicalName(stackName, r.getLogicalId(), 128, false);
         }
         String document = props != null && props.has("PolicyDocument")
                 ? props.get("PolicyDocument").toString()
@@ -398,17 +401,17 @@ public class CloudFormationResourceProvisioner {
     }
 
     private void provisionIamManagedPolicy(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                           String accountId) {
-        provisionIamPolicy(r, props, engine, accountId);
+                                           String accountId, String stackName) {
+        provisionIamPolicy(r, props, engine, accountId, stackName);
     }
 
     // ── IAM Instance Profile ──────────────────────────────────────────────────
 
     private void provisionInstanceProfile(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                          String accountId) {
+                                          String accountId, String stackName) {
         String name = resolveOptional(props, "InstanceProfileName", engine);
         if (name == null || name.isBlank()) {
-            name = "cfn-profile-" + UUID.randomUUID().toString().substring(0, 8);
+            name = generatePhysicalName(stackName, r.getLogicalId(), 128, false);
         }
         try {
             var profile = iamService.createInstanceProfile(name, "/");
@@ -423,10 +426,10 @@ public class CloudFormationResourceProvisioner {
     // ── SSM Parameter ─────────────────────────────────────────────────────────
 
     private void provisionSsmParameter(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                       String region) {
+                                       String region, String stackName) {
         String name = resolveOptional(props, "Name", engine);
         if (name == null || name.isBlank()) {
-            name = "/cfn/" + UUID.randomUUID().toString().substring(0, 12);
+            name = generatePhysicalName(stackName, r.getLogicalId(), 2048, false);
         }
         String value = resolveOptional(props, "Value", engine);
         if (value == null) {
@@ -464,10 +467,10 @@ public class CloudFormationResourceProvisioner {
     // ── Secrets Manager ───────────────────────────────────────────────────────
 
     private void provisionSecret(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                 String region, String accountId) {
+                                 String region, String accountId, String stackName) {
         String name = resolveOptional(props, "Name", engine);
         if (name == null || name.isBlank()) {
-            name = "cfn-secret-" + UUID.randomUUID().toString().substring(0, 8);
+            name = generatePhysicalName(stackName, r.getLogicalId(), 512, false);
         }
         String value = resolveOptional(props, "SecretString", engine);
         if (value == null) {
@@ -505,10 +508,11 @@ public class CloudFormationResourceProvisioner {
         r.setPhysicalId("queue-policy-" + UUID.randomUUID().toString().substring(0, 8));
     }
 
-    private void provisionIamUser(StackResource r, JsonNode props, CloudFormationTemplateEngine engine) {
+    private void provisionIamUser(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                  String stackName) {
         String userName = resolveOptional(props, "UserName", engine);
         if (userName == null || userName.isBlank()) {
-            userName = "cfn-user-" + UUID.randomUUID().toString().substring(0, 8);
+            userName = generatePhysicalName(stackName, r.getLogicalId(), 64, false);
         }
         var user = iamService.createUser(userName, "/");
         r.setPhysicalId(userName);
@@ -524,10 +528,11 @@ public class CloudFormationResourceProvisioner {
         }
     }
 
-    private void provisionEcrRepository(StackResource r, JsonNode props, CloudFormationTemplateEngine engine) {
+    private void provisionEcrRepository(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                        String stackName) {
         String repoName = resolveOptional(props, "RepositoryName", engine);
         if (repoName == null || repoName.isBlank()) {
-            repoName = "cfn-repo-" + UUID.randomUUID().toString().substring(0, 8);
+            repoName = generatePhysicalName(stackName, r.getLogicalId(), 256, true);
         }
         r.setPhysicalId(repoName);
         r.getAttributes().put("Arn", "arn:aws:ecr:us-east-1:000000000000:repository/" + repoName);
@@ -577,5 +582,21 @@ public class CloudFormationResourceProvisioner {
         } catch (Exception e) {
             LOG.debugv("Could not delete policy {0}: {1}", policyArn, e.getMessage());
         }
+    }
+
+    /**
+     * Generate an AWS-like physical name: {stackName}-{logicalId}-{randomSuffix}.
+     * Mirrors the naming pattern AWS CloudFormation uses when no explicit name is provided.
+     */
+    private String generatePhysicalName(String stackName, String logicalId, int maxLength, boolean lowercase) {
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        String name = stackName + "-" + logicalId + "-" + suffix;
+        if (lowercase) {
+            name = name.toLowerCase();
+        }
+        if (maxLength > 0 && name.length() > maxLength) {
+            name = name.substring(0, maxLength);
+        }
+        return name;
     }
 }

@@ -23,11 +23,34 @@ Hooks run:
 - With the same environment variables as Floci
 
 Hooks can call Floci service endpoints directly from inside the container (e.g. `http://localhost:4566`).
-The published Docker image does not include the AWS CLI. If your hooks require it, extend the image:
+
+The published Docker images are available on Docker Hub:
+
+- `hectorvent/floci:latest` — native image (minimal, no apk)
+- `hectorvent/floci:latest-jvm` — JVM image (Alpine-based, has apk)
+- `hectorvent/floci:latest-aws` — JVM image with AWS CLI pre-installed
+
+If your hooks require the AWS CLI, use one of these options:
+
+**Option 1: Use the pre-built AWS CLI image**
 
 ```dockerfile
-FROM ghcr.io/hectorvent/floci:latest
+FROM hectorvent/floci:latest-aws
+# AWS CLI is already installed
+```
+
+**Option 2: Extend the JVM image (Alpine-based)**
+
+```dockerfile
+FROM hectorvent/floci:latest-jvm
 RUN apk add --no-cache aws-cli
+```
+
+**Option 3: Extend the JVM image with additional tools**
+
+```dockerfile
+FROM hectorvent/floci:latest-jvm
+RUN apk add --no-cache aws-cli jq curl
 ```
 
 If a hook depends on additional CLI tools, make sure those tools are available in the runtime image.

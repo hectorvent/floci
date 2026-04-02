@@ -18,6 +18,7 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -379,19 +380,19 @@ public class DynamoDbService {
                               JsonNode expressionAttrValues, String keyConditionExpression,
                               String filterExpression, Integer limit) {
         return query(tableName, keyConditions, expressionAttrValues, keyConditionExpression,
-                     filterExpression, limit, null, null, null, regionResolver.getDefaultRegion());
+                     filterExpression, limit, null, null, null, null, regionResolver.getDefaultRegion());
     }
 
     public QueryResult query(String tableName, JsonNode keyConditions,
                               JsonNode expressionAttrValues, String keyConditionExpression,
                               String filterExpression, Integer limit, String region) {
         return query(tableName, keyConditions, expressionAttrValues, keyConditionExpression,
-                     filterExpression, limit, null, null, null, region);
+                     filterExpression, limit, null, null, null, null, region);
     }
 
     public QueryResult query(String tableName, JsonNode keyConditions,
                               JsonNode expressionAttrValues, String keyConditionExpression,
-                              String filterExpression, Integer limit, String indexName,
+                              String filterExpression, Integer limit, Boolean scanIndexForward, String indexName,
                               JsonNode exclusiveStartKey, JsonNode exprAttrNames, String region) {
         String storageKey = regionKey(region, tableName);
         TableDefinition table = tableStore.get(storageKey)
@@ -467,6 +468,9 @@ public class DynamoDbService {
                 if (bVal == null) return 1;
                 return compareValues(aVal, bVal);
             });
+            if (Boolean.FALSE.equals(scanIndexForward)) {
+                Collections.reverse(results);
+            }
         }
 
         // Apply ExclusiveStartKey offset
@@ -1457,6 +1461,23 @@ public class DynamoDbService {
             String prefix = placeholder != null && exprValues != null
                     ? extractScalarValue(exprValues.get(placeholder)) : null;
             return prefix != null && actual.startsWith(prefix);
+        }
+
+        if (exprLower.contains(" between ")) {
+            int betweenIdx = exprLower.indexOf(" between ");
+            int andIdx = exprLower.indexOf(" and ", betweenIdx + " between ".length());
+            if (andIdx < 0) return false;
+
+            String lowerExpr = expression.substring(betweenIdx + " between ".length(), andIdx).trim();
+            String upperExpr = expression.substring(andIdx + " and ".length()).trim();
+            String lowerPlaceholder = lowerExpr.startsWith(":") ? lowerExpr.split("\\s+")[0] : null;
+            String upperPlaceholder = upperExpr.startsWith(":") ? upperExpr.split("\\s+")[0] : null;
+            String lower = lowerPlaceholder != null && exprValues != null
+                    ? extractScalarValue(exprValues.get(lowerPlaceholder)) : null;
+            String upper = upperPlaceholder != null && exprValues != null
+                    ? extractScalarValue(exprValues.get(upperPlaceholder)) : null;
+            if (lower == null || upper == null) return false;
+            return compareValues(actual, lower) >= 0 && compareValues(actual, upper) <= 0;
         }
 
         // Detect comparison operator

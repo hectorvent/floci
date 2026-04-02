@@ -221,6 +221,43 @@ class DynamoDbServiceTest {
     }
 
     @Test
+    void queryWithBetweenOnSortKey() {
+        createOrdersTable();
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2024-01-01"));
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2024-01-15"));
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2024-02-01"));
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":pk", attributeValue("S", "c1"));
+        exprValues.set(":from", attributeValue("S", "2024-01-10"));
+        exprValues.set(":to", attributeValue("S", "2024-01-31"));
+
+        DynamoDbService.QueryResult results = service.query("Orders", null, exprValues,
+                "customerId = :pk AND orderId BETWEEN :from AND :to", null, null);
+
+        assertEquals(1, results.items().size());
+        assertEquals("2024-01-15", results.items().getFirst().get("orderId").get("S").asText());
+    }
+
+    @Test
+    void queryWithScanIndexForwardFalseReturnsDescendingOrder() {
+        createOrdersTable();
+        service.putItem("Orders", item("customerId", "c1", "orderId", "o1"));
+        service.putItem("Orders", item("customerId", "c1", "orderId", "o2"));
+        service.putItem("Orders", item("customerId", "c1", "orderId", "o3"));
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":pk", attributeValue("S", "c1"));
+
+        DynamoDbService.QueryResult results = service.query("Orders", null, exprValues,
+                "customerId = :pk", null, null, false, null, null, null, "us-east-1");
+
+        assertEquals(List.of("o3", "o2", "o1"), results.items().stream()
+                .map(result -> result.get("orderId").get("S").asText())
+                .toList());
+    }
+
+    @Test
     void queryAppliesFilterExpressionAfterKeyCondition() {
         createOrdersTable();
 
@@ -271,7 +308,7 @@ class DynamoDbServiceTest {
         exprValues.set(":min", attributeValue("N", "100"));
 
         DynamoDbService.QueryResult firstPage = service.query("Orders", null, exprValues,
-                "customerId = :pk", "total >= :min", 2, null, null, null, "us-east-1");
+                "customerId = :pk", "total >= :min", 2, null, null, null, null, "us-east-1");
 
         assertEquals(1, firstPage.items().size());
         assertEquals("o1", firstPage.items().get(0).get("orderId").get("S").asText());
@@ -280,7 +317,7 @@ class DynamoDbServiceTest {
         assertEquals("o2", firstPage.lastEvaluatedKey().get("orderId").get("S").asText());
 
         DynamoDbService.QueryResult secondPage = service.query("Orders", null, exprValues,
-                "customerId = :pk", "total >= :min", 2, null,
+                "customerId = :pk", "total >= :min", 2, null, null,
                 firstPage.lastEvaluatedKey(), null, "us-east-1");
 
         assertEquals(1, secondPage.items().size());
