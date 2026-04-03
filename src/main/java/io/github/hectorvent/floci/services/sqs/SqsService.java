@@ -210,10 +210,8 @@ public class SqsService {
 
     public void deleteQueue(String queueUrl, String region) {
         String storageKey = regionKey(region, queueUrl);
-        if (queueStore.get(storageKey).isEmpty()) {
-            throw new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                    "The specified queue does not exist.", 400);
-        }
+        ensureQueueExists(storageKey);
+
         queueStore.delete(storageKey);
         messagesByQueue.remove(storageKey);
         deduplicationCache.remove(storageKey);
@@ -253,10 +251,7 @@ public class SqsService {
         String accountId = regionResolver.getAccountId();
         String queueUrl = baseUrl + "/" + accountId + "/" + queueName;
         String storageKey = regionKey(region, queueUrl);
-        if (queueStore.get(storageKey).isEmpty()) {
-            throw new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                    "The specified queue does not exist for this wsdl version.", 400);
-        }
+        ensureQueueExists(storageKey);
         return queueUrl;
     }
 
@@ -266,9 +261,7 @@ public class SqsService {
 
     public Map<String, String> getQueueAttributes(String queueUrl, List<String> attributeNames, String region) {
         String storageKey = regionKey(region, queueUrl);
-        Queue queue = queueStore.get(storageKey)
-                .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                        "The specified queue does not exist.", 400));
+        Queue queue = getQueueOrThrowIfMissing(storageKey);
 
         Map<String, String> attrs = new java.util.LinkedHashMap<>(queue.getAttributes());
         // Add computed attributes
@@ -321,9 +314,7 @@ public class SqsService {
                                Map<String, MessageAttributeValue> messageAttributes,
                                String region) {
         String storageKey = regionKey(region, queueUrl);
-        Queue queue = queueStore.get(storageKey)
-                .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                        "The specified queue does not exist.", 400));
+        Queue queue = getQueueOrThrowIfMissing(storageKey);
 
         if (body.length() > maxMessageSize) {
             throw new AwsException("InvalidParameterValue",
@@ -437,9 +428,7 @@ public class SqsService {
     public List<Message> receiveMessage(String queueUrl, int maxMessages, int visibilityTimeout,
                                         int waitTimeSeconds, String region) {
         String storageKey = regionKey(region, queueUrl);
-        queueStore.get(storageKey)
-                .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                        "The specified queue does not exist.", 400));
+        ensureQueueExists(storageKey);
 
         if (maxMessages < 1 || maxMessages > 10) {
             maxMessages = 1;
@@ -663,9 +652,7 @@ public class SqsService {
 
     public void setQueueAttributes(String queueUrl, Map<String, String> attributes, String region) {
         String storageKey = regionKey(region, queueUrl);
-        Queue queue = queueStore.get(storageKey)
-                .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                        "The specified queue does not exist.", 400));
+        Queue queue = getQueueOrThrowIfMissing(storageKey);
         if (attributes != null) {
             for (Map.Entry<String, String> entry : attributes.entrySet()) {
                 if (entry.getValue() == null || entry.getValue().isEmpty()) {
@@ -747,9 +734,7 @@ public class SqsService {
 
     public void tagQueue(String queueUrl, Map<String, String> tags, String region) {
         String storageKey = regionKey(region, queueUrl);
-        Queue queue = queueStore.get(storageKey)
-                .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                        "The specified queue does not exist.", 400));
+        Queue queue = getQueueOrThrowIfMissing(storageKey);
         if (tags != null) {
             queue.getTags().putAll(tags);
         }
@@ -759,9 +744,7 @@ public class SqsService {
 
     public void untagQueue(String queueUrl, List<String> tagKeys, String region) {
         String storageKey = regionKey(region, queueUrl);
-        Queue queue = queueStore.get(storageKey)
-                .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                        "The specified queue does not exist.", 400));
+        Queue queue = getQueueOrThrowIfMissing(storageKey);
         if (tagKeys != null) {
             for (String key : tagKeys) {
                 queue.getTags().remove(key);
@@ -773,9 +756,7 @@ public class SqsService {
 
     public Map<String, String> listQueueTags(String queueUrl, String region) {
         String storageKey = regionKey(region, queueUrl);
-        Queue queue = queueStore.get(storageKey)
-                .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                        "The specified queue does not exist.", 400));
+        Queue queue = getQueueOrThrowIfMissing(storageKey);
         return new java.util.LinkedHashMap<>(queue.getTags());
     }
 
@@ -803,10 +784,13 @@ public class SqsService {
         return queueUrl.substring(pathStart);
     }
 
+    private Queue getQueueOrThrowIfMissing(String storageKey) {
+        return queueStore.get(storageKey)
+                .orElseThrow(() -> new AwsException("QueueDoesNotExist",
+                        "The specified queue does not exist.", 400));
+    }
+
     private void ensureQueueExists(String storageKey) {
-        if (queueStore.get(storageKey).isEmpty()) {
-            throw new AwsException("AWS.SimpleQueueService.NonExistentQueue",
-                    "The specified queue does not exist.", 400);
-        }
+        getQueueOrThrowIfMissing(storageKey);
     }
 }

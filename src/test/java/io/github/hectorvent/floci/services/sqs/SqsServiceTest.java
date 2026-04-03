@@ -48,14 +48,16 @@ class SqsServiceTest {
     void deleteQueue() {
         Queue queue = sqsService.createQueue("test-queue", null);
         sqsService.deleteQueue(queue.getQueueUrl());
-        assertThrows(AwsException.class, () ->
+        var ex = assertThrows(AwsException.class, () ->
                 sqsService.getQueueUrl("test-queue"));
+        assertEquals("QueueDoesNotExist", ex.getErrorCode());
     }
 
     @Test
     void deleteQueueNotFound() {
-        assertThrows(AwsException.class, () ->
+        var ex = assertThrows(AwsException.class, () ->
                 sqsService.deleteQueue(BASE_URL + "/000000000000/nonexistent"));
+        assertEquals("QueueDoesNotExist", ex.getErrorCode());
     }
 
     @Test
@@ -80,8 +82,9 @@ class SqsServiceTest {
 
     @Test
     void getQueueUrlNotFound() {
-        assertThrows(AwsException.class, () ->
+        var ex = assertThrows(AwsException.class, () ->
                 sqsService.getQueueUrl("nonexistent"));
+        assertEquals("QueueDoesNotExist", ex.getErrorCode());
     }
 
     @Test
@@ -142,8 +145,9 @@ class SqsServiceTest {
 
     @Test
     void sendMessageToNonExistentQueue() {
-        assertThrows(AwsException.class, () ->
+        var ex = assertThrows(AwsException.class, () ->
                 sqsService.sendMessage(BASE_URL + "/000000000000/nonexistent", "msg", 0));
+        assertEquals("QueueDoesNotExist", ex.getErrorCode());
     }
 
     @Test
