@@ -397,7 +397,7 @@ class DynamoDbServiceTest {
         assertThrows(AwsException.class, () -> service.getItem("NoTable", item("id", "1")));
         assertThrows(AwsException.class, () -> service.deleteItem("NoTable", item("id", "1")));
         assertThrows(AwsException.class, () -> service.query("NoTable", null, null, null, null, null));
-        assertThrows(AwsException.class, () -> service.scan("NoTable", null, null, null, null, null, null, null));
+        assertThrows(AwsException.class, () -> service.scan("NoTable", null, null, null, null, null, null));
     }
 
     @Test
@@ -574,7 +574,7 @@ class DynamoDbServiceTest {
         ObjectNode exprValues = mapper.createObjectNode();
         exprValues.set(":d", boolAttributeValue(true));
 
-        DynamoDbService.ScanResult result = service.scan("Users", "deleted <> :d", null, exprValues, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", "deleted <> :d", null, exprValues, null, null, null);
         assertEquals(2, result.items().size());
     }
 
@@ -596,7 +596,7 @@ class DynamoDbServiceTest {
         ObjectNode exprValues = mapper.createObjectNode();
         exprValues.set(":v", attributeValue("S", "a"));
 
-        DynamoDbService.ScanResult result = service.scan("Users", "contains(tags, :v)", null, exprValues, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(tags, :v)", null, exprValues, null, null, null);
         assertEquals(2, result.items().size());
     }
 
@@ -614,7 +614,7 @@ class DynamoDbServiceTest {
         ObjectNode exprValues = mapper.createObjectNode();
         exprValues.set(":r", attributeValue("S", "admin"));
 
-        DynamoDbService.ScanResult result = service.scan("Users", "contains(roles, :r)", null, exprValues, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(roles, :r)", null, exprValues, null, null, null);
         assertEquals(1, result.items().size());
     }
 
@@ -639,10 +639,10 @@ class DynamoDbServiceTest {
         ObjectNode exprNames = mapper.createObjectNode();
         exprNames.put("#n", "name");
 
-        DynamoDbService.ScanResult result = service.scan("Users", "attribute_exists(info.#n)", exprNames, null, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", "attribute_exists(info.#n)", exprNames, null, null, null, null);
         assertEquals(2, result.items().size());
 
-        DynamoDbService.ScanResult result2 = service.scan("Users", "attribute_not_exists(info.#n)", exprNames, null, null, null);
+        DynamoDbService.ScanResult result2 = service.scan("Users", "attribute_not_exists(info.#n)", exprNames, null, null, null, null);
         assertEquals(1, result2.items().size());
     }
 
@@ -715,7 +715,7 @@ class DynamoDbServiceTest {
         ObjectNode exprValues = mapper.createObjectNode();
         exprValues.set(":v", attributeValue("N", "1.0"));
 
-        DynamoDbService.ScanResult result = service.scan("Users", "contains(scores, :v)", null, exprValues, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(scores, :v)", null, exprValues, null, null, null);
         assertEquals(1, result.items().size(), "contains() on NS should match 1.0 == 1 numerically");
     }
 
@@ -733,7 +733,7 @@ class DynamoDbServiceTest {
         ObjectNode exprValues = mapper.createObjectNode();
         exprValues.set(":v", attributeValue("B", "AQID"));
 
-        DynamoDbService.ScanResult result = service.scan("Users", "contains(bins, :v)", null, exprValues, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(bins, :v)", null, exprValues, null, null, null);
         assertEquals(1, result.items().size());
     }
 
@@ -761,7 +761,7 @@ class DynamoDbServiceTest {
         ObjectNode exprValues = mapper.createObjectNode();
         exprValues.set(":v", attributeValue("N", "10.0"));
 
-        DynamoDbService.ScanResult result = service.scan("Users", "contains(values, :v)", null, exprValues, null, null);
+        DynamoDbService.ScanResult result = service.scan("Users", "contains(values, :v)", null, exprValues, null, null, null);
         assertEquals(1, result.items().size(), "contains() on List with N elements should use type-aware numeric comparison");
     }
 }

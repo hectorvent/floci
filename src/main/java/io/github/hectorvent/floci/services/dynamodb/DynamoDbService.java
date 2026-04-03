@@ -1395,6 +1395,7 @@ public class DynamoDbService {
         return null;
     }
 
+    // NE, CONTAINS, NOT_CONTAINS, IN, NULL, NOT_NULL not yet supported
     private boolean matchesKeyCondition(JsonNode attrValue, JsonNode condition) {
         if (condition == null) return true;
         String op = condition.has("ComparisonOperator") ? condition.get("ComparisonOperator").asText() : "EQ";
