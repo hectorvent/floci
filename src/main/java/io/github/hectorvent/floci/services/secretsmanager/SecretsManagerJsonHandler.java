@@ -127,13 +127,18 @@ public class SecretsManagerJsonHandler {
 
         Secret secret = service.updateSecret(secretId, description, kmsKeyId, region);
 
+        String versionId = null;
         if (secretString != null || secretBinary != null) {
-            service.putSecretValue(secretId, secretString, secretBinary, region);
+            SecretVersion version = service.putSecretValue(secretId, secretString, secretBinary, region);
+            versionId = version.getVersionId();
         }
 
         ObjectNode response = objectMapper.createObjectNode();
         response.put("ARN", secret.getArn());
         response.put("Name", secret.getName());
+        if (versionId != null) {
+            response.put("VersionId", versionId);
+        }
         return Response.ok(response).build();
     }
 
@@ -146,6 +151,9 @@ public class SecretsManagerJsonHandler {
         response.put("Name", secret.getName());
         if (secret.getDescription() != null) {
             response.put("Description", secret.getDescription());
+        }
+        if (secret.getKmsKeyId() != null) {
+            response.put("KmsKeyId", secret.getKmsKeyId());
         }
         response.put("RotationEnabled", secret.isRotationEnabled());
         if (secret.getCreatedDate() != null) {
@@ -196,8 +204,18 @@ public class SecretsManagerJsonHandler {
             if (secret.getDescription() != null) {
                 node.put("Description", secret.getDescription());
             }
+            if (secret.getKmsKeyId() != null) {
+                node.put("KmsKeyId", secret.getKmsKeyId());
+            }
+            node.put("RotationEnabled", secret.isRotationEnabled());
+            if (secret.getCreatedDate() != null) {
+                node.put("CreatedDate", secret.getCreatedDate().toEpochMilli() / 1000.0);
+            }
             if (secret.getLastChangedDate() != null) {
                 node.put("LastChangedDate", secret.getLastChangedDate().toEpochMilli() / 1000.0);
+            }
+            if (secret.getLastAccessedDate() != null) {
+                node.put("LastAccessedDate", secret.getLastAccessedDate().toEpochMilli() / 1000.0);
             }
             ArrayNode tagsArray = objectMapper.createArrayNode();
             if (secret.getTags() != null) {

@@ -124,4 +124,36 @@ class SecretsManagerJsonHandlerTest {
         request.put("RequireEachIncludedType", false);
         assertThat(getRandomPassword(request), matchesPattern("[0-9]+"));
     }
+
+    @Test
+    void describeSecretResponseIncludesKmsKeyId() {
+        ObjectNode createReq = MAPPER.createObjectNode();
+        createReq.put("Name", "kms-secret");
+        createReq.put("KmsKeyId", "my-kms-key");
+        handler.handle("CreateSecret", createReq, REGION);
+
+        ObjectNode describeReq = MAPPER.createObjectNode();
+        describeReq.put("SecretId", "kms-secret");
+        Response response = handler.handle("DescribeSecret", describeReq, REGION);
+        
+        assertThat(response.getStatus(), is(200));
+        ObjectNode body = (ObjectNode) response.getEntity();
+        assertThat(body.get("KmsKeyId").asText(), is("my-kms-key"));
+    }
+
+    @Test
+    void listSecretsResponseIncludesKmsKeyId() {
+        ObjectNode createReq = MAPPER.createObjectNode();
+        createReq.put("Name", "list-kms-secret");
+        createReq.put("KmsKeyId", "list-kms-key");
+        handler.handle("CreateSecret", createReq, REGION);
+
+        Response response = handler.handle("ListSecrets", MAPPER.createObjectNode(), REGION);
+        
+        assertThat(response.getStatus(), is(200));
+        ObjectNode body = (ObjectNode) response.getEntity();
+        ObjectNode secret = (ObjectNode) body.get("SecretList").get(0);
+        assertThat(secret.get("KmsKeyId").asText(), is("list-kms-key"));
+        assertThat(secret.has("CreatedDate"), is(true));
+    }
 }
