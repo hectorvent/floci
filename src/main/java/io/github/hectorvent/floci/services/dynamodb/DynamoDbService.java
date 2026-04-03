@@ -1006,6 +1006,7 @@ public class DynamoDbService {
     }
 
     String resolveAttributeName(String nameOrPlaceholder, JsonNode exprAttrNames) {
+        nameOrPlaceholder = trimBalancedOuterParens(nameOrPlaceholder).trim();
         if (nameOrPlaceholder.startsWith("#") && exprAttrNames != null) {
             JsonNode resolved = exprAttrNames.get(nameOrPlaceholder);
             if (resolved != null) {
@@ -1056,6 +1057,7 @@ public class DynamoDbService {
 
     private boolean matchesFilterExpression(JsonNode item, String filterExpression,
                                              JsonNode exprAttrNames, JsonNode exprAttrValues) {
+        filterExpression = trimBalancedOuterParens(filterExpression);
         // Handle AND/OR combined expressions
         // Split on AND first (simple approach — handles most common cases)
         String[] andParts = filterExpression.split("\\s+[Aa][Nn][Dd]\\s+");
@@ -1069,6 +1071,7 @@ public class DynamoDbService {
 
     private boolean evaluateSingleCondition(JsonNode item, String condition,
                                              JsonNode exprAttrNames, JsonNode exprAttrValues) {
+        condition = trimBalancedOuterParens(condition);
         // Parse: "attrPath = :val", "attrPath <> :val", "attrPath > :val", etc.
         // Also: "attribute_exists(attrPath)", "attribute_not_exists(attrPath)",
         //        "begins_with(attrPath, :val)", "contains(attrPath, :val)"
@@ -1180,6 +1183,7 @@ public class DynamoDbService {
     }
 
     private String resolveExprValue(String placeholder, JsonNode exprAttrValues) {
+        placeholder = trimBalancedOuterParens(placeholder).trim();
         if (placeholder.startsWith(":") && exprAttrValues != null) {
             return extractScalarValue(exprAttrValues.get(placeholder));
         }
@@ -1416,12 +1420,13 @@ public class DynamoDbService {
                                                 String expression,
                                                 JsonNode expressionAttrValues,
                                                 JsonNode exprAttrNames) {
+        expression = trimBalancedOuterParens(expression);
         List<JsonNode> results = new ArrayList<>();
 
         // Parse simple expressions: "pk = :val" or "pk = :val AND sk begins_with :prefix"
         String[] parts = expression.split("\\s+[Aa][Nn][Dd]\\s+", 2);
-        String pkExpression = parts[0].trim();
-        String skExpression = parts.length > 1 ? parts[1].trim() : null;
+        String pkExpression = trimBalancedOuterParens(parts[0].trim());
+        String skExpression = parts.length > 1 ? trimBalancedOuterParens(parts[1].trim()) : null;
 
         // Extract pk attr name from expression (may use #alias)
         String pkAttrInExpr = pkExpression.split("\\s*=\\s*")[0].trim();
@@ -1452,6 +1457,7 @@ public class DynamoDbService {
     }
 
     private boolean matchesSkExpression(JsonNode skValue, String expression, JsonNode exprValues) {
+        expression = trimBalancedOuterParens(expression);
         String actual = extractScalarValue(skValue);
         if (actual == null) return false;
 
@@ -1513,6 +1519,35 @@ public class DynamoDbService {
             end++;
         }
         return expression.substring(idx, end);
+    }
+
+    private String trimBalancedOuterParens(String expression) {
+        if (expression == null) return null;
+        String trimmed = expression.trim();
+        while (trimmed.length() >= 2 && trimmed.startsWith("(") && trimmed.endsWith(")")
+                && hasBalancedOuterParens(trimmed)) {
+            trimmed = trimmed.substring(1, trimmed.length() - 1).trim();
+        }
+        return trimmed;
+    }
+
+    private boolean hasBalancedOuterParens(String expression) {
+        int depth = 0;
+        for (int i = 0; i < expression.length(); i++) {
+            char c = expression.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0 && i < expression.length() - 1) {
+                    return false;
+                }
+                if (depth < 0) {
+                    return false;
+                }
+            }
+        }
+        return depth == 0;
     }
 
     private AwsException resourceNotFoundException(String tableName) {
