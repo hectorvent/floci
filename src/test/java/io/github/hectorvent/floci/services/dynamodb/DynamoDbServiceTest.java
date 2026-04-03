@@ -721,4 +721,42 @@ class DynamoDbServiceTest {
         DynamoDbService.ScanResult result = service.scan("Users", "contains(values, :v)", null, exprValues, null, null);
         assertEquals(1, result.items().size(), "contains() on List with N elements should use type-aware numeric comparison");
     }
+
+    @Test
+    void queryWithParenthesizedBetweenKeyCondition() {
+        createOrdersTable();
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2026-01-01Z#a"));
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2026-06-15Z#b"));
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2026-12-31Z#c"));
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":pk", attributeValue("S", "c1"));
+        exprValues.set(":start", attributeValue("S", "2026-01-01Z#"));
+        exprValues.set(":end", attributeValue("S", "2026-12-31Z#z"));
+
+        // Standard format with parens: "pk = :pk AND (sk BETWEEN :start AND :end)"
+        var result = service.query("Orders", null, exprValues,
+                "customerId = :pk AND (orderId BETWEEN :start AND :end)", null, null);
+        assertEquals(3, result.items().size(), "parenthesized BETWEEN should work");
+    }
+
+    @Test
+    void queryWithCompactAndBetweenKeyCondition() {
+        createOrdersTable();
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2026-01-01Z#a"));
+        service.putItem("Orders", item("customerId", "c1", "orderId", "2026-06-15Z#b"));
+
+        ObjectNode exprNames = mapper.createObjectNode();
+        exprNames.put("#f0", "customerId");
+        exprNames.put("#f1", "orderId");
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":v0", attributeValue("S", "c1"));
+        exprValues.set(":v1", attributeValue("S", "2026-01-01Z#"));
+        exprValues.set(":v2", attributeValue("S", "2026-12-31Z#z"));
+
+        // EfficientDynamoDb compact format: "(#f0 = :v0)AND(#f1 BETWEEN :v1 AND :v2)"
+        var result = service.query("Orders", null, exprValues,
+                "(#f0 = :v0)AND(#f1 BETWEEN :v1 AND :v2)", null, null, null, null, null, exprNames, "us-east-1");
+        assertEquals(2, result.items().size(), "compact AND with BETWEEN should work");
+    }
 }

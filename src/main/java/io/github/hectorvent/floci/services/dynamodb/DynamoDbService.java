@@ -447,10 +447,15 @@ public class DynamoDbService {
                                           expressionAttrValues, exprAttrNames);
         }
 
-        // Filter out items without GSI key if querying GSI (sparse index)
+        // Filter out items without GSI key attributes (sparse index behavior).
+        // DynamoDB excludes items from a GSI if any key attribute is null/missing.
         if (indexName != null) {
             String finalPkName = pkName;
-            results = results.stream().filter(item -> item.has(finalPkName)).toList();
+            String finalSkName = skName;
+            results = results.stream()
+                    .filter(item -> item.has(finalPkName) && hasNonNullAttribute(item, finalPkName))
+                    .filter(item -> finalSkName == null || (item.has(finalSkName) && hasNonNullAttribute(item, finalSkName)))
+                    .toList();
         }
 
         // Filter out TTL-expired items
@@ -1056,240 +1061,29 @@ public class DynamoDbService {
 
     private boolean matchesFilterExpression(JsonNode item, String filterExpression,
                                              JsonNode exprAttrNames, JsonNode exprAttrValues) {
-        // Handle AND/OR combined expressions
-        // Split on AND first (simple approach — handles most common cases)
-        String[] andParts = filterExpression.split("\\s+[Aa][Nn][Dd]\\s+");
-        for (String part : andParts) {
-            if (!evaluateSingleCondition(item, part.trim(), exprAttrNames, exprAttrValues)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean evaluateSingleCondition(JsonNode item, String condition,
-                                             JsonNode exprAttrNames, JsonNode exprAttrValues) {
-        // Parse: "attrPath = :val", "attrPath <> :val", "attrPath > :val", etc.
-        // Also: "attribute_exists(attrPath)", "attribute_not_exists(attrPath)",
-        //        "begins_with(attrPath, :val)", "contains(attrPath, :val)"
-        String condLower = condition.toLowerCase();
-
-        if (condLower.startsWith("attribute_exists")) {
-            String attr = extractFunctionArg(condition);
-            String resolvedPath = resolveAttributePath(attr, exprAttrNames);
-            return item != null && resolveNestedAttribute(item, resolvedPath) != null;
-        }
-        if (condLower.startsWith("attribute_not_exists")) {
-            String attr = extractFunctionArg(condition);
-            String resolvedPath = resolveAttributePath(attr, exprAttrNames);
-            return item == null || resolveNestedAttribute(item, resolvedPath) == null;
-        }
-        if (condLower.startsWith("begins_with")) {
-            String[] args = extractFunctionArgs(condition);
-            if (args.length == 2) {
-                String attrName = resolveAttributeName(args[0], exprAttrNames);
-                String prefix = resolveExprValue(args[1], exprAttrValues);
-                String actual = item != null ? extractScalarValue(item.get(attrName)) : null;
-                return actual != null && prefix != null && actual.startsWith(prefix);
-            }
-            return false;
-        }
-        if (condLower.startsWith("contains")) {
-            String[] args = extractFunctionArgs(condition);
-            if (args.length == 2) {
-                String attrName = resolveAttributeName(args[0], exprAttrNames);
-                if (item == null) return false;
-                JsonNode attrNode = item.get(attrName);
-                if (attrNode == null) return false;
-                // Resolve the raw AttributeValue node for type-aware comparisons
-                JsonNode searchAttrValue = exprAttrValues != null
-                        ? exprAttrValues.get(args[1].trim()) : null;
-                if (searchAttrValue == null) return false;
-                // List type: type-aware element membership check
-                if (attrNode.has("L")) {
-                    for (JsonNode element : attrNode.get("L")) {
-                        if (attributeValuesEqual(element, searchAttrValue)) return true;
-                    }
-                    return false;
-                }
-                // SS (String Set): operand must be S type
-                if (attrNode.has("SS")) {
-                    if (!searchAttrValue.has("S")) return false;
-                    String target = searchAttrValue.get("S").asText();
-                    for (JsonNode element : attrNode.get("SS")) {
-                        if (target.equals(element.asText())) return true;
-                    }
-                    return false;
-                }
-                // NS (Number Set): operand must be N type, compare numerically
-                if (attrNode.has("NS")) {
-                    if (!searchAttrValue.has("N")) return false;
-                    try {
-                        java.math.BigDecimal target = new java.math.BigDecimal(searchAttrValue.get("N").asText());
-                        for (JsonNode element : attrNode.get("NS")) {
-                            if (target.compareTo(new java.math.BigDecimal(element.asText())) == 0) return true;
-                        }
-                    } catch (NumberFormatException ignored) {}
-                    return false;
-                }
-                // BS (Binary Set): operand must be B type
-                if (attrNode.has("BS")) {
-                    if (!searchAttrValue.has("B")) return false;
-                    String target = searchAttrValue.get("B").asText();
-                    for (JsonNode element : attrNode.get("BS")) {
-                        if (target.equals(element.asText())) return true;
-                    }
-                    return false;
-                }
-                // String type: operand must be S type, check substring
-                if (attrNode.has("S") && searchAttrValue.has("S")) {
-                    return attrNode.get("S").asText().contains(searchAttrValue.get("S").asText());
-                }
-                return false;
-            }
-            return false;
-        }
-
-        // Comparison operators: =, <>, <, <=, >, >=
-        String[] operators = {"<>", "<=", ">=", "=", "<", ">"};
-        for (String op : operators) {
-            int opIdx = condition.indexOf(op);
-            if (opIdx > 0) {
-                String left = condition.substring(0, opIdx).trim();
-                String right = condition.substring(opIdx + op.length()).trim();
-
-                String attrName = resolveAttributeName(left, exprAttrNames);
-                String expected = resolveExprValue(right, exprAttrValues);
-                String actual = item != null ? extractScalarValue(item.get(attrName)) : null;
-
-                if (actual == null || expected == null) return false;
-
-                return switch (op) {
-                    case "=" -> actual.equals(expected);
-                    case "<>" -> !actual.equals(expected);
-                    case "<" -> compareValues(actual, expected) < 0;
-                    case "<=" -> compareValues(actual, expected) <= 0;
-                    case ">" -> compareValues(actual, expected) > 0;
-                    case ">=" -> compareValues(actual, expected) >= 0;
-                    default -> false;
-                };
-            }
-        }
-
-        return true; // Unknown condition — pass through
-    }
-
-    private String resolveExprValue(String placeholder, JsonNode exprAttrValues) {
-        if (placeholder.startsWith(":") && exprAttrValues != null) {
-            return extractScalarValue(exprAttrValues.get(placeholder));
-        }
-        return placeholder;
+        return ExpressionEvaluator.matches(filterExpression, item, exprAttrNames, exprAttrValues);
     }
 
     private boolean attributeValuesEqual(JsonNode a, JsonNode b) {
-        if (a == null || b == null) return a == b;
-        // Scalar types: S, B, BOOL, NULL
-        for (String type : new String[]{"S", "B", "BOOL", "NULL"}) {
-            if (a.has(type) && b.has(type)) {
-                return a.get(type).asText().equals(b.get(type).asText());
-            }
-            if (a.has(type) || b.has(type)) return false; // type mismatch
-        }
-        // Numeric comparison with normalization
-        if (a.has("N") && b.has("N")) {
-            try {
-                return new java.math.BigDecimal(a.get("N").asText())
-                        .compareTo(new java.math.BigDecimal(b.get("N").asText())) == 0;
-            } catch (NumberFormatException e) {
-                return false;
-            }
-        }
-        if (a.has("N") || b.has("N")) return false;
-        // Map type: compare all entries recursively
-        if (a.has("M") && b.has("M")) {
-            JsonNode aMap = a.get("M");
-            JsonNode bMap = b.get("M");
-            if (aMap.size() != bMap.size()) return false;
-            var fields = aMap.fields();
-            while (fields.hasNext()) {
-                var entry = fields.next();
-                if (!bMap.has(entry.getKey())) return false;
-                if (!attributeValuesEqual(entry.getValue(), bMap.get(entry.getKey()))) return false;
-            }
-            return true;
-        }
-        // List type: compare element by element
-        if (a.has("L") && b.has("L")) {
-            JsonNode aList = a.get("L");
-            JsonNode bList = b.get("L");
-            if (aList.size() != bList.size()) return false;
-            for (int i = 0; i < aList.size(); i++) {
-                if (!attributeValuesEqual(aList.get(i), bList.get(i))) return false;
-            }
-            return true;
-        }
-        // Different types are never equal
-        return false;
+        return ExpressionEvaluator.attributeValuesEqual(a, b);
+    }
+
+    /**
+     * Returns true if the item has the given attribute with a non-null DynamoDB value.
+     * An attribute is considered null if it is the DynamoDB NULL type ({@code {"NULL": true}}).
+     */
+    private static boolean hasNonNullAttribute(JsonNode item, String attrName) {
+        JsonNode attr = item.get(attrName);
+        if (attr == null) return false;
+        return !attr.has("NULL");
     }
 
     private int compareValues(String a, String b) {
-        // Try numeric comparison first
         try {
             return Double.compare(Double.parseDouble(a), Double.parseDouble(b));
         } catch (NumberFormatException e) {
             return a.compareTo(b);
         }
-    }
-
-    private static final String DOT_ESCAPE = "\uFF0E";
-
-    private String resolveAttributePath(String path, JsonNode exprAttrNames) {
-        // Resolve each segment of a dotted path, e.g. "passengerInformation.#name"
-        // ExpressionAttributeNames may resolve to names containing dots (e.g. "#a" -> "foo.bar").
-        // Escape those dots so resolveNestedAttribute treats them as single keys.
-        String[] segments = path.split("\\.");
-        StringBuilder resolved = new StringBuilder();
-        for (int i = 0; i < segments.length; i++) {
-            if (i > 0) resolved.append(".");
-            String original = segments[i];
-            String resolvedSegment = resolveAttributeName(original, exprAttrNames);
-            if (original.startsWith("#") && resolvedSegment != null) {
-                resolvedSegment = resolvedSegment.replace(".", DOT_ESCAPE);
-            }
-            resolved.append(resolvedSegment);
-        }
-        return resolved.toString();
-    }
-
-    private JsonNode resolveNestedAttribute(JsonNode item, String path) {
-        // Navigate a dotted path through DynamoDB's {"M": {...}} structure
-        String[] segments = path.split("\\.");
-        JsonNode current = item;
-        for (int i = 0; i < segments.length; i++) {
-            if (current == null) return null;
-            String segment = segments[i].replace(DOT_ESCAPE, ".");
-            if (i == 0) {
-                // First segment: resolve against the top-level item map
-                current = current.get(segment);
-            } else {
-                // Subsequent segments: descend into DynamoDB Map type
-                if (current.has("M")) {
-                    current = current.get("M").get(segment);
-                } else {
-                    current = current.get(segment);
-                }
-            }
-        }
-        return current;
-    }
-
-    private String extractFunctionArg(String funcCall) {
-        int open = funcCall.indexOf('(');
-        int close = funcCall.lastIndexOf(')');
-        if (open >= 0 && close > open) {
-            return funcCall.substring(open + 1, close).trim();
-        }
-        return funcCall;
     }
 
     private String[] extractFunctionArgs(String funcCall) {
@@ -1418,17 +1212,30 @@ public class DynamoDbService {
                                                 JsonNode exprAttrNames) {
         List<JsonNode> results = new ArrayList<>();
 
-        // Parse simple expressions: "pk = :val" or "pk = :val AND sk begins_with :prefix"
-        String[] parts = expression.split("\\s+[Aa][Nn][Dd]\\s+", 2);
-        String pkExpression = parts[0].trim();
-        String skExpression = parts.length > 1 ? parts[1].trim() : null;
+        // Use token-based splitting that correctly handles BETWEEN...AND and compact format
+        String[] keyParts = ExpressionEvaluator.splitKeyCondition(expression);
+        String pkExpression = keyParts[0];
+        String skExpression = keyParts[1];
 
         // Extract pk attr name from expression (may use #alias)
-        String pkAttrInExpr = pkExpression.split("\\s*=\\s*")[0].trim();
+        // Strip outer parens for PK extraction (e.g. "(#f0 = :v0)" → "#f0 = :v0")
+        String pkExprStripped = pkExpression.trim();
+        while (pkExprStripped.startsWith("(") && pkExprStripped.endsWith(")")) {
+            pkExprStripped = pkExprStripped.substring(1, pkExprStripped.length() - 1).trim();
+        }
+        String pkAttrInExpr = pkExprStripped.split("\\s*=\\s*")[0].trim();
         String resolvedPkName = resolveAttributeName(pkAttrInExpr, exprAttrNames);
 
-        // Extract pk value
-        String pkPlaceholder = extractPlaceholder(pkExpression);
+        // Extract pk value placeholder
+        int colonIdx = pkExprStripped.indexOf(':');
+        String pkPlaceholder = null;
+        if (colonIdx >= 0) {
+            int end = colonIdx + 1;
+            while (end < pkExprStripped.length() && (Character.isLetterOrDigit(pkExprStripped.charAt(end)) || pkExprStripped.charAt(end) == '_')) {
+                end++;
+            }
+            pkPlaceholder = pkExprStripped.substring(colonIdx, end);
+        }
         String pkValue = pkPlaceholder != null && expressionAttrValues != null
                 ? extractScalarValue(expressionAttrValues.get(pkPlaceholder))
                 : null;
@@ -1440,7 +1247,7 @@ public class DynamoDbService {
             }
 
             if (skExpression != null && skName != null) {
-                if (!matchesSkExpression(item.get(skName), skExpression, expressionAttrValues)) {
+                if (!ExpressionEvaluator.matches(skExpression, item, exprAttrNames, expressionAttrValues)) {
                     continue;
                 }
             }
@@ -1449,70 +1256,6 @@ public class DynamoDbService {
         }
 
         return results;
-    }
-
-    private boolean matchesSkExpression(JsonNode skValue, String expression, JsonNode exprValues) {
-        String actual = extractScalarValue(skValue);
-        if (actual == null) return false;
-
-        String exprLower = expression.toLowerCase();
-        if (exprLower.contains("begins_with")) {
-            String placeholder = extractPlaceholder(expression);
-            String prefix = placeholder != null && exprValues != null
-                    ? extractScalarValue(exprValues.get(placeholder)) : null;
-            return prefix != null && actual.startsWith(prefix);
-        }
-
-        if (exprLower.contains(" between ")) {
-            int betweenIdx = exprLower.indexOf(" between ");
-            int andIdx = exprLower.indexOf(" and ", betweenIdx + " between ".length());
-            if (andIdx < 0) return false;
-
-            String lowerExpr = expression.substring(betweenIdx + " between ".length(), andIdx).trim();
-            String upperExpr = expression.substring(andIdx + " and ".length()).trim();
-            String lowerPlaceholder = lowerExpr.startsWith(":") ? lowerExpr.split("\\s+")[0] : null;
-            String upperPlaceholder = upperExpr.startsWith(":") ? upperExpr.split("\\s+")[0] : null;
-            String lower = lowerPlaceholder != null && exprValues != null
-                    ? extractScalarValue(exprValues.get(lowerPlaceholder)) : null;
-            String upper = upperPlaceholder != null && exprValues != null
-                    ? extractScalarValue(exprValues.get(upperPlaceholder)) : null;
-            if (lower == null || upper == null) return false;
-            return compareValues(actual, lower) >= 0 && compareValues(actual, upper) <= 0;
-        }
-
-        // Detect comparison operator
-        String[] operators = {"<>", "<=", ">=", "=", "<", ">"};
-        for (String op : operators) {
-            int opIdx = expression.indexOf(op);
-            if (opIdx > 0) {
-                String right = expression.substring(opIdx + op.length()).trim();
-                String placeholder = right.startsWith(":") ? right.split("\\s+")[0] : null;
-                String expected = placeholder != null && exprValues != null
-                        ? extractScalarValue(exprValues.get(placeholder)) : null;
-                if (expected == null) return false;
-                return switch (op) {
-                    case "=" -> actual.equals(expected);
-                    case "<>" -> !actual.equals(expected);
-                    case ">=" -> actual.compareTo(expected) >= 0;
-                    case "<=" -> actual.compareTo(expected) <= 0;
-                    case ">" -> actual.compareTo(expected) > 0;
-                    case "<" -> actual.compareTo(expected) < 0;
-                    default -> true;
-                };
-            }
-        }
-        return true;
-    }
-
-    private String extractPlaceholder(String expression) {
-        // Find :placeholder in expression
-        int idx = expression.indexOf(':');
-        if (idx < 0) return null;
-        int end = idx + 1;
-        while (end < expression.length() && (Character.isLetterOrDigit(expression.charAt(end)) || expression.charAt(end) == '_')) {
-            end++;
-        }
-        return expression.substring(idx, end);
     }
 
     private AwsException resourceNotFoundException(String tableName) {
