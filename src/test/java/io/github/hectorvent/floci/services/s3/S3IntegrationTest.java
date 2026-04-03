@@ -873,4 +873,112 @@ class S3IntegrationTest {
         given().delete("/encoding-test-bucket/composite-encoded.txt");
         given().delete("/encoding-test-bucket");
     }
+
+    // --- S3 Notification Configuration with Filter ---
+
+    @Test
+    @Order(90)
+    void createNotificationBucket() {
+        given()
+        .when()
+            .put("/notif-test-bucket")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(91)
+    void putNotificationConfigWithFilterIsNotDropped() {
+        String xml = """
+                <NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                  <QueueConfiguration>
+                    <Id>my-notif</Id>
+                    <Queue>arn:aws:sqs:us-east-1:000000000000:test-queue</Queue>
+                    <Event>s3:ObjectCreated:*</Event>
+                    <Filter>
+                      <S3Key>
+                        <FilterRule>
+                          <Name>prefix</Name>
+                          <Value>incoming/</Value>
+                        </FilterRule>
+                      </S3Key>
+                    </Filter>
+                  </QueueConfiguration>
+                </NotificationConfiguration>
+                """;
+
+        given()
+            .contentType("application/xml")
+            .queryParam("notification", "")
+            .body(xml)
+        .when()
+            .put("/notif-test-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("notification", "")
+        .when()
+            .get("/notif-test-bucket")
+        .then()
+            .statusCode(200)
+            .body(containsString("QueueConfiguration"))
+            .body(containsString("arn:aws:sqs:us-east-1:000000000000:test-queue"))
+            .body(containsString("s3:ObjectCreated:*"))
+            // Verify filter rules are preserved in round-trip
+            .body(containsString("Filter"))
+            .body(containsString("FilterRule"))
+            .body(containsString("<Name>prefix</Name>"))
+            .body(containsString("<Value>incoming/</Value>"));
+    }
+
+    @Test
+    @Order(92)
+    void putNotificationConfigWithFilterBeforeQueueIsNotDropped() {
+        // Filter appears BEFORE Queue — ensures element order doesn't matter
+        String xml = """
+                <NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                  <QueueConfiguration>
+                    <Id>filter-first</Id>
+                    <Filter>
+                      <S3Key>
+                        <FilterRule>
+                          <Name>suffix</Name>
+                          <Value>.csv</Value>
+                        </FilterRule>
+                      </S3Key>
+                    </Filter>
+                    <Queue>arn:aws:sqs:us-east-1:000000000000:csv-queue</Queue>
+                    <Event>s3:ObjectCreated:Put</Event>
+                  </QueueConfiguration>
+                </NotificationConfiguration>
+                """;
+
+        given()
+            .contentType("application/xml")
+            .queryParam("notification", "")
+            .body(xml)
+        .when()
+            .put("/notif-test-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("notification", "")
+        .when()
+            .get("/notif-test-bucket")
+        .then()
+            .statusCode(200)
+            .body(containsString("QueueConfiguration"))
+            .body(containsString("arn:aws:sqs:us-east-1:000000000000:csv-queue"))
+            .body(containsString("s3:ObjectCreated:Put"))
+            .body(containsString("<Name>suffix</Name>"))
+            .body(containsString("<Value>.csv</Value>"));
+    }
+
+    @Test
+    @Order(93)
+    void cleanupNotificationBucket() {
+        given().delete("/notif-test-bucket");
+    }
 }

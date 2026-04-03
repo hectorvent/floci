@@ -9,6 +9,7 @@ data/
 .project
 .classpath
 .vscode/
+.zed/settings.json
 .DS_Store
 .zed/settings.json
 
