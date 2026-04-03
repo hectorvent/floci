@@ -8,7 +8,6 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -31,12 +30,7 @@ public class HealthController {
 
     @GET
     public Response health() {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("services", serviceRegistry.getServices());
-        result.put("edition", "floci-always-free");
-        result.put("version", version);
-
-        return Response.ok(result).build();
+        return Response.ok(Map.of("services", serviceRegistry.getServices(), "edition", "floci-always-free", "version", version)).build();
     }
 
     private static String resolveVersion() {
