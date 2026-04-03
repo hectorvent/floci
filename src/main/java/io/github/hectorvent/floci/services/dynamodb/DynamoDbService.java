@@ -882,29 +882,32 @@ public class DynamoDbService {
             if (eqIdx < 0) break;
 
             String attrPath = clause.substring(0, eqIdx).trim();
-            String attrName = resolveAttributeName(attrPath, exprAttrNames);
+            // Resolve dotted path segments: e.g. "#f10.e49h4yn" → ["ex_details", "e49h4yn"]
+            String[] resolvedPath = resolveUpdatePath(attrPath, exprAttrNames);
 
             String rest = clause.substring(eqIdx + 1).trim();
 
-            // Find the value placeholder or expression
+            // Find the value placeholder or expression.
+            // Must check for clause keywords (REMOVE, ADD, DELETE) BEFORE commas,
+            // because REMOVE lists are comma-separated and findNextComma would
+            // incorrectly consume into the REMOVE clause.
             String valuePart;
+            int nextClause = findNextClauseKeyword(rest);
             int commaIdx = findNextComma(rest);
-            if (commaIdx >= 0) {
+            if (nextClause >= 0 && (commaIdx < 0 || nextClause < commaIdx)) {
+                // Clause keyword comes before any comma — end the SET value here
+                valuePart = rest.substring(0, nextClause).trim();
+                rest = rest.substring(nextClause).trim();
+            } else if (commaIdx >= 0) {
                 valuePart = rest.substring(0, commaIdx).trim();
                 rest = rest.substring(commaIdx + 1).trim();
             } else {
-                // Check for next clause keyword
-                int nextClause = findNextClauseKeyword(rest);
-                if (nextClause >= 0) {
-                    valuePart = rest.substring(0, nextClause).trim();
-                    rest = rest.substring(nextClause).trim();
-                } else {
-                    valuePart = rest.trim();
-                    rest = "";
-                }
+                valuePart = rest.trim();
+                rest = "";
             }
 
             // Resolve the value
+            JsonNode resolvedValue = null;
             if (valuePart.startsWith("if_not_exists(")) {
                 // if_not_exists(attrRef, fallbackExpr) evaluates to:
                 //   attrRef's current value  — when attrRef exists in the item
@@ -914,32 +917,26 @@ public class DynamoDbService {
                 if (args.length == 2) {
                     String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
                     String fallbackExpr = args[1].trim();
-                    JsonNode resolved;
                     if (item.has(checkAttr)) {
                         // attrRef exists — evaluate to its current value
-                        resolved = item.get(checkAttr);
+                        resolvedValue = item.get(checkAttr);
                     } else if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
-                        resolved = exprAttrValues.get(fallbackExpr);
+                        resolvedValue = exprAttrValues.get(fallbackExpr);
                     } else {
                         // fallback is itself an attribute reference
-                        resolved = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
-                    }
-                    if (resolved != null) {
-                        item.set(attrName, resolved);
+                        resolvedValue = item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
                     }
                 }
             } else if (valuePart.startsWith(":") && exprAttrValues != null) {
-                JsonNode value = exprAttrValues.get(valuePart);
-                if (value != null) {
-                    item.set(attrName, value);
-                }
+                resolvedValue = exprAttrValues.get(valuePart);
             } else if (!valuePart.isEmpty()) {
                 // Plain attribute reference: SET a = b  or  SET a = #alias
                 String refAttr = resolveAttributeName(valuePart, exprAttrNames);
-                JsonNode refValue = item.get(refAttr);
-                if (refValue != null) {
-                    item.set(attrName, refValue);
-                }
+                resolvedValue = item.get(refAttr);
+            }
+
+            if (resolvedValue != null) {
+                setNestedAttribute(item, resolvedPath, resolvedValue);
             }
 
             clause = rest;
@@ -970,8 +967,8 @@ public class DynamoDbService {
                 }
             }
 
-            String attrName = resolveAttributeName(attrPart, exprAttrNames);
-            item.remove(attrName);
+            String[] resolvedPath = resolveUpdatePath(attrPart, exprAttrNames);
+            removeNestedAttribute(item, resolvedPath);
         }
         return clause;
     }
@@ -1018,6 +1015,70 @@ public class DynamoDbService {
             }
         }
         return nameOrPlaceholder;
+    }
+
+    /**
+     * Resolves a dotted update path like "#f10.e49h4yn" or "info.nested" into an array of
+     * resolved segment names. Each segment that starts with '#' is resolved via exprAttrNames.
+     */
+    private String[] resolveUpdatePath(String path, JsonNode exprAttrNames) {
+        String[] segments = path.split("\\.");
+        String[] resolved = new String[segments.length];
+        for (int i = 0; i < segments.length; i++) {
+            resolved[i] = resolveAttributeName(segments[i].trim(), exprAttrNames);
+        }
+        return resolved;
+    }
+
+    /**
+     * Sets a value at a nested path in an item. For single-segment paths, sets a top-level
+     * attribute. For multi-segment paths, navigates/creates DynamoDB Map nodes ({"M": {...}}).
+     */
+    private void setNestedAttribute(ObjectNode item, String[] path, JsonNode value) {
+        if (path.length == 1) {
+            item.set(path[0], value);
+            return;
+        }
+        // Navigate to the parent map, creating intermediate {"M": {}} nodes as needed
+        ObjectNode current = item;
+        for (int i = 0; i < path.length - 1; i++) {
+            JsonNode child = current.get(path[i]);
+            if (child != null && child.has("M")) {
+                current = (ObjectNode) child.get("M");
+            } else if (child != null && child.isObject() && !child.has("S") && !child.has("N") && !child.has("BOOL")) {
+                // Not a typed DynamoDB value, treat as a plain map
+                current = (ObjectNode) child;
+            } else {
+                // Create a new map node
+                ObjectNode mapContent = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                ObjectNode mapWrapper = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                mapWrapper.set("M", mapContent);
+                current.set(path[i], mapWrapper);
+                current = mapContent;
+            }
+        }
+        current.set(path[path.length - 1], value);
+    }
+
+    /**
+     * Removes a value at a nested path in an item. For single-segment paths, removes a
+     * top-level attribute. For multi-segment paths, navigates into DynamoDB Map nodes.
+     */
+    private void removeNestedAttribute(ObjectNode item, String[] path) {
+        if (path.length == 1) {
+            item.remove(path[0]);
+            return;
+        }
+        ObjectNode current = item;
+        for (int i = 0; i < path.length - 1; i++) {
+            JsonNode child = current.get(path[i]);
+            if (child != null && child.has("M")) {
+                current = (ObjectNode) child.get("M");
+            } else {
+                return; // path doesn't exist, nothing to remove
+            }
+        }
+        current.remove(path[path.length - 1]);
     }
 
     private int findNextComma(String s) {
