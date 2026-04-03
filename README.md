@@ -11,7 +11,7 @@
   <a href="https://github.com/hectorvent/floci/stargazers"><img src="https://img.shields.io/github/stars/hectorvent/floci?style=flat" alt="GitHub Stars"></a>
   <a href="https://github.com/hectorvent/floci/graphs/contributors"><img src="https://img.shields.io/github/contributors/hectorvent/floci" alt="GitHub Contributors"></a>
   <a href="https://join.slack.com/t/floci/shared_invite/zt-3tjn02s3q-A00kEjJ1cZxsg_imTfy6Cw"><img src="https://img.shields.io/badge/Slack-Join%20the%20community-4A154B?logo=slack&logoColor=white" alt="Join Floci on Slack"></a>
-  
+
 </p>
 
 <p align="center">
@@ -223,15 +223,15 @@ The repository also includes compatibility validation for infrastructure tooling
 
 All settings are overridable via environment variables (`FLOCI_` prefix).
 
-| Variable | Default | Description                                             |
-|---|---|---------------------------------------------------------|
-| `QUARKUS_HTTP_PORT` | `4566` | HTTP port                                               |
-| `FLOCI_DEFAULT_REGION` | `us-east-1` | Default AWS region                                      |
-| `FLOCI_DEFAULT_ACCOUNT_ID` | `000000000000` | Default AWS account ID                                  |
-| `FLOCI_BASE_URL` | `http://localhost:4566` | Base URL used in API responses (e.g. SQS QueueUrl)      |
+| Variable | Default | Description |
+|---|---|---|
+| `QUARKUS_HTTP_PORT` | `4566` | HTTP port |
+| `FLOCI_DEFAULT_REGION` | `us-east-1` | Default AWS region |
+| `FLOCI_DEFAULT_ACCOUNT_ID` | `000000000000` | Default AWS account ID |
+| `FLOCI_BASE_URL` | `http://localhost:4566` | Base URL used in API responses (e.g. SQS QueueUrl) |
 | `FLOCI_HOSTNAME` | *(unset)* | Override hostname in response URLs (for Docker Compose) |
-| `FLOCI_STORAGE_MODE` | `memory` | `memory` · `persistent` · `hybrid` · `wal`              |
-| `FLOCI_STORAGE_PERSISTENT_PATH` | `./data` | Data directory                                          |
+| `FLOCI_STORAGE_MODE` | `memory` | `memory` · `persistent` · `hybrid` · `wal` |
+| `FLOCI_STORAGE_PERSISTENT_PATH` | `./data` | Data directory |
 | `FLOCI_ECR_BASE_URI` | `public.ecr.aws` | AWS ECR Base URI to pull container images (e.g. Lambda) |
 
 → Full reference: [configuration docs](https://hectorvent.dev/floci/configuration/application-yml/)
