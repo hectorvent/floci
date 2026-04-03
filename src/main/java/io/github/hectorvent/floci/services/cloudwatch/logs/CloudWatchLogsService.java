@@ -272,7 +272,7 @@ public class CloudWatchLogsService {
 
     public LogEventsResult getLogEvents(String groupName, String streamName,
                                         Long startTime, Long endTime,
-                                        int limit, boolean startFromHead, String region) {
+                                        int limit, boolean startFromHead, String nextToken, String region) {
         int maxEvents = Math.min(limit > 0 ? limit : Integer.MAX_VALUE,
                 maxEventsPerQuery);
 
@@ -285,16 +285,36 @@ public class CloudWatchLogsService {
                         && (endTime == null || e.getTimestamp() <= endTime))
                 .toList();
 
-        List<LogEvent> page;
-        if (!startFromHead && filtered.size() > maxEvents) {
-            page = filtered.subList(filtered.size() - maxEvents, filtered.size());
+        int total = filtered.size();
+        int pageStart;
+        int pageEnd;
+
+        if (nextToken != null && nextToken.startsWith("f/")) {
+            int offset = parseTokenIndex(nextToken, 2);
+            pageStart = Math.min(offset, total);
+            pageEnd = Math.min(pageStart + maxEvents, total);
+        } else if (nextToken != null && nextToken.startsWith("b/")) {
+            int end = parseTokenIndex(nextToken, 2);
+            pageEnd = Math.min(end, total);
+            pageStart = Math.max(pageEnd - maxEvents, 0);
+        } else if (!startFromHead) {
+            pageEnd = total;
+            pageStart = Math.max(total - maxEvents, 0);
         } else {
-            page = filtered.size() > maxEvents ? filtered.subList(0, maxEvents) : filtered;
+            pageStart = 0;
+            pageEnd = Math.min(maxEvents, total);
         }
 
-        String forwardToken = "f/" + UUID.randomUUID();
-        String backwardToken = "b/" + UUID.randomUUID();
-        return new LogEventsResult(page, forwardToken, backwardToken);
+        List<LogEvent> page = filtered.subList(pageStart, pageEnd);
+        return new LogEventsResult(page, "f/" + pageEnd, "b/" + pageStart);
+    }
+
+    private int parseTokenIndex(String token, int prefixLen) {
+        try {
+            return Integer.parseInt(token.substring(prefixLen));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     public record FilteredLogEventsResult(List<LogEvent> events, String nextToken) {}

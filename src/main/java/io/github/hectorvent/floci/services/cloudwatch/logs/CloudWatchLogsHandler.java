@@ -153,9 +153,10 @@ public class CloudWatchLogsHandler {
         Long endTime = request.has("endTime") ? request.path("endTime").asLong() : null;
         int limit = request.path("limit").asInt(0);
         boolean startFromHead = request.path("startFromHead").asBoolean(false);
+        String nextToken = request.has("nextToken") ? request.path("nextToken").asText(null) : null;
 
         CloudWatchLogsService.LogEventsResult result =
-                logsService.getLogEvents(groupName, streamName, startTime, endTime, limit, startFromHead, region);
+                logsService.getLogEvents(groupName, streamName, startTime, endTime, limit, startFromHead, nextToken, region);
 
         ObjectNode response = objectMapper.createObjectNode();
         response.set("events", buildEventsArray(result.events()));

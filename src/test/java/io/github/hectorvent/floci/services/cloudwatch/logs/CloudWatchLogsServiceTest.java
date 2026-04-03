@@ -166,7 +166,7 @@ class CloudWatchLogsServiceTest {
         ), REGION);
 
         CloudWatchLogsService.LogEventsResult result = service.getLogEvents(
-                "/app/logs", "stream-1", null, null, 100, true, REGION);
+                "/app/logs", "stream-1", null, null, 100, true, null, REGION);
         assertEquals(2, result.events().size());
         assertEquals("first", result.events().get(0).getMessage());
         assertEquals("second", result.events().get(1).getMessage());
@@ -184,7 +184,7 @@ class CloudWatchLogsServiceTest {
         ), REGION);
 
         CloudWatchLogsService.LogEventsResult result = service.getLogEvents(
-                "/app/logs", "stream-1", base + 5000, null, 100, true, REGION);
+                "/app/logs", "stream-1", base + 5000, null, 100, true, null, REGION);
         assertEquals(1, result.events().size());
         assertEquals("new", result.events().getFirst().getMessage());
     }
@@ -260,7 +260,95 @@ class CloudWatchLogsServiceTest {
         ), REGION);
 
         CloudWatchLogsService.LogEventsResult result = limitedService.getLogEvents(
-                "/app/logs", "stream-1", null, null, 100, true, REGION);
+                "/app/logs", "stream-1", null, null, 100, true, null, REGION);
         assertEquals(2, result.events().size());
+    }
+
+    // ──────────────────────────── GetLogEvents pagination (issue #90) ────────────────────────────
+
+    private void putEvents(String group, String stream, long baseTs, int count) {
+        List<Map<String, Object>> events = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            events.add(Map.of("timestamp", baseTs + i, "message", "msg-" + i));
+        }
+        service.putLogEvents(group, stream, events, REGION);
+    }
+
+    @Test
+    void getLogEventsInitialTokensEncodePosition() {
+        service.createLogGroup("/app/logs", null, null, REGION);
+        service.createLogStream("/app/logs", "stream-1", REGION);
+        putEvents("/app/logs", "stream-1", System.currentTimeMillis(), 5);
+
+        CloudWatchLogsService.LogEventsResult result =
+                service.getLogEvents("/app/logs", "stream-1", null, null, 100, true, null, REGION);
+
+        assertEquals(5, result.events().size());
+        assertEquals("f/5", result.nextForwardToken());
+        assertEquals("b/0", result.nextBackwardToken());
+    }
+
+    @Test
+    void getLogEventsForwardPaginationContinues() {
+        service.createLogGroup("/app/logs", null, null, REGION);
+        service.createLogStream("/app/logs", "stream-1", REGION);
+        long base = System.currentTimeMillis();
+        putEvents("/app/logs", "stream-1", base, 5);
+
+        CloudWatchLogsService.LogEventsResult page1 =
+                service.getLogEvents("/app/logs", "stream-1", null, null, 3, true, null, REGION);
+        assertEquals(3, page1.events().size());
+        assertEquals("msg-0", page1.events().get(0).getMessage());
+        assertEquals("f/3", page1.nextForwardToken());
+
+        CloudWatchLogsService.LogEventsResult page2 =
+                service.getLogEvents("/app/logs", "stream-1", null, null, 3, true, page1.nextForwardToken(), REGION);
+        assertEquals(2, page2.events().size());
+        assertEquals("msg-3", page2.events().get(0).getMessage());
+        assertEquals("f/5", page2.nextForwardToken());
+    }
+
+    @Test
+    void getLogEventsAtEndOfStreamEchosToken() {
+        service.createLogGroup("/app/logs", null, null, REGION);
+        service.createLogStream("/app/logs", "stream-1", REGION);
+        putEvents("/app/logs", "stream-1", System.currentTimeMillis(), 3);
+
+        // Simulate the SDK sending back the last returned forward token
+        CloudWatchLogsService.LogEventsResult atEnd =
+                service.getLogEvents("/app/logs", "stream-1", null, null, 10, true, "f/3", REGION);
+
+        assertEquals(0, atEnd.events().size());
+        assertEquals("f/3", atEnd.nextForwardToken(), "token must echo back to signal end of stream");
+    }
+
+    @Test
+    void getLogEventsStartFromTailWithNoToken() {
+        service.createLogGroup("/app/logs", null, null, REGION);
+        service.createLogStream("/app/logs", "stream-1", REGION);
+        putEvents("/app/logs", "stream-1", System.currentTimeMillis(), 5);
+
+        CloudWatchLogsService.LogEventsResult result =
+                service.getLogEvents("/app/logs", "stream-1", null, null, 3, false, null, REGION);
+
+        assertEquals(3, result.events().size());
+        assertEquals("msg-2", result.events().get(0).getMessage());
+        assertEquals("msg-4", result.events().get(2).getMessage());
+        assertEquals("b/2", result.nextBackwardToken());
+        assertEquals("f/5", result.nextForwardToken());
+    }
+
+    @Test
+    void getLogEventsBackwardPaginationEchosTokenAtStart() {
+        service.createLogGroup("/app/logs", null, null, REGION);
+        service.createLogStream("/app/logs", "stream-1", REGION);
+        putEvents("/app/logs", "stream-1", System.currentTimeMillis(), 3);
+
+        // b/0 means we are already at the start — echoed back
+        CloudWatchLogsService.LogEventsResult atStart =
+                service.getLogEvents("/app/logs", "stream-1", null, null, 10, true, "b/0", REGION);
+
+        assertEquals(0, atStart.events().size());
+        assertEquals("b/0", atStart.nextBackwardToken(), "token must echo back to signal start of stream");
     }
 }
