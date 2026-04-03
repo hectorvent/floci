@@ -502,6 +502,114 @@ class DynamoDbIntegrationTest {
             .body("__type", equalTo("ResourceNotFoundException"));
     }
 
+    // --- ConsumedCapacity tests ---
+    // These use a dedicated table to avoid ordering dependencies.
+
+    @Test
+    void getItem_withReturnConsumedCapacityTotal_returnsCapacity() {
+        // Create a dedicated table
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "CapacityTest",
+                    "KeySchema": [{"AttributeName": "id", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "id", "AttributeType": "S"}],
+                    "ProvisionedThroughput": {"ReadCapacityUnits": 5, "WriteCapacityUnits": 5}
+                }
+                """)
+        .when().post("/").then().statusCode(200);
+
+        // Put an item
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "CapacityTest", "Item": {"id": {"S": "a"}, "val": {"S": "hello"}}}
+                """)
+        .when().post("/").then().statusCode(200);
+
+        // GetItem with TOTAL
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "CapacityTest",
+                    "Key": {"id": {"S": "a"}},
+                    "ReturnConsumedCapacity": "TOTAL"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.val.S", equalTo("hello"))
+            .body("ConsumedCapacity.TableName", equalTo("CapacityTest"))
+            .body("ConsumedCapacity.CapacityUnits", notNullValue());
+    }
+
+    @Test
+    void getItem_withoutReturnConsumedCapacity_omitsCapacity() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "CapacityTest",
+                    "Key": {"id": {"S": "a"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("ConsumedCapacity", nullValue());
+    }
+
+    @Test
+    void putItem_withReturnConsumedCapacityTotal_returnsCapacity() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "CapacityTest",
+                    "Item": {"id": {"S": "b"}, "val": {"S": "world"}},
+                    "ReturnConsumedCapacity": "TOTAL"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("ConsumedCapacity.TableName", equalTo("CapacityTest"))
+            .body("ConsumedCapacity.CapacityUnits", notNullValue());
+    }
+
+    @Test
+    void query_withReturnConsumedCapacityIndexes_returnsTableBreakdown() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Query")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "CapacityTest",
+                    "KeyConditionExpression": "id = :id",
+                    "ExpressionAttributeValues": {":id": {"S": "a"}},
+                    "ReturnConsumedCapacity": "INDEXES"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("ConsumedCapacity.TableName", equalTo("CapacityTest"))
+            .body("ConsumedCapacity.CapacityUnits", notNullValue())
+            .body("ConsumedCapacity.Table.CapacityUnits", notNullValue());
+    }
+
     @Test
     void unsupportedOperation() {
         given()
