@@ -27,6 +27,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -182,6 +183,14 @@ public class SnsService {
         if (protocol == null || protocol.isBlank()) {
             throw new AwsException("InvalidParameter", "Protocol is required.", 400);
         }
+
+        for (Subscription existing : subscriptionsByTopic(topicArn, region)) {
+            if (protocol.equals(existing.getProtocol())
+                    && Objects.equals(endpoint, existing.getEndpoint())) {
+                return existing;
+            }
+        }
+
         String subscriptionArn = topicArn + ":" + UUID.randomUUID().toString();
         Subscription subscription = new Subscription(subscriptionArn, topicArn, protocol, endpoint,
                 regionResolver.getAccountId());

@@ -109,6 +109,27 @@ class SnsServiceTest {
     }
 
     @Test
+    void subscribe_idempotent() {
+        Topic topic = snsService.createTopic("my-topic", null, null, REGION);
+        Subscription sub1 = snsService.subscribe(topic.getTopicArn(), "sqs",
+                "arn:aws:sqs:us-east-1:000000000000:my-queue", REGION);
+        Subscription sub2 = snsService.subscribe(topic.getTopicArn(), "sqs",
+                "arn:aws:sqs:us-east-1:000000000000:my-queue", REGION);
+        assertEquals(sub1.getSubscriptionArn(), sub2.getSubscriptionArn());
+        assertEquals(1, snsService.listSubscriptions(REGION).size());
+    }
+
+    @Test
+    void subscribe_differentEndpoints_createsSeparateSubscriptions() {
+        Topic topic = snsService.createTopic("my-topic", null, null, REGION);
+        snsService.subscribe(topic.getTopicArn(), "sqs",
+                "arn:aws:sqs:us-east-1:000000000000:queue-1", REGION);
+        snsService.subscribe(topic.getTopicArn(), "sqs",
+                "arn:aws:sqs:us-east-1:000000000000:queue-2", REGION);
+        assertEquals(2, snsService.listSubscriptions(REGION).size());
+    }
+
+    @Test
     void subscribe_throwsForMissingTopic() {
         assertThrows(AwsException.class,
             () -> snsService.subscribe("arn:aws:sns:us-east-1:000000000000:nonexistent",
