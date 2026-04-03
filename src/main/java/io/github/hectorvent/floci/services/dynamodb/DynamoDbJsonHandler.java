@@ -226,6 +226,7 @@ public class DynamoDbJsonHandler {
         if ("ALL_OLD" .equals(returnValues) && oldItem != null) {
             response.set("Attributes", oldItem);
         }
+        addConsumedCapacity(response, request, tableName, 1, true);
         return Response.ok(response).build();
     }
 
@@ -239,6 +240,7 @@ public class DynamoDbJsonHandler {
         if (item != null) {
             response.set("Item", item);
         }
+        addConsumedCapacity(response, request, tableName, item != null ? 1 : 0, false);
         return Response.ok(response).build();
     }
 
@@ -260,6 +262,7 @@ public class DynamoDbJsonHandler {
         if ("ALL_OLD" .equals(returnValues) && oldItem != null) {
             response.set("Attributes", oldItem);
         }
+        addConsumedCapacity(response, request, tableName, 1, true);
         return Response.ok(response).build();
     }
 
@@ -289,6 +292,7 @@ public class DynamoDbJsonHandler {
         } else if ("ALL_OLD" .equals(returnValues) && result.oldItem() != null) {
             response.set("Attributes", result.oldItem());
         }
+        addConsumedCapacity(response, request, tableName, 1, true);
         return Response.ok(response).build();
     }
 
@@ -323,6 +327,7 @@ public class DynamoDbJsonHandler {
         if (result.lastEvaluatedKey() != null) {
             response.set("LastEvaluatedKey", result.lastEvaluatedKey());
         }
+        addConsumedCapacity(response, request, tableName, result.items().size(), false);
         return Response.ok(response).build();
     }
 
@@ -352,6 +357,7 @@ public class DynamoDbJsonHandler {
         if (result.lastEvaluatedKey() != null) {
             response.set("LastEvaluatedKey", result.lastEvaluatedKey());
         }
+        addConsumedCapacity(response, request, tableName, result.items().size(), false);
         return Response.ok(response).build();
     }
 
@@ -376,6 +382,7 @@ public class DynamoDbJsonHandler {
 
         ObjectNode response = objectMapper.createObjectNode();
         response.set("UnprocessedItems", objectMapper.createObjectNode());
+        addBatchConsumedCapacity(response, request, items, true);
         return Response.ok(response).build();
     }
 
@@ -405,6 +412,7 @@ public class DynamoDbJsonHandler {
         }
         response.set("Responses", responses);
         response.set("UnprocessedKeys", objectMapper.createObjectNode());
+        addBatchConsumedCapacity(response, request, items, false);
         return Response.ok(response).build();
     }
 
@@ -741,6 +749,64 @@ public class DynamoDbJsonHandler {
         }
         response.set("KinesisDataStreamDestinations", destinations);
         return Response.ok(response).build();
+    }
+
+    /**
+     * Builds a ConsumedCapacity node if the request includes ReturnConsumedCapacity.
+     * Uses simple estimates: 0.5 RCU per item read, 1.0 WCU per item written.
+     */
+    private void addConsumedCapacity(ObjectNode response, JsonNode request, String tableName,
+                                      int itemCount, boolean isWrite) {
+        String returnCC = request.path("ReturnConsumedCapacity").asText("NONE");
+        if ("NONE".equals(returnCC)) return;
+
+        double cu = isWrite ? Math.max(1.0, itemCount) : Math.max(0.5, itemCount * 0.5);
+
+        ObjectNode cc = objectMapper.createObjectNode();
+        cc.put("TableName", tableName);
+        cc.put("CapacityUnits", cu);
+
+        if ("INDEXES".equals(returnCC)) {
+            ObjectNode tableCap = objectMapper.createObjectNode();
+            String indexName = request.path("IndexName").asText(null);
+            if (indexName != null) {
+                tableCap.put("CapacityUnits", 0.0);
+                cc.set("Table", tableCap);
+                ObjectNode gsiCaps = objectMapper.createObjectNode();
+                ObjectNode indexCap = objectMapper.createObjectNode();
+                indexCap.put("CapacityUnits", cu);
+                gsiCaps.set(indexName, indexCap);
+                cc.set("GlobalSecondaryIndexes", gsiCaps);
+            } else {
+                tableCap.put("CapacityUnits", cu);
+                cc.set("Table", tableCap);
+            }
+        }
+
+        response.set("ConsumedCapacity", cc);
+    }
+
+    /**
+     * Builds a list-style ConsumedCapacity for batch operations.
+     */
+    private void addBatchConsumedCapacity(ObjectNode response, JsonNode request,
+                                           Map<String, ?> tableItems, boolean isWrite) {
+        String returnCC = request.path("ReturnConsumedCapacity").asText("NONE");
+        if ("NONE".equals(returnCC)) return;
+
+        ArrayNode ccArray = objectMapper.createArrayNode();
+        for (String tableName : tableItems.keySet()) {
+            ObjectNode cc = objectMapper.createObjectNode();
+            cc.put("TableName", tableName);
+            cc.put("CapacityUnits", isWrite ? 1.0 : 0.5);
+            if ("INDEXES".equals(returnCC)) {
+                ObjectNode tableCap = objectMapper.createObjectNode();
+                tableCap.put("CapacityUnits", isWrite ? 1.0 : 0.5);
+                cc.set("Table", tableCap);
+            }
+            ccArray.add(cc);
+        }
+        response.set("ConsumedCapacity", ccArray);
     }
 
     private ObjectNode tableToNode(TableDefinition table) {
