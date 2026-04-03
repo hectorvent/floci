@@ -225,6 +225,11 @@ public class CognitoService {
             user.getAttributes().putAll(attributes);
         }
 
+        // Ensure sub attribute is present
+        if (!user.getAttributes().containsKey("sub")) {
+            user.getAttributes().put("sub", UUID.randomUUID().toString());
+        }
+
         if (temporaryPassword != null && !temporaryPassword.isEmpty()) {
             user.setPasswordHash(hashPassword(temporaryPassword));
             user.setTemporaryPassword(true);
@@ -234,6 +239,11 @@ public class CognitoService {
         userStore.put(key, user);
         LOG.infov("Created user {0} in pool {1}", username, userPoolId);
         return user;
+    }
+
+    public void adminUserGlobalSignOut(String userPoolId, String username) {
+        adminGetUser(userPoolId, username);
+        LOG.infov("AdminUserGlobalSignOut stub: user {0} in pool {1} signed out globally", username, userPoolId);
     }
 
     public CognitoUser adminGetUser(String userPoolId, String username) {
@@ -384,6 +394,11 @@ public class CognitoService {
         user.setUserStatus("UNCONFIRMED");
         if (attributes != null) {
             user.getAttributes().putAll(attributes);
+        }
+
+        // Ensure sub attribute is present
+        if (!user.getAttributes().containsKey("sub")) {
+            user.getAttributes().put("sub", UUID.randomUUID().toString());
         }
 
         userStore.put(key, user);
@@ -639,11 +654,12 @@ public class CognitoService {
                     .collect(Collectors.joining(",", "[", "]"));
             groupsFragment = ",\"cognito:groups\":" + groupsJson;
         }
+        String sub = user.getAttributes().getOrDefault("sub", user.getUsername());
         String payloadJson = String.format(
                 "{\"sub\":\"%s\",\"event_id\":\"%s\",\"token_use\":\"%s\",\"auth_time\":%d," +
                 "\"iss\":\"%s\",\"exp\":%d,\"iat\":%d," +
                 "\"username\":\"%s\",\"email\":\"%s\",\"cognito:username\":\"%s\"%s}",
-                UUID.randomUUID(), UUID.randomUUID(), type, now,
+                escapeJson(sub), UUID.randomUUID(), type, now,
                 escapeJson(getIssuer(pool.getId())), now + 3600, now,
                 user.getUsername(), email, user.getUsername(), groupsFragment
         );

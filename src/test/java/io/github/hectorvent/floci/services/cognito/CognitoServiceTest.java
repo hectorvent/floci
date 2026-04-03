@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -260,6 +261,110 @@ class CognitoServiceTest {
                 "JWT should contain cognito:groups claim");
         assertTrue(payloadJson.contains("group\\\"with\\\\special\\nchars"),
                 "Group name should be properly JSON-escaped in JWT payload");
+    }
+
+    // =========================================================================
+    // Issue #68 — sub attribute and AdminUserGlobalSignOut
+    // =========================================================================
+
+    @Test
+    void adminCreateUserAutoGeneratesSub() {
+        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        CognitoUser user = service.adminCreateUser(pool.getId(), "bob",
+                Map.of("email", "bob@example.com"), null);
+
+        assertTrue(user.getAttributes().containsKey("sub"),
+                "adminCreateUser should auto-generate a sub attribute");
+        assertFalse(user.getAttributes().get("sub").isBlank());
+    }
+
+    @Test
+    void adminCreateUserPreservesExplicitSub() {
+        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        String explicitSub = "aaaaaaaa-1111-2222-3333-444444444444";
+        CognitoUser user = service.adminCreateUser(pool.getId(), "bob",
+                Map.of("email", "bob@example.com", "sub", explicitSub), null);
+
+        assertEquals(explicitSub, user.getAttributes().get("sub"),
+                "adminCreateUser should not overwrite an explicitly provided sub");
+    }
+
+    @Test
+    void signUpAutoGeneratesSub() {
+        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPoolClient client = service.createUserPoolClient(pool.getId(), "test-client",
+                false, false, List.of(), List.of());
+
+        CognitoUser user = service.signUp(client.getClientId(),
+                "carol", "Pass1234!", Map.of("email", "carol@example.com"));
+
+        assertTrue(user.getAttributes().containsKey("sub"),
+                "signUp should auto-generate a sub attribute");
+        assertFalse(user.getAttributes().get("sub").isBlank());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void jwtSubMatchesStoredSubAttribute() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(pool.getId(), "test-client",
+                false, false, List.of(), List.of());
+
+        String storedSub = service.adminGetUser(pool.getId(), "alice")
+                .getAttributes().get("sub");
+        assertNotNull(storedSub, "user should have a sub attribute after creation");
+
+        Map<String, Object> authResult = service.initiateAuth(
+                client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+
+        Map<String, Object> auth = (Map<String, Object>) authResult.get("AuthenticationResult");
+        String token = (String) auth.get("AccessToken");
+        String payloadJson = new String(
+                Base64.getUrlDecoder().decode(token.split("\\.")[1]), StandardCharsets.UTF_8);
+
+        assertTrue(payloadJson.contains("\"sub\":\"" + storedSub + "\""),
+                "JWT sub claim must match the stored sub attribute, not be randomly generated");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void jwtSubIsConsistentAcrossMultipleLogins() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(pool.getId(), "test-client",
+                false, false, List.of(), List.of());
+
+        Function<String, String> extractSub = token -> {
+            String payload = new String(Base64.getUrlDecoder().decode(token.split("\\.")[1]), StandardCharsets.UTF_8);
+            int start = payload.indexOf("\"sub\":\"") + 7;
+            int end = payload.indexOf("\"", start);
+            return payload.substring(start, end);
+        };
+
+        Map<String, Object> auth1 = (Map<String, Object>)
+                ((Map<String, Object>) service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                        Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"))).get("AuthenticationResult");
+        Map<String, Object> auth2 = (Map<String, Object>)
+                ((Map<String, Object>) service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                        Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"))).get("AuthenticationResult");
+
+        String sub1 = extractSub.apply((String) auth1.get("AccessToken"));
+        String sub2 = extractSub.apply((String) auth2.get("AccessToken"));
+
+        assertEquals(sub1, sub2, "JWT sub claim must be identical across multiple logins");
+    }
+
+    @Test
+    void adminUserGlobalSignOutSucceedsForExistingUser() {
+        UserPool pool = createPoolAndUser();
+        assertDoesNotThrow(() -> service.adminUserGlobalSignOut(pool.getId(), "alice"));
+    }
+
+    @Test
+    void adminUserGlobalSignOutThrowsForNonexistentUser() {
+        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        assertThrows(AwsException.class,
+                () -> service.adminUserGlobalSignOut(pool.getId(), "ghost"));
     }
 
     // =========================================================================
