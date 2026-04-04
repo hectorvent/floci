@@ -183,7 +183,7 @@ public class ApiGatewayExecuteController {
                     matched, integration, headers, uriInfo, body);
             case "AWS" -> invokeAwsIntegration(region, httpMethod, path, proxy, stageName,
                     matched, integration, headers, uriInfo, body);
-            case "MOCK" -> invokeMock(integration);
+            case "MOCK" -> invokeMock(region, httpMethod, stageName, matched, integration, headers, uriInfo, body);
             default -> Response.status(500)
                     .entity(jsonMessage("Unsupported integration type: " + integration.getType()))
                     .type(MediaType.APPLICATION_JSON).build();
@@ -780,18 +780,56 @@ public class ApiGatewayExecuteController {
 
     // ──────────────────────────── MOCK ────────────────────────────
 
-    private Response invokeMock(Integration integration) {
+    private Response invokeMock(String region, String httpMethod, String stageName,
+                                ApiGatewayResource resource, Integration integration,
+                                HttpHeaders headers, UriInfo uriInfo, byte[] body) {
         // Use the "200" integration response if present, else return empty 200
         IntegrationResponse ir = integration.getIntegrationResponses().get("200");
         if (ir == null) {
             return Response.ok().build();
         }
+
         String template = ir.responseTemplates() != null
                 ? ir.responseTemplates().getOrDefault("application/json", "") : "";
-        return Response.status(Integer.parseInt(ir.statusCode()))
-                .entity(template)
-                .type(MediaType.APPLICATION_JSON)
-                .build();
+
+        if (template.isEmpty()) {
+            return Response.status(Integer.parseInt(ir.statusCode()))
+                    .type(MediaType.APPLICATION_JSON)
+                    .build();
+        }
+
+        // Evaluate the response template through VTL (supports $context.responseOverride etc.)
+        String requestId = UUID.randomUUID().toString();
+        String bodyStr = body != null && body.length > 0 ? new String(body) : null;
+
+        Map<String, String> headerMap = new HashMap<>();
+        for (Map.Entry<String, List<String>> e : headers.getRequestHeaders().entrySet()) {
+            if (!e.getValue().isEmpty()) headerMap.put(e.getKey(), e.getValue().get(0));
+        }
+        Map<String, String> queryMap = new HashMap<>();
+        for (Map.Entry<String, List<String>> e : uriInfo.getQueryParameters().entrySet()) {
+            if (!e.getValue().isEmpty()) queryMap.put(e.getKey(), e.getValue().get(0));
+        }
+
+        VtlTemplateEngine.VtlContext vtlCtx = new VtlTemplateEngine.VtlContext(
+                bodyStr, headerMap, queryMap, Map.of(), stageName, httpMethod,
+                resource.getPath(), requestId, "000000000000", null);
+
+        VtlTemplateEngine.EvaluateResult result = vtlEngine.evaluate(template, vtlCtx);
+
+        int status = result.statusOverride() != null
+                ? result.statusOverride()
+                : Integer.parseInt(ir.statusCode());
+
+        Response.ResponseBuilder rb = Response.status(status)
+                .entity(result.body())
+                .type(MediaType.APPLICATION_JSON);
+
+        for (Map.Entry<String, String> hdr : result.headerOverrides().entrySet()) {
+            rb.header(hdr.getKey(), hdr.getValue());
+        }
+
+        return rb.build();
     }
 
     // ──────────────────────────── API Gateway v2 dispatch ────────────────────────────
