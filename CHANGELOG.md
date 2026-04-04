@@ -1,3 +1,52 @@
+# [1.2.0](https://github.com/hectorvent/floci/compare/1.1.0...1.2.0) (2026-04-04)
+
+
+### Bug Fixes
+
+* adding aws-cli in its own floci image hectorvent/floci:x.y.z-aws ([#151](https://github.com/hectorvent/floci/issues/151)) ([aba9593](https://github.com/hectorvent/floci/commit/aba95933cfa774d6397dca9e47f5d6411249c393))
+* **cognito:** auto-generate sub, fix JWT sub claim, add AdminUserGlobalSignOut ([#68](https://github.com/hectorvent/floci/issues/68)) ([#183](https://github.com/hectorvent/floci/issues/183)) ([9d6181c](https://github.com/hectorvent/floci/commit/9d6181c5479a856064892da3ce39339a6bd8f4ca))
+* **cognito:** enrich User Pool responses and implement MfaConfig stub ([#198](https://github.com/hectorvent/floci/issues/198)) ([441d9f1](https://github.com/hectorvent/floci/commit/441d9f179ec1430d7b7d187ac66b7cdc8741c37e))
+* **Cognito:** OAuth/OIDC parity for RS256/JWKS, /oauth2/token, and OAuth app-client settings ([#97](https://github.com/hectorvent/floci/issues/97)) ([a4af506](https://github.com/hectorvent/floci/commit/a4af506c1509d8673dc2b2d9bfd9b8d5e1784aa7))
+* **core:** globally inject aws request-id headers for sdk compatibility ([#146](https://github.com/hectorvent/floci/issues/146)) ([35e129d](https://github.com/hectorvent/floci/commit/35e129d02482bfd2a7b18ca30e8939b16c2a10cc)), closes [#145](https://github.com/hectorvent/floci/issues/145)
+* defer startup hooks until HTTP server is ready ([#157](https://github.com/hectorvent/floci/issues/157)) ([#159](https://github.com/hectorvent/floci/issues/159)) ([59c24c5](https://github.com/hectorvent/floci/commit/59c24c5e4e44f48b225c1d2fc99aaa0fe3f45957))
+* **dynamodb:** fix FilterExpression for BOOL types, List/Set contains, and nested attribute paths ([#137](https://github.com/hectorvent/floci/issues/137)) ([453555a](https://github.com/hectorvent/floci/commit/453555a12474a9429dbaaf7b91026570c47c4fac)), closes [#126](https://github.com/hectorvent/floci/issues/126)
+* **lambda:** copy function code to /var/runtime for provided runtimes ([#114](https://github.com/hectorvent/floci/issues/114)) ([a5ad6cf](https://github.com/hectorvent/floci/commit/a5ad6cf7bc90339ba384d791bfd1ac22c7b1e6b3))
+* merge branch 'main' into release/1.x ([0105e36](https://github.com/hectorvent/floci/commit/0105e36d873cc751f064bf08ca34444f4d19095e))
+* polish HealthController ([#188](https://github.com/hectorvent/floci/issues/188)) ([084237d](https://github.com/hectorvent/floci/commit/084237ddf4ba2ea6b0f9de13241a85055c5fb007))
+* remove private modifier on injected field ([#186](https://github.com/hectorvent/floci/issues/186)) ([ebc0661](https://github.com/hectorvent/floci/commit/ebc06616e717f095007b0888cee7357151343e0b))
+* resolve CloudFormation Lambda Code.S3Key base64 decode error ([#62](https://github.com/hectorvent/floci/issues/62)) ([78be523](https://github.com/hectorvent/floci/commit/78be5232e212ffb05bba651c2c39573c762586b7))
+* resolve numeric ExpressionAttributeNames in DynamoDB expressions ([#192](https://github.com/hectorvent/floci/issues/192)) ([d93296a](https://github.com/hectorvent/floci/commit/d93296a7663414cdcb4cf20d0018e7ecabc987bf))
+* return stable cursor tokens in GetLogEvents to fix SDK pagination loop ([#90](https://github.com/hectorvent/floci/issues/90)) ([#184](https://github.com/hectorvent/floci/issues/184)) ([7354663](https://github.com/hectorvent/floci/commit/73546637ec0e7385ff19d28992beb47025e5db42))
+* **s3:** Evaluate S3 CORS against incoming HTTP Requests ([#131](https://github.com/hectorvent/floci/issues/131)) ([e78c833](https://github.com/hectorvent/floci/commit/e78c8337948c1c680a9596ab4b55d63d84b4c5c8))
+* **s3:** list part for multipart upload ([#164](https://github.com/hectorvent/floci/issues/164)) ([7253559](https://github.com/hectorvent/floci/commit/7253559207ed0d86f5a7b293e42fff7be5d080a2))
+* **s3:** persist Content-Encoding header on S3 objects ([#57](https://github.com/hectorvent/floci/issues/57)) ([ff2f68d](https://github.com/hectorvent/floci/commit/ff2f68d8ab20559494661fb14981c68812edbcd9))
+* **s3:** prevent S3VirtualHostFilter from hijacking non-S3 requests ([#199](https://github.com/hectorvent/floci/issues/199)) ([59cdc3f](https://github.com/hectorvent/floci/commit/59cdc3fea69bb42a44f53c094582961ca44f2e8c))
+* **s3:** resolve file/folder name collision on persistent filesystem ([#134](https://github.com/hectorvent/floci/issues/134)) ([020a546](https://github.com/hectorvent/floci/commit/020a54642d8863c3c94c7385d94aaaa37aa05b7a))
+* **s3:** return CommonPrefixes in ListObjects when delimiter is specified ([#133](https://github.com/hectorvent/floci/issues/133)) ([845ac85](https://github.com/hectorvent/floci/commit/845ac853632130b1835f6c35edfc0efc39cf32a1))
+* **secretsmanager:** return KmsKeyId in DescribeSecret and improve ListSecrets ([#195](https://github.com/hectorvent/floci/issues/195)) ([1e44f39](https://github.com/hectorvent/floci/commit/1e44f39c7c3f0d0ea89c1124dae318b8cc46d363))
+* **sns:** enforce FilterPolicy on message delivery ([#53](https://github.com/hectorvent/floci/issues/53)) ([2f875d4](https://github.com/hectorvent/floci/commit/2f875d41694ace585f00865e3b82987b40ae92a8)), closes [#49](https://github.com/hectorvent/floci/issues/49)
+* **sns:** honor RawMessageDelivery attribute for SQS subscriptions ([#54](https://github.com/hectorvent/floci/issues/54)) ([b762bec](https://github.com/hectorvent/floci/commit/b762becaea3795d2a6320e10dd290a84088e9b2b))
+* **sns:** pass messageDeduplicationId from FIFO topics to SQS FIFO queues ([#171](https://github.com/hectorvent/floci/issues/171)) ([4529823](https://github.com/hectorvent/floci/commit/452982355716f5ada53c1f8bdc67293bc2282963))
+* **sqs:** route queue URL path requests to SQS handler ([#153](https://github.com/hectorvent/floci/issues/153)) ([6bbc9d9](https://github.com/hectorvent/floci/commit/6bbc9d93755e5bbeb17ec6ee39319711f74f3ebb)), closes [#99](https://github.com/hectorvent/floci/issues/99) [#17](https://github.com/hectorvent/floci/issues/17)
+* **sqs:** support binary message attributes and fix MD5OfMessageAttributes ([#168](https://github.com/hectorvent/floci/issues/168)) ([5440ae8](https://github.com/hectorvent/floci/commit/5440ae8a558c18157bcf0699caf3855c36494912))
+* **sqs:** translate Query-protocol error codes to JSON __type equivalents ([#59](https://github.com/hectorvent/floci/issues/59)) ([7d6cf61](https://github.com/hectorvent/floci/commit/7d6cf6179deb642b1d3add2b806eeb5814e18280))
+* support DynamoDB Query BETWEEN and ScanIndexForward=false ([#160](https://github.com/hectorvent/floci/issues/160)) ([cf2c705](https://github.com/hectorvent/floci/commit/cf2c705b7d2e2f92956c8d7e5ffa96fbeb0dc302))
+* wrong method call in test ([665af53](https://github.com/hectorvent/floci/commit/665af531498c65bef5d5117ccc3ba57e92c5af3d))
+
+
+### Features
+
+* add support of Cloudformation mapping and Fn::FindInMap function ([#101](https://github.com/hectorvent/floci/issues/101)) ([eef6698](https://github.com/hectorvent/floci/commit/eef66983d90e1f3cee6aabdb3bc4e1205b68f83e))
+* **cloudwatch-logs:** add ListTagsForResource, TagResource, and UntagResource support ([#172](https://github.com/hectorvent/floci/issues/172)) ([835f8c6](https://github.com/hectorvent/floci/commit/835f8c6ff420691e3efe703d3c24380cbb245e37)), closes [#77](https://github.com/hectorvent/floci/issues/77)
+* **cognito:** add group management support ([#149](https://github.com/hectorvent/floci/issues/149)) ([75bf3c3](https://github.com/hectorvent/floci/commit/75bf3c3bdbe24a46d4a31c8b2fef687e80d64df8))
+* health endpoint ([#139](https://github.com/hectorvent/floci/issues/139)) ([fb42087](https://github.com/hectorvent/floci/commit/fb42087631dcd7980b6fa3706671f8044cb32c84))
+* implement UploadPartCopy for S3 multipart uploads ([#98](https://github.com/hectorvent/floci/issues/98)) ([d1b9a9c](https://github.com/hectorvent/floci/commit/d1b9a9ca6d8dd8df7235481ce00720ea0277ea59))
+* **lambda:** implement ListVersionsByFunction API ([#182](https://github.com/hectorvent/floci/issues/182)) ([#193](https://github.com/hectorvent/floci/issues/193)) ([ecf25d4](https://github.com/hectorvent/floci/commit/ecf25d47367524c7ef26d4b7691b472b10e9d345))
+* officially support Docker named volumes for Native images ([#155](https://github.com/hectorvent/floci/issues/155)) ([4fc9398](https://github.com/hectorvent/floci/commit/4fc9398df4a68b58f218102e0e032e4d9e5d48b1))
+* **s3:** support Filter rules in PutBucketNotificationConfiguration ([#178](https://github.com/hectorvent/floci/issues/178)) ([ef06fc3](https://github.com/hectorvent/floci/commit/ef06fc34933b6b043501ae706e842f127c19543b))
+* support GenerateSecretString and Description for AWS::SecretsManager::Secret in CloudFormation ([#176](https://github.com/hectorvent/floci/issues/176)) ([f994b95](https://github.com/hectorvent/floci/commit/f994b9545b02f6df7289d0f9e9da5dc2dfe23dc8))
+* support GSI and LSI in CloudFormation DynamoDB table provisioning ([#125](https://github.com/hectorvent/floci/issues/125)) ([48bee44](https://github.com/hectorvent/floci/commit/48bee44634dc9c665c15d8aaefac7378dd6c4970))
+
 # [1.1.0](https://github.com/hectorvent/floci/compare/1.0.11...1.1.0) (2026-03-31)
 
 
