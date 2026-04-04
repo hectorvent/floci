@@ -54,10 +54,6 @@ class JsonataEdgeCaseTest {
 
         Object result = expr.evaluate(null, frame);
 
-        // System.out.println("[Test 2] missing field result class: " + (result == null ? "null (Java null)" : result.getClass().getName()));
-        // System.out.println("[Test 2] missing field result value: " + result);
-
-        // Key question: is it Java null?
         assertNull(result, "Accessing a missing field should return Java null");
     }
 
@@ -68,9 +64,6 @@ class JsonataEdgeCaseTest {
         var frame = expr.createFrame();
 
         Object result = expr.evaluate(null, frame);
-
-        // System.out.println("[Test 2b] unbound variable result class: " + (result == null ? "null (Java null)" : result.getClass().getName()));
-        // System.out.println("[Test 2b] unbound variable result value: " + result);
 
         assertNull(result, "Accessing an unbound variable should return Java null");
     }
@@ -98,7 +91,6 @@ class JsonataEdgeCaseTest {
         frame1.bind("states", nested);
         Object city = expr1.evaluate(null, frame1);
 
-        // System.out.println("[Test 3a] deep path city: " + city);
         assertEquals("Springfield", city);
 
         // Access into an array element
@@ -107,7 +99,6 @@ class JsonataEdgeCaseTest {
         frame2.bind("states", nested);
         Object firstTag = expr2.evaluate(null, frame2);
 
-        // System.out.println("[Test 3b] deep path tags[0]: " + firstTag);
         assertEquals("admin", firstTag);
 
         // Construct an object from deep paths
@@ -116,7 +107,6 @@ class JsonataEdgeCaseTest {
         frame3.bind("states", nested);
         Object combined = expr3.evaluate(null, frame3);
 
-        // System.out.println("[Test 3c] combined object: " + combined);
         assertInstanceOf(Map.class, combined);
         @SuppressWarnings("unchecked")
         Map<String, Object> combinedMap = (Map<String, Object>) combined;
@@ -141,7 +131,6 @@ class JsonataEdgeCaseTest {
         frame.bind("states", asMap);
         Object result = expr.evaluate(null, frame);
 
-        // System.out.println("[Test 4] sum of scores: " + result);
         assertEquals(60, ((Number) result).intValue());
     }
 
@@ -211,12 +200,14 @@ class JsonataEdgeCaseTest {
         frame.bind("states", input);
         Object result = expr.evaluate(null, frame);
 
-        // Document: 1-element object-mapping sequence IS singleton-reduced (a Map, not a List).
-        // This matches JSONata spec. The fix for callers is to wrap in [] in their expression.
-        // e.g. [$states.result.Items.{"id": id}]
-        System.out.println("[Test 6] objectMapping 1-element result type: "
-                + (result == null ? "null" : result.getClass().getName()));
-        System.out.println("[Test 6] objectMapping 1-element result value: " + result);
+        // 1-element object-mapping sequence IS singleton-reduced to a plain object (Map).
+        // This matches both the JSONata spec and real AWS Step Functions behavior.
+        // Callers that need an array must wrap in []: [$states.result.Items.{"id": id}]
+        assertInstanceOf(Map.class, result, "1-element object-mapping should be singleton-reduced to a Map");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> mapped = (Map<String, Object>) result;
+        assertEquals("item1", mapped.get("id"));
+        assertEquals("Widget One", mapped.get("name"));
     }
 
     @Test
