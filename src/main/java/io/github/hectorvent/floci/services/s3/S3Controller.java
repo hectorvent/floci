@@ -1555,10 +1555,10 @@ public class S3Controller {
                     "Bucket POST must contain a file field.", 400);
         }
 
-        // Validate content-length-range from policy if present
+        // Validate policy conditions if present
         String policy = fields.get("policy");
         if (policy != null && !policy.isEmpty()) {
-            validateContentLengthRange(policy, fileData.length);
+            validatePolicyConditions(policy, bucket, fields, fileData.length);
         }
 
         // Use Content-Type from form fields, fall back to file part Content-Type
@@ -1588,43 +1588,178 @@ public class S3Controller {
                 .build();
     }
 
-    private void validateContentLengthRange(String policyBase64, int contentLength) {
+    private void validatePolicyConditions(String policyBase64, String bucket,
+                                           Map<String, String> fields, int contentLength) {
         try {
             String decoded = new String(java.util.Base64.getDecoder().decode(policyBase64), StandardCharsets.UTF_8);
-            // Parse conditions array from the policy JSON to find content-length-range
             int condIdx = decoded.indexOf("\"conditions\"");
             if (condIdx < 0) {
                 return;
             }
-            // Look for content-length-range condition: ["content-length-range", min, max]
-            String lower = decoded.toLowerCase(Locale.ROOT);
-            int rangeIdx = lower.indexOf("content-length-range");
-            if (rangeIdx < 0) {
+            int arrStart = decoded.indexOf('[', condIdx);
+            if (arrStart < 0) {
                 return;
             }
-            // Find the enclosing array bracket
-            int bracketStart = decoded.lastIndexOf('[', rangeIdx);
-            int bracketEnd = decoded.indexOf(']', rangeIdx);
-            if (bracketStart < 0 || bracketEnd < 0) {
+            int arrEnd = findMatchingBracket(decoded, arrStart);
+            if (arrEnd < 0) {
                 return;
             }
-            String rangeArray = decoded.substring(bracketStart, bracketEnd + 1);
-            // Extract min and max values
-            String[] tokens = rangeArray.replaceAll("[\\[\\]\"]", "").split(",");
-            if (tokens.length >= 3) {
-                long min = Long.parseLong(tokens[1].trim());
-                long max = Long.parseLong(tokens[2].trim());
-                if (contentLength < min || contentLength > max) {
-                    throw new AwsException("EntityTooLarge",
-                            "Your proposed upload exceeds the maximum allowed size.", 400);
+            String conditionsArray = decoded.substring(arrStart + 1, arrEnd);
+            int pos = 0;
+            while (pos < conditionsArray.length()) {
+                pos = skipWhitespace(conditionsArray, pos);
+                if (pos >= conditionsArray.length()) {
+                    break;
+                }
+                char ch = conditionsArray.charAt(pos);
+                if (ch == '{') {
+                    int objEnd = conditionsArray.indexOf('}', pos);
+                    if (objEnd < 0) {
+                        break;
+                    }
+                    String obj = conditionsArray.substring(pos + 1, objEnd).trim();
+                    validateExactMatchObject(obj, bucket, fields);
+                    pos = objEnd + 1;
+                } else if (ch == '[') {
+                    int bracketEnd = conditionsArray.indexOf(']', pos);
+                    if (bracketEnd < 0) {
+                        break;
+                    }
+                    String arr = conditionsArray.substring(pos + 1, bracketEnd).trim();
+                    validateArrayCondition(arr, bucket, fields, contentLength);
+                    pos = bracketEnd + 1;
+                } else {
+                    pos++;
                 }
             }
         } catch (AwsException e) {
             throw e;
         } catch (Exception e) {
-            // If policy parsing fails, skip validation (match AWS lenient behavior for emulator)
             LOG.debugv("Failed to parse presigned POST policy: {0}", e.getMessage());
         }
+    }
+
+    private void validateExactMatchObject(String obj, String bucket, Map<String, String> fields) {
+        String[] parts = obj.split(":", 2);
+        if (parts.length != 2) {
+            return;
+        }
+        String fieldName = unquote(parts[0].trim());
+        String expectedValue = unquote(parts[1].trim());
+        String actualValue;
+        if ("bucket".equals(fieldName)) {
+            actualValue = bucket;
+        } else {
+            actualValue = fields.get(fieldName);
+        }
+        if (actualValue == null || !actualValue.equals(expectedValue)) {
+            throw new AwsException("AccessDenied",
+                    "Invalid according to Policy: Policy Condition failed: "
+                            + "[\"eq\", \"$" + fieldName + "\", \"" + expectedValue + "\"]", 403);
+        }
+    }
+
+    private void validateArrayCondition(String arr, String bucket,
+                                        Map<String, String> fields, int contentLength) {
+        List<String> tokens = splitJsonArray(arr);
+        if (tokens.size() < 3) {
+            return;
+        }
+        String operator = unquote(tokens.get(0));
+        String operatorLower = operator.toLowerCase(Locale.ROOT);
+        if ("content-length-range".equals(operatorLower)) {
+            long min = Long.parseLong(tokens.get(1).trim());
+            long max = Long.parseLong(tokens.get(2).trim());
+            if (contentLength < min || contentLength > max) {
+                throw new AwsException("EntityTooLarge",
+                        "Your proposed upload exceeds the maximum allowed size.", 400);
+            }
+        } else if ("eq".equals(operatorLower)) {
+            String fieldRef = unquote(tokens.get(1));
+            String expectedValue = unquote(tokens.get(2));
+            String fieldName = fieldRef.startsWith("$") ? fieldRef.substring(1) : fieldRef;
+            String actualValue;
+            if ("bucket".equals(fieldName)) {
+                actualValue = bucket;
+            } else {
+                actualValue = fields.get(fieldName);
+            }
+            if (actualValue == null || !actualValue.equals(expectedValue)) {
+                throw new AwsException("AccessDenied",
+                        "Invalid according to Policy: Policy Condition failed: "
+                                + "[\"eq\", \"$" + fieldName + "\", \"" + expectedValue + "\"]", 403);
+            }
+        } else if ("starts-with".equals(operatorLower)) {
+            String fieldRef = unquote(tokens.get(1));
+            String prefix = unquote(tokens.get(2));
+            String fieldName = fieldRef.startsWith("$") ? fieldRef.substring(1) : fieldRef;
+            String actualValue;
+            if ("bucket".equals(fieldName)) {
+                actualValue = bucket;
+            } else {
+                actualValue = fields.get(fieldName);
+            }
+            if (actualValue == null || !actualValue.startsWith(prefix)) {
+                throw new AwsException("AccessDenied",
+                        "Invalid according to Policy: Policy Condition failed: "
+                                + "[\"starts-with\", \"$" + fieldName + "\", \"" + prefix + "\"]", 403);
+            }
+        }
+    }
+
+    private static int findMatchingBracket(String s, int openPos) {
+        int depth = 0;
+        boolean inString = false;
+        for (int i = openPos; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) {
+                inString = !inString;
+            } else if (!inString) {
+                if (c == '[') {
+                    depth++;
+                } else if (c == ']') {
+                    depth--;
+                    if (depth == 0) {
+                        return i;
+                    }
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static int skipWhitespace(String s, int pos) {
+        while (pos < s.length() && (s.charAt(pos) == ' ' || s.charAt(pos) == '\t'
+                || s.charAt(pos) == '\n' || s.charAt(pos) == '\r' || s.charAt(pos) == ',')) {
+            pos++;
+        }
+        return pos;
+    }
+
+    private static String unquote(String s) {
+        if (s.length() >= 2 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
+    private static List<String> splitJsonArray(String arr) {
+        List<String> tokens = new java.util.ArrayList<>();
+        boolean inString = false;
+        int start = 0;
+        for (int i = 0; i < arr.length(); i++) {
+            char c = arr.charAt(i);
+            if (c == '"' && (i == 0 || arr.charAt(i - 1) != '\\')) {
+                inString = !inString;
+            } else if (c == ',' && !inString) {
+                tokens.add(arr.substring(start, i).trim());
+                start = i + 1;
+            }
+        }
+        if (start < arr.length()) {
+            tokens.add(arr.substring(start).trim());
+        }
+        return tokens;
     }
 
     private static String extractBoundary(String contentType) {
