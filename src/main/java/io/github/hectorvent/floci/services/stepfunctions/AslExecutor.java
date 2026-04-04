@@ -329,6 +329,24 @@ public class AslExecutor {
                 dynamoDbService.deleteItem(tableName, key, region);
                 return objectMapper.createObjectNode();
             }
+            case "scan" -> {
+                String filterExpression = input.has("FilterExpression")
+                        ? input.get("FilterExpression").asText() : null;
+                JsonNode exprAttrNames = input.has("ExpressionAttributeNames")
+                        ? input.get("ExpressionAttributeNames") : null;
+                JsonNode exprAttrValues = input.has("ExpressionAttributeValues")
+                        ? input.get("ExpressionAttributeValues") : null;
+                Integer limit = input.has("Limit") ? input.get("Limit").asInt() : null;
+                DynamoDbService.ScanResult scanResult = dynamoDbService.scan(
+                        tableName, filterExpression, exprAttrNames, exprAttrValues, limit, (String) null, region);
+                ObjectNode response = objectMapper.createObjectNode();
+                com.fasterxml.jackson.databind.node.ArrayNode items = objectMapper.createArrayNode();
+                scanResult.items().forEach(items::add);
+                response.set("Items", items);
+                response.put("Count", scanResult.items().size());
+                response.put("ScannedCount", scanResult.scannedCount());
+                return response;
+            }
             case "updateItem" -> {
                 JsonNode key = input.path("Key");
                 JsonNode attributeUpdates = input.has("AttributeUpdates")
