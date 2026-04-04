@@ -14,6 +14,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -132,7 +135,13 @@ public class StepFunctionsService {
         }
 
         String execName = (name != null && !name.isBlank()) ? name : UUID.randomUUID().toString();
-        String arn = regionResolver.buildArn("states", region, "express:" + sm.getName() + ":" + execName);
+        // Real AWS express execution ARN format: express:<smName>:<startDate>:<execName>
+        // where startDate is ISO-8601 UTC, e.g. 2024-01-15T10:30:00.123Z
+        String startDate = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+                .withZone(ZoneOffset.UTC)
+                .format(Instant.now());
+        String arn = regionResolver.buildArn("states", region,
+                "express:" + sm.getName() + ":" + startDate + ":" + execName);
 
         Execution exec = new Execution();
         exec.setExecutionArn(arn);
