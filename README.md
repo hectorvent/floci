@@ -11,7 +11,7 @@
   <a href="https://github.com/hectorvent/floci/stargazers"><img src="https://img.shields.io/github/stars/hectorvent/floci?style=flat" alt="GitHub Stars"></a>
   <a href="https://github.com/hectorvent/floci/graphs/contributors"><img src="https://img.shields.io/github/contributors/hectorvent/floci" alt="GitHub Contributors"></a>
   <a href="https://join.slack.com/t/floci/shared_invite/zt-3tjn02s3q-A00kEjJ1cZxsg_imTfy6Cw"><img src="https://img.shields.io/badge/Slack-Join%20the%20community-4A154B?logo=slack&logoColor=white" alt="Join Floci on Slack"></a>
-  
+
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  Join the community on <a href="https://join.slack.com/t/floci/shared_invite/zt-3tjn02s3q-A00kEjJ1cZxsg_imTfy6Cw">Slack</a> to ask questions, share feedback, and discuss Floci with other contributors and users.
+  Join the community on <a href="https://join.slack.com/t/floci/shared_invite/zt-3tjn02s3q-A00kEjJ1cZxsg_imTfy6Cw">Slack</a> to ask questions, share feedback, and discuss Floci with other contributors and users. You can also open any topic in <a href="https://github.com/hectorvent/floci/discussions">GitHub Discussions</a> — feature ideas, compatibility questions, design tradeoffs, wild proposals, or half-baked thoughts are all welcome. No idea is too small, too early, or too popcorn-fueled to start a good discussion.
 </p>
 
 ---
@@ -52,7 +52,7 @@
 | KMS (sign, verify, re-encrypt) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**25 services. 408/408 SDK tests passing. Free forever.**
+**25 services. 1,873 automated compatibility tests. Free forever.**
 
 ## Architecture Overview
 
@@ -128,7 +128,14 @@ services:
     ports:
       - "4566:4566"
     volumes:
+      # Local directory bind mount (default)
       - ./data:/app/data
+      
+      # OR named volume (optional):
+      # - floci-data:/app/data
+
+#volumes:
+#  floci-data:
 ```
 
 ```bash
@@ -191,18 +198,19 @@ const client = new S3Client({
 
 This companion project provides a dedicated compatibility test suite for Floci across multiple SDKs and tooling scenarios, and is the recommended starting point when verifying integration behavior end to end.
 
-Available SDK test modules:
+Available compatibility test modules:
 
-| Module | Language / Tool | SDK / Client |
-|---|---|---|
-| `sdk-test-java` | Java 17 | AWS SDK for Java v2 |
-| `sdk-test-go` | Go | AWS SDK for Go v2 |
-| `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 |
-| `sdk-test-python` | Python 3 | boto3 |
-| `sdk-test-rust` | Rust | AWS SDK for Rust |
-| `sdk-test-awscli` | Bash | AWS CLI v2 |
-
-The repository also includes compatibility validation for infrastructure tooling through `compat-cdk` (AWS CDK v2) and `compat-opentofu` (OpenTofu / Terraform-compatible workflows).
+| Module | Language / Tool | SDK / Client / Version | Tests |
+|---|---|---|---:|
+| `sdk-test-java` | Java 17 | AWS SDK for Java v2 | 889 |
+| `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 | 360 |
+| `sdk-test-python` | Python 3 | boto3 | 264 |
+| `sdk-test-go` | Go | AWS SDK for Go v2 | 120 |
+| `sdk-test-awscli` | Bash | AWS CLI v2 | 138 |
+| `sdk-test-rust` | Rust | AWS SDK for Rust | 69 |
+| `compat-terraform` | Terraform | v1.10+ | 14 |
+| `compat-opentofu` | OpenTofu | v1.9+ | 14 |
+| `compat-cdk` | AWS CDK | v2+ | 5 |
 
 ## Image Tags
 
@@ -225,6 +233,7 @@ All settings are overridable via environment variables (`FLOCI_` prefix).
 | `FLOCI_HOSTNAME` | *(unset)* | Override hostname in response URLs (for Docker Compose) |
 | `FLOCI_STORAGE_MODE` | `memory` | `memory` · `persistent` · `hybrid` · `wal` |
 | `FLOCI_STORAGE_PERSISTENT_PATH` | `./data` | Data directory |
+| `FLOCI_ECR_BASE_URI` | `public.ecr.aws` | AWS ECR Base URI to pull container images (e.g. Lambda) |
 
 → Full reference: [configuration docs](https://hectorvent.dev/floci/configuration/application-yml/)
 → Per-service storage overrides: [storage docs](https://hectorvent.dev/floci/configuration/storage/#per-service-storage-overrides)
@@ -247,6 +256,10 @@ services:
 ```
 
 Without this, SQS returns `http://localhost:4566/...` in QueueUrl responses, which resolves to the wrong container.
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=hectorvent/floci&type=Date)](https://star-history.com/#hectorvent/floci&Date)
 
 ## Contributors
 

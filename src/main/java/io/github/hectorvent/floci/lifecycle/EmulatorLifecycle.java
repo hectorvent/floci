@@ -7,6 +7,7 @@ import io.github.hectorvent.floci.lifecycle.inithook.InitializationHook;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHooksRunner;
 import io.github.hectorvent.floci.services.elasticache.proxy.ElastiCacheProxyManager;
 import io.github.hectorvent.floci.services.rds.proxy.RdsProxyManager;
+import io.quarkus.runtime.Quarkus;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -15,11 +16,17 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 
 @ApplicationScoped
 public class EmulatorLifecycle {
 
     private static final Logger LOG = Logger.getLogger(EmulatorLifecycle.class);
+    private static final int HTTP_PORT = 4566;
+    private static final int PORT_POLL_TIMEOUT_MS = 100;
+    private static final int PORT_POLL_INTERVAL_MS = 50;
+    private static final int PORT_POLL_MAX_RETRIES = 100;
 
     private final StorageFactory storageFactory;
     private final ServiceRegistry serviceRegistry;
@@ -40,16 +47,44 @@ public class EmulatorLifecycle {
         this.initializationHooksRunner = initializationHooksRunner;
     }
 
-    void onStart(@Observes StartupEvent ignored) throws IOException, InterruptedException {
+    void onStart(@Observes StartupEvent ignored) throws IOException {
         LOG.info("=== AWS Local Emulator Starting ===");
         LOG.infov("Storage mode: {0}", config.storage().mode());
         LOG.infov("Persistent path: {0}", config.storage().persistentPath());
 
         serviceRegistry.logEnabledServices();
         storageFactory.loadAll();
-        initializationHooksRunner.run(InitializationHook.START);
 
-        LOG.info("=== AWS Local Emulator Ready ===");
+        if (initializationHooksRunner.hasHooks(InitializationHook.START)) {
+            LOG.info("Startup hooks detected — deferring execution until HTTP server is ready");
+            Thread.ofVirtual().name("init-hooks-runner").start(this::runStartupHooksAfterReady);
+        } else {
+            LOG.info("=== AWS Local Emulator Ready ===");
+        }
+    }
+
+    private void runStartupHooksAfterReady() {
+        try {
+            waitForHttpPort();
+            initializationHooksRunner.run(InitializationHook.START);
+            LOG.info("=== AWS Local Emulator Ready ===");
+        } catch (Exception e) {
+            LOG.error("Startup hook execution failed — shutting down", e);
+            Quarkus.asyncExit();
+        }
+    }
+
+    private static void waitForHttpPort() throws InterruptedException {
+        for (int attempt = 1; attempt <= PORT_POLL_MAX_RETRIES; attempt++) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("localhost", HTTP_PORT), PORT_POLL_TIMEOUT_MS);
+                LOG.debugv("HTTP port {0} is ready (attempt {1})", HTTP_PORT, attempt);
+                return;
+            } catch (IOException ignored) {
+                Thread.sleep(PORT_POLL_INTERVAL_MS);
+            }
+        }
+        throw new IllegalStateException("HTTP port " + HTTP_PORT + " did not become ready in time");
     }
 
     void onStop(@Observes ShutdownEvent ignored) throws IOException, InterruptedException {

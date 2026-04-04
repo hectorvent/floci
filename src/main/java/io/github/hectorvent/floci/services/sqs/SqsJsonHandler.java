@@ -14,6 +14,7 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -136,8 +137,14 @@ public class SqsJsonHandler {
                 String name = entry.getKey();
                 String dataType = entry.getValue().path("DataType").asText(null);
                 String stringValue = entry.getValue().path("StringValue").asText(null);
-                if (dataType != null && stringValue != null) {
-                    messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+                String binaryValueBase64 = entry.getValue().path("BinaryValue").asText(null);
+                if (dataType != null) {
+                    if (binaryValueBase64 != null) {
+                        byte[] binaryValue = Base64.getDecoder().decode(binaryValueBase64);
+                        messageAttributes.put(name, new MessageAttributeValue(binaryValue, dataType));
+                    } else if (stringValue != null) {
+                        messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+                    }
                 }
             });
         }
@@ -196,7 +203,11 @@ public class SqsJsonHandler {
                 for (var entry : msg.getMessageAttributes().entrySet()) {
                     ObjectNode valNode = msgAttrs.putObject(entry.getKey());
                     valNode.put("DataType", entry.getValue().getDataType());
-                    valNode.put("StringValue", entry.getValue().getStringValue());
+                    if (entry.getValue().getBinaryValue() != null) {
+                        valNode.put("BinaryValue", Base64.getEncoder().encodeToString(entry.getValue().getBinaryValue()));
+                    } else {
+                        valNode.put("StringValue", entry.getValue().getStringValue());
+                    }
                 }
             }
 
@@ -277,8 +288,14 @@ public class SqsJsonHandler {
                         String name = attrEntry.getKey();
                         String dataType = attrEntry.getValue().path("DataType").asText(null);
                         String stringValue = attrEntry.getValue().path("StringValue").asText(null);
-                        if (dataType != null && stringValue != null) {
-                            messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+                        String binaryValueBase64 = attrEntry.getValue().path("BinaryValue").asText(null);
+                        if (dataType != null) {
+                            if (binaryValueBase64 != null) {
+                                byte[] binaryValue = Base64.getDecoder().decode(binaryValueBase64);
+                                messageAttributes.put(name, new MessageAttributeValue(binaryValue, dataType));
+                            } else if (stringValue != null) {
+                                messageAttributes.put(name, new MessageAttributeValue(stringValue, dataType));
+                            }
                         }
                     });
                 }

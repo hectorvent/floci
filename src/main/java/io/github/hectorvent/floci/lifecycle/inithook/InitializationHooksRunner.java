@@ -44,6 +44,10 @@ public class InitializationHooksRunner {
         return scriptFileNames;
     }
 
+    public boolean hasHooks(final InitializationHook hook) {
+        return findScriptFileNames(hook.getName(), hook.getPath()).length > 0;
+    }
+
     public void run(final InitializationHook hook) throws IOException, InterruptedException {
         final String hookName = hook.getName();
         final File hookDirectory = hook.getPath();

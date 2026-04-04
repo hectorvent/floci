@@ -200,4 +200,21 @@ class SecretsManagerServiceTest {
         SecretVersion fetched = service.getSecretValue("my-secret", v1Id, null, REGION);
         assertEquals("v1", fetched.getSecretString());
     }
+
+    @Test
+    void kmsKeyIdIsPreserved() {
+        String kmsKeyId = "arn:aws:kms:us-east-1:000000000000:key/my-key";
+        // Signature: name, secretString, secretBinary, description, kmsKeyId, tags, region
+        Secret secret = service.createSecret("kms-secret", "value", null,
+                "desc", kmsKeyId, null, REGION);
+
+        assertEquals(kmsKeyId, secret.getKmsKeyId());
+
+        Secret described = service.describeSecret("kms-secret", REGION);
+        assertEquals(kmsKeyId, described.getKmsKeyId());
+
+        service.updateSecret("kms-secret", "new desc", "arn:aws:kms:us-east-1:000000000000:key/other-key", REGION);
+        Secret updated = service.describeSecret("kms-secret", REGION);
+        assertEquals("arn:aws:kms:us-east-1:000000000000:key/other-key", updated.getKmsKeyId());
+    }
 }

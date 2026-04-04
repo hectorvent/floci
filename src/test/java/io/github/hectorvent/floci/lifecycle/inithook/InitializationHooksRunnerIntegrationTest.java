@@ -18,7 +18,7 @@ import java.util.List;
 class InitializationHooksRunnerIntegrationTest {
 
     @Inject
-    private InitializationHooksRunner initializationHooksRunner;
+    InitializationHooksRunner initializationHooksRunner;
 
     @TempDir
     private Path hookScriptsDirectory;

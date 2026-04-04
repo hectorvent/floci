@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentMatchers;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -12,6 +13,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 @ExtendWith(MockitoExtension.class)
 class InitializationHooksRunnerTest {
@@ -150,6 +153,37 @@ class InitializationHooksRunnerTest {
 
         Mockito.verify(hookScriptExecutorMock).run(hookDirectory, "10-bootstrap.sh");
         Assertions.assertSame(interruptedException, exception);
+    }
+
+    @Test
+    @DisplayName("hasHooks should return true when scripts exist in hook directory")
+    void hasHooksShouldReturnTrueWhenScriptsExist(@TempDir Path tempDir) throws IOException {
+        Files.createFile(tempDir.resolve("01-setup.sh"));
+        InitializationHook hook = Mockito.mock(InitializationHook.class);
+        Mockito.when(hook.getName()).thenReturn("startup");
+        Mockito.when(hook.getPath()).thenReturn(tempDir.toFile());
+
+        Assertions.assertTrue(initializationHooksRunner.hasHooks(hook));
+    }
+
+    @Test
+    @DisplayName("hasHooks should return false when hook directory is empty")
+    void hasHooksShouldReturnFalseWhenDirectoryIsEmpty(@TempDir Path tempDir) {
+        InitializationHook hook = Mockito.mock(InitializationHook.class);
+        Mockito.when(hook.getName()).thenReturn("startup");
+        Mockito.when(hook.getPath()).thenReturn(tempDir.toFile());
+
+        Assertions.assertFalse(initializationHooksRunner.hasHooks(hook));
+    }
+
+    @Test
+    @DisplayName("hasHooks should return false when hook directory does not exist")
+    void hasHooksShouldReturnFalseWhenDirectoryDoesNotExist() {
+        InitializationHook hook = Mockito.mock(InitializationHook.class);
+        Mockito.when(hook.getName()).thenReturn("startup");
+        Mockito.when(hook.getPath()).thenReturn(new File("/nonexistent/path"));
+
+        Assertions.assertFalse(initializationHooksRunner.hasHooks(hook));
     }
 
 }

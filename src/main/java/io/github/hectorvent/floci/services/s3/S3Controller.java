@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.s3.model.Bucket;
 import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesParts;
 import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesResult;
 import io.github.hectorvent.floci.services.s3.model.MultipartUpload;
+import io.github.hectorvent.floci.services.s3.model.FilterRule;
 import io.github.hectorvent.floci.services.s3.model.NotificationConfiguration;
 import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
 import io.github.hectorvent.floci.services.s3.model.QueueNotification;
@@ -30,11 +31,14 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Arrays;
+import java.util.Optional;
 import java.util.Set;
 
 import org.jboss.logging.Logger;
@@ -263,20 +267,22 @@ public class S3Controller {
             }
 
             int max = (maxKeys != null && maxKeys > 0) ? maxKeys : 1000;
-            List<S3Object> objects = s3Service.listObjects(bucket, prefix, delimiter, max);
+            S3Service.ListObjectsResult result = s3Service.listObjectsWithPrefixes(bucket, prefix, delimiter, max);
+            List<S3Object> objects = result.objects();
+            List<String> commonPrefixes = result.commonPrefixes();
             boolean v2 = "2".equals(listType);
 
             XmlBuilder xml = new XmlBuilder()
                     .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                     .start("ListBucketResult", AwsNamespaces.S3)
                     .elem("Name", bucket)
-                    .elem("Prefix", prefix)
+                    .elem("Prefix", prefix != null ? prefix : "")
                     .elem("Delimiter", delimiter)
                     .elem("MaxKeys", max);
             if (v2) {
-                xml.elem("KeyCount", objects.size());
+                xml.elem("KeyCount", objects.size() + commonPrefixes.size());
             }
-            xml.elem("IsTruncated", false);
+            xml.elem("IsTruncated", result.isTruncated());
             for (S3Object obj : objects) {
                 xml.start("Contents")
                    .elem("Key", obj.getKey())
@@ -285,6 +291,11 @@ public class S3Controller {
                    .elem("Size", obj.getSize())
                    .elem("StorageClass", obj.getStorageClass())
                    .end("Contents");
+            }
+            for (String cp : commonPrefixes) {
+                xml.start("CommonPrefixes")
+                   .elem("Prefix", cp)
+                   .end("CommonPrefixes");
             }
             xml.end("ListBucketResult");
             return Response.ok(xml.build()).build();
@@ -327,6 +338,9 @@ public class S3Controller {
             }
 
             if (uploadId != null && partNumber != null) {
+                if (copySource != null && !copySource.isEmpty()) {
+                    return handleUploadPartCopy(copySource, bucket, key, uploadId, partNumber, httpHeaders);
+                }
                 byte[] partData = decodeAwsChunked(body, contentEncoding, contentSha256);
                 validateChecksumHeaders(httpHeaders, partData);
                 String eTag = s3Service.uploadPart(bucket, key, uploadId, partNumber, partData);
@@ -344,8 +358,10 @@ public class S3Controller {
 
             byte[] data = decodeAwsChunked(body, contentEncoding, contentSha256);
             validateChecksumHeaders(httpHeaders, data);
+            String persistedEncoding = toPersistedContentEncoding(contentEncoding);
             S3Object obj = s3Service.putObject(bucket, key, data, contentType, extractUserMetadata(httpHeaders),
                     httpHeaders.getHeaderString("x-amz-storage-class"),
+                    persistedEncoding,
                     lockMode, retainUntil, legalHold);
             var resp = Response.ok().header("ETag", obj.getETag());
             if (obj.getVersionId() != null) {
@@ -363,6 +379,9 @@ public class S3Controller {
     public Response getObject(@PathParam("bucket") String bucket,
                               @PathParam("key") String key,
                               @QueryParam("versionId") String versionId,
+                              @QueryParam("uploadId") String uploadId,
+                              @QueryParam("max-parts") Integer maxPartsQuery,
+                              @QueryParam("part-number-marker") String partNumberMarkerQuery,
                               @HeaderParam("x-amz-object-attributes") String objectAttributesHeader,
                               @HeaderParam("x-amz-max-parts") Integer maxParts,
                               @HeaderParam("x-amz-part-number-marker") Integer partNumberMarker,
@@ -374,6 +393,9 @@ public class S3Controller {
                               @Context UriInfo uriInfo,
                               @Context HttpHeaders httpHeaders) {
         try {
+            if (uploadId != null) {
+                return handleListParts(bucket, key, uploadId, maxPartsQuery, partNumberMarkerQuery);
+            }
             if (hasQueryParam(uriInfo, "tagging")) {
                 return handleGetObjectTagging(bucket, key);
             }
@@ -515,6 +537,78 @@ public class S3Controller {
         } catch (AwsException e) {
             return xmlErrorResponse(e);
         }
+    }
+
+    // --- CORS preflight ---
+
+    @OPTIONS
+    @Path("/{bucket}")
+    public Response handleOptionsBucket(@PathParam("bucket") String bucket,
+                                         @HeaderParam("Origin") String origin,
+                                         @HeaderParam("Access-Control-Request-Method") String requestMethod,
+                                         @HeaderParam("Access-Control-Request-Headers") String requestHeadersStr) {
+        return handleCorsPreFlight(bucket, origin, requestMethod, requestHeadersStr);
+    }
+
+    @OPTIONS
+    @Path("/{bucket}/{key:.+}")
+    public Response handleOptionsObject(@PathParam("bucket") String bucket,
+                                         @PathParam("key") String key,
+                                         @HeaderParam("Origin") String origin,
+                                         @HeaderParam("Access-Control-Request-Method") String requestMethod,
+                                         @HeaderParam("Access-Control-Request-Headers") String requestHeadersStr) {
+        return handleCorsPreFlight(bucket, origin, requestMethod, requestHeadersStr);
+    }
+
+    private Response handleCorsPreFlight(String bucket, String origin,
+                                          String requestMethod, String requestHeadersStr) {
+        if (origin == null || origin.isBlank()
+                || requestMethod == null || requestMethod.isBlank()) {
+            // Not a valid CORS preflight — return a plain 200 with no CORS headers
+            return Response.ok().build();
+        }
+        List<String> requestHeaders = (requestHeadersStr != null && !requestHeadersStr.isBlank())
+                ? Arrays.stream(requestHeadersStr.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(java.util.stream.Collectors.toList())
+                : List.of();
+
+        Optional<S3Service.CorsEvalResult> evalResult =
+                s3Service.evaluateCors(bucket, origin, requestMethod, requestHeaders);
+
+        if (evalResult.isEmpty()) {
+            String body = new XmlBuilder()
+                    .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                    .start("Error")
+                    .elem("Code", "CORSResponse")
+                    .elem("Message", "This CORS request is not allowed.")
+                    .end("Error")
+                    .build();
+            return Response.status(403)
+                    .entity(body)
+                    .type(MediaType.APPLICATION_XML)
+                    .build();
+        }
+
+        S3Service.CorsEvalResult cors = evalResult.get();
+        var builder = Response.ok()
+                .header("Access-Control-Allow-Origin", cors.allowedOrigin())
+                .header("Access-Control-Allow-Methods", String.join(", ", cors.allowedMethods()));
+
+        if (cors.maxAgeSeconds() > 0) {
+            builder.header("Access-Control-Max-Age", cors.maxAgeSeconds());
+        }
+        if (!cors.allowedHeaders().isEmpty()) {
+            String hdrs = cors.allowedHeaders().contains("*")
+                    ? "*"
+                    : String.join(", ", cors.allowedHeaders());
+            builder.header("Access-Control-Allow-Headers", hdrs);
+        }
+        if (!cors.exposeHeaders().isEmpty()) {
+            builder.header("Access-Control-Expose-Headers", String.join(", ", cors.exposeHeaders()));
+        }
+        return builder.build();
     }
 
     @DELETE
@@ -674,6 +768,63 @@ public class S3Controller {
         return Response.ok(builder.build()).type(MediaType.APPLICATION_XML).build();
     }
 
+    private Response handleListParts(String bucket, String key, String uploadId,
+                                      Integer maxPartsParam, String partNumberMarkerParam) {
+        MultipartUpload upload = s3Service.listParts(bucket, key, uploadId);
+        int maxPartsLimit = (maxPartsParam != null && maxPartsParam > 0) ? maxPartsParam : 1000;
+        int markerValue = 0;
+        if (partNumberMarkerParam != null && !partNumberMarkerParam.isBlank()) {
+            try {
+                markerValue = Integer.parseInt(partNumberMarkerParam.trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        final int marker = markerValue;
+
+        List<Part> sortedParts = upload.getParts().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .filter(e -> e.getKey() > marker)
+                .limit(maxPartsLimit + 1L)
+                .map(Map.Entry::getValue)
+                .toList();
+
+        boolean truncated = sortedParts.size() > maxPartsLimit;
+        List<Part> page = truncated ? sortedParts.subList(0, maxPartsLimit) : sortedParts;
+        String nextMarker = truncated ? String.valueOf(page.getLast().getPartNumber()) : null;
+
+        XmlBuilder xml = new XmlBuilder()
+                .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                .start("ListPartsResult", AwsNamespaces.S3)
+                .elem("Bucket", bucket)
+                .elem("Key", key)
+                .elem("UploadId", uploadId)
+                .elem("PartNumberMarker", String.valueOf(marker))
+                .elem("MaxParts", maxPartsLimit)
+                .elem("IsTruncated", truncated);
+        if (truncated) {
+            xml.elem("NextPartNumberMarker", nextMarker);
+        }
+        for (Part part : page) {
+            xml.start("Part")
+               .elem("PartNumber", part.getPartNumber())
+               .elem("LastModified", ISO_FORMAT.format(part.getLastModified()))
+               .elem("ETag", part.getETag())
+               .elem("Size", part.getSize())
+               .end("Part");
+        }
+        xml.start("Initiator")
+           .elem("ID", "owner")
+           .elem("DisplayName", "owner")
+           .end("Initiator")
+           .start("Owner")
+           .elem("ID", "owner")
+           .elem("DisplayName", "owner")
+           .end("Owner")
+           .elem("StorageClass", upload.getStorageClass());
+        xml.end("ListPartsResult");
+        return Response.ok(xml.build()).type(MediaType.APPLICATION_XML).build();
+    }
+
     private Response handleListMultipartUploads(String bucket) {
         List<MultipartUpload> uploads = s3Service.listMultipartUploads(bucket);
         XmlBuilder xml = new XmlBuilder()
@@ -773,6 +924,7 @@ public class S3Controller {
                 for (String event : qn.events()) {
                     xml.elem("Event", event);
                 }
+                appendFilterRules(xml, qn.filterRules());
                 xml.end("QueueConfiguration");
             }
             for (TopicNotification tn : config.getTopicConfigurations()) {
@@ -782,6 +934,7 @@ public class S3Controller {
                 for (String event : tn.events()) {
                     xml.elem("Event", event);
                 }
+                appendFilterRules(xml, tn.filterRules());
                 xml.end("TopicConfiguration");
             }
             xml.end("NotificationConfiguration");
@@ -796,24 +949,13 @@ public class S3Controller {
             String xml = new String(body, StandardCharsets.UTF_8);
             NotificationConfiguration config = new NotificationConfiguration();
 
-            var queueConfigs = XmlParser.extractGroupsMulti(xml, "QueueConfiguration");
-            for (var group : queueConfigs) {
-                String id = group.getOrDefault("Id", List.of("")).get(0);
-                List<String> queueArns = group.get("Queue");
-                List<String> events = group.get("Event");
-                if (queueArns != null && !queueArns.isEmpty() && events != null && !events.isEmpty()) {
-                    config.getQueueConfigurations().add(new QueueNotification(id, queueArns.get(0), events));
-                }
+            for (var parsed : parseNotificationGroups(xml, "QueueConfiguration", "Queue")) {
+                config.getQueueConfigurations().add(
+                        new QueueNotification(parsed.id, parsed.arn, parsed.events, parsed.filterRules));
             }
-
-            var topicConfigs = XmlParser.extractGroupsMulti(xml, "TopicConfiguration");
-            for (var group : topicConfigs) {
-                String id = group.getOrDefault("Id", List.of("")).get(0);
-                List<String> topicArns = group.get("Topic");
-                List<String> events = group.get("Event");
-                if (topicArns != null && !topicArns.isEmpty() && events != null && !events.isEmpty()) {
-                    config.getTopicConfigurations().add(new TopicNotification(id, topicArns.get(0), events));
-                }
+            for (var parsed : parseNotificationGroups(xml, "TopicConfiguration", "Topic")) {
+                config.getTopicConfigurations().add(
+                        new TopicNotification(parsed.id, parsed.arn, parsed.events, parsed.filterRules));
             }
 
             s3Service.putBucketNotificationConfiguration(bucket, config);
@@ -821,6 +963,68 @@ public class S3Controller {
         } catch (AwsException e) {
             return xmlErrorResponse(e);
         }
+    }
+
+    private record ParsedNotificationGroup(String id, String arn, List<String> events,
+                                            List<FilterRule> filterRules) {}
+
+    private static List<ParsedNotificationGroup> parseNotificationGroups(
+            String xml, String groupElement, String arnElement) {
+        var groups = XmlParser.extractGroupsMulti(xml, groupElement);
+        var filters = XmlParser.extractPairsPerGroup(xml, groupElement,
+                "FilterRule", "Name", "Value");
+        List<ParsedNotificationGroup> result = new ArrayList<>();
+        for (int i = 0; i < groups.size(); i++) {
+            var group = groups.get(i);
+            String id = group.getOrDefault("Id", List.of("")).getFirst();
+            List<String> arns = group.get(arnElement);
+            List<String> events = group.get("Event");
+            if (arns != null && !arns.isEmpty() && events != null && !events.isEmpty()) {
+                List<FilterRule> rules = i < filters.size()
+                        ? filters.get(i).entrySet().stream()
+                            .map(e -> new FilterRule(e.getKey(), e.getValue()))
+                            .toList()
+                        : List.of();
+                result.add(new ParsedNotificationGroup(id, arns.getFirst(), events, rules));
+            }
+        }
+        return result;
+    }
+
+    private static void appendFilterRules(XmlBuilder xml, List<FilterRule> rules) {
+        if (rules == null || rules.isEmpty()) return;
+        xml.start("Filter").start("S3Key");
+        for (FilterRule rule : rules) {
+            xml.start("FilterRule")
+               .elem("Name", rule.name())
+               .elem("Value", rule.value())
+               .end("FilterRule");
+        }
+        xml.end("S3Key").end("Filter");
+    }
+
+    /**
+     * Strips the {@code aws-chunked} token from a {@code Content-Encoding} value before persisting it.
+     * {@code aws-chunked} is a transfer-protocol marker used by AWS SDK v2 streaming uploads and is not
+     * a real content encoding. For example, {@code gzip,aws-chunked} persists as {@code gzip};
+     * a value of only {@code aws-chunked} persists as {@code null}.
+     */
+    private static String toPersistedContentEncoding(String contentEncoding) {
+        if (contentEncoding == null) {
+            return null;
+        }
+        String[] tokens = contentEncoding.split(",");
+        StringBuilder result = new StringBuilder();
+        for (String token : tokens) {
+            String trimmed = token.trim();
+            if (!trimmed.equalsIgnoreCase("aws-chunked")) {
+                if (!result.isEmpty()) {
+                    result.append(",");
+                }
+                result.append(trimmed);
+            }
+        }
+        return result.isEmpty() ? null : result.toString();
     }
 
     // --- AWS Chunked Decoding ---
@@ -1022,6 +1226,9 @@ public class S3Controller {
         if (obj.getStorageClass() != null) {
             resp.header("x-amz-storage-class", obj.getStorageClass());
         }
+        if (obj.getContentEncoding() != null) {
+            resp.header("Content-Encoding", obj.getContentEncoding());
+        }
         if (obj.getMetadata() != null) {
             for (Map.Entry<String, String> entry : obj.getMetadata().entrySet()) {
                 resp.header("x-amz-meta-" + entry.getKey(), entry.getValue());
@@ -1056,11 +1263,13 @@ public class S3Controller {
         String sourceBucket = source.substring(0, slashIndex);
         String sourceKey = URLDecoder.decode(source.substring(slashIndex + 1), StandardCharsets.UTF_8);
 
+        String copyContentEncoding = toPersistedContentEncoding(httpHeaders.getHeaderString("Content-Encoding"));
         S3Object copy = s3Service.copyObject(sourceBucket, sourceKey, destBucket, destKey,
                 httpHeaders.getHeaderString("x-amz-metadata-directive"),
                 extractUserMetadata(httpHeaders),
                 httpHeaders.getHeaderString("x-amz-storage-class"),
-                contentType);
+                contentType,
+                copyContentEncoding);
         String xml = new XmlBuilder()
                 .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .start("CopyObjectResult", AwsNamespaces.S3)
@@ -1069,6 +1278,28 @@ public class S3Controller {
                 .end("CopyObjectResult")
                 .build();
         return Response.ok(xml).build();
+    }
+
+    private Response handleUploadPartCopy(String copySource, String destBucket, String destKey,
+                                           String uploadId, int partNumber, HttpHeaders httpHeaders) {
+        String source = copySource.startsWith("/") ? copySource.substring(1) : copySource;
+        int slashIndex = source.indexOf('/');
+        if (slashIndex < 0) {
+            throw new AwsException("InvalidArgument", "Invalid copy source: " + copySource, 400);
+        }
+        String sourceBucket = source.substring(0, slashIndex);
+        String sourceKey = source.substring(slashIndex + 1);
+        String copySourceRange = httpHeaders.getHeaderString("x-amz-copy-source-range");
+        String eTag = s3Service.uploadPartCopy(destBucket, destKey, uploadId, partNumber,
+                sourceBucket, sourceKey, copySourceRange);
+        String xml = new XmlBuilder()
+                .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                .start("CopyPartResult", AwsNamespaces.S3)
+                .elem("LastModified", ISO_FORMAT.format(java.time.Instant.now()))
+                .elem("ETag", eTag)
+                .end("CopyPartResult")
+                .build();
+        return Response.ok(xml).type(MediaType.APPLICATION_XML).build();
     }
 
     private Response handleGetObjectAttributes(String bucket, String key, String versionId,

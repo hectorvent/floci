@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import io.restassured.config.DecoderConfig;
+import io.restassured.config.RestAssuredConfig;
 import java.util.Arrays;
 
 import static io.restassured.RestAssured.given;
@@ -159,6 +161,23 @@ class S3IntegrationTest {
 
     @Test
     @Order(12)
+    void listObjectsWithDelimiterReturnsCommonPrefixes() {
+        given()
+            .queryParam("delimiter", "/")
+            .queryParam("list-type", "2")
+        .when()
+            .get("/test-bucket")
+        .then()
+            .statusCode(200)
+            .body(containsString("<CommonPrefixes>"))
+            .body(containsString("<Prefix>data/</Prefix>"))
+            .body(containsString("<Key>greeting.txt</Key>"))
+            .body(containsString("<KeyCount>2</KeyCount>"))
+            .body(containsString("<IsTruncated>false</IsTruncated>"));
+    }
+
+    @Test
+    @Order(13)
     void copyObject() {
         given()
             .header("x-amz-copy-source", "/test-bucket/greeting.txt")
@@ -184,7 +203,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(14)
     void deleteObject() {
         given()
         .when()
@@ -201,7 +220,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(15)
     void deleteNonEmptyBucketFails() {
         given()
         .when()
@@ -731,5 +750,235 @@ class S3IntegrationTest {
             .delete("/test-bucket")
         .then()
             .statusCode(204);
+    }
+
+    @Test
+    @Order(80)
+    void createEncodingTestBucket() {
+        given()
+        .when()
+            .put("/encoding-test-bucket")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(81)
+    void putObjectWithContentEncoding() {
+        given()
+            .contentType("text/plain")
+            .header("Content-Encoding", "gzip")
+            .body("compressed-content")
+        .when()
+            .put("/encoding-test-bucket/encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("ETag", notNullValue());
+    }
+
+    @Test
+    @Order(82)
+    void getObjectReturnsContentEncoding() {
+        RestAssuredConfig noDecompress = RestAssuredConfig.config()
+                .decoderConfig(DecoderConfig.decoderConfig().noContentDecoders());
+        given()
+            .config(noDecompress)
+        .when()
+            .get("/encoding-test-bucket/encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(83)
+    void headObjectReturnsContentEncoding() {
+        given()
+        .when()
+            .head("/encoding-test-bucket/encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(84)
+    void copyObjectPreservesContentEncoding() {
+        given()
+            .header("x-amz-copy-source", "/encoding-test-bucket/encoded.txt")
+        .when()
+            .put("/encoding-test-bucket/encoded-copy.txt")
+        .then()
+            .statusCode(200)
+            .body(containsString("CopyObjectResult"));
+
+        given()
+        .when()
+            .head("/encoding-test-bucket/encoded-copy.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(85)
+    void copyObjectReplaceContentEncoding() {
+        given()
+            .header("x-amz-copy-source", "/encoding-test-bucket/encoded.txt")
+            .header("x-amz-metadata-directive", "REPLACE")
+            .header("Content-Encoding", "identity")
+        .when()
+            .put("/encoding-test-bucket/encoded-replace.txt")
+        .then()
+            .statusCode(200)
+            .body(containsString("CopyObjectResult"));
+
+        given()
+        .when()
+            .head("/encoding-test-bucket/encoded-replace.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("identity"));
+    }
+
+    @Test
+    @Order(86)
+    void putObjectWithCompositeEncoding_stripsAwsChunkedToken() {
+        RestAssuredConfig noDecompress = RestAssuredConfig.config()
+                .decoderConfig(DecoderConfig.decoderConfig().noContentDecoders());
+        given()
+            .contentType("text/plain")
+            .header("Content-Encoding", "gzip,aws-chunked")
+            .body("compressed-chunked-content")
+        .when()
+            .put("/encoding-test-bucket/composite-encoded.txt")
+        .then()
+            .statusCode(200);
+
+        given()
+            .config(noDecompress)
+        .when()
+            .head("/encoding-test-bucket/composite-encoded.txt")
+        .then()
+            .statusCode(200)
+            .header("Content-Encoding", equalTo("gzip"));
+    }
+
+    @Test
+    @Order(88)
+    void cleanupContentEncodingBucket() {
+        given().delete("/encoding-test-bucket/encoded.txt");
+        given().delete("/encoding-test-bucket/encoded-copy.txt");
+        given().delete("/encoding-test-bucket/encoded-replace.txt");
+        given().delete("/encoding-test-bucket/composite-encoded.txt");
+        given().delete("/encoding-test-bucket");
+    }
+
+    // --- S3 Notification Configuration with Filter ---
+
+    @Test
+    @Order(90)
+    void createNotificationBucket() {
+        given()
+        .when()
+            .put("/notif-test-bucket")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(91)
+    void putNotificationConfigWithFilterIsNotDropped() {
+        String xml = """
+                <NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                  <QueueConfiguration>
+                    <Id>my-notif</Id>
+                    <Queue>arn:aws:sqs:us-east-1:000000000000:test-queue</Queue>
+                    <Event>s3:ObjectCreated:*</Event>
+                    <Filter>
+                      <S3Key>
+                        <FilterRule>
+                          <Name>prefix</Name>
+                          <Value>incoming/</Value>
+                        </FilterRule>
+                      </S3Key>
+                    </Filter>
+                  </QueueConfiguration>
+                </NotificationConfiguration>
+                """;
+
+        given()
+            .contentType("application/xml")
+            .queryParam("notification", "")
+            .body(xml)
+        .when()
+            .put("/notif-test-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("notification", "")
+        .when()
+            .get("/notif-test-bucket")
+        .then()
+            .statusCode(200)
+            .body(containsString("QueueConfiguration"))
+            .body(containsString("arn:aws:sqs:us-east-1:000000000000:test-queue"))
+            .body(containsString("s3:ObjectCreated:*"))
+            // Verify filter rules are preserved in round-trip
+            .body(containsString("Filter"))
+            .body(containsString("FilterRule"))
+            .body(containsString("<Name>prefix</Name>"))
+            .body(containsString("<Value>incoming/</Value>"));
+    }
+
+    @Test
+    @Order(92)
+    void putNotificationConfigWithFilterBeforeQueueIsNotDropped() {
+        // Filter appears BEFORE Queue — ensures element order doesn't matter
+        String xml = """
+                <NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                  <QueueConfiguration>
+                    <Id>filter-first</Id>
+                    <Filter>
+                      <S3Key>
+                        <FilterRule>
+                          <Name>suffix</Name>
+                          <Value>.csv</Value>
+                        </FilterRule>
+                      </S3Key>
+                    </Filter>
+                    <Queue>arn:aws:sqs:us-east-1:000000000000:csv-queue</Queue>
+                    <Event>s3:ObjectCreated:Put</Event>
+                  </QueueConfiguration>
+                </NotificationConfiguration>
+                """;
+
+        given()
+            .contentType("application/xml")
+            .queryParam("notification", "")
+            .body(xml)
+        .when()
+            .put("/notif-test-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("notification", "")
+        .when()
+            .get("/notif-test-bucket")
+        .then()
+            .statusCode(200)
+            .body(containsString("QueueConfiguration"))
+            .body(containsString("arn:aws:sqs:us-east-1:000000000000:csv-queue"))
+            .body(containsString("s3:ObjectCreated:Put"))
+            .body(containsString("<Name>suffix</Name>"))
+            .body(containsString("<Value>.csv</Value>"));
+    }
+
+    @Test
+    @Order(93)
+    void cleanupNotificationBucket() {
+        given().delete("/notif-test-bucket");
     }
 }

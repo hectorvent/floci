@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.sns;
 import io.github.hectorvent.floci.core.common.*;
 import io.github.hectorvent.floci.services.sns.model.Subscription;
 import io.github.hectorvent.floci.services.sns.model.Topic;
+import io.github.hectorvent.floci.services.sqs.model.MessageAttributeValue;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.MultivaluedMap;
@@ -175,21 +176,23 @@ public class SnsQueryHandler {
     private Response handlePublish(MultivaluedMap<String, String> params, String region) {
         String topicArn = getParam(params, "TopicArn");
         String targetArn = getParam(params, "TargetArn");
+        String phoneNumber = getParam(params, "PhoneNumber");
         String message = getParam(params, "Message");
         String subject = getParam(params, "Subject");
         String messageGroupId = getParam(params, "MessageGroupId");
         String messageDeduplicationId = getParam(params, "MessageDeduplicationId");
 
-        Map<String, String> attributes = new HashMap<>();
+        Map<String, MessageAttributeValue> attributes = new HashMap<>();
         for (int i = 1; ; i++) {
             String name = params.getFirst("MessageAttributes.entry." + i + ".Name");
             if (name == null) break;
             String value = params.getFirst("MessageAttributes.entry." + i + ".Value.StringValue");
-            if (value != null) attributes.put(name, value);
+            String dataType = params.getFirst("MessageAttributes.entry." + i + ".Value.DataType");
+            if (value != null) attributes.put(name, new MessageAttributeValue(value, dataType != null ? dataType : "String"));
         }
 
         try {
-            String messageId = snsService.publish(topicArn, targetArn, message, subject,
+            String messageId = snsService.publish(topicArn, targetArn, phoneNumber, message, subject,
                     attributes, messageGroupId, messageDeduplicationId, region);
 
             String result = new XmlBuilder().elem("MessageId", messageId).build();

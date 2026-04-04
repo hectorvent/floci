@@ -55,7 +55,7 @@ services:
       - ./init/stop.d:/etc/floci/init/stop.d:ro
 ```
 
-See [`initialization-hooks.md`](./initialization-hooks.md) for execution behavior and configuration details.
+See [Initialization Hooks](./initialization-hooks.md) for execution behavior and configuration details.
 
 ## Persistence
 
@@ -73,6 +73,28 @@ services:
       FLOCI_STORAGE_MODE: persistent
       FLOCI_STORAGE_PERSISTENT_PATH: /app/data
 ```
+
+### Using Named Volumes
+
+Instead of bind-mounting a local directory, you can use Docker named volumes to keep your project directory clean:
+
+```yaml
+services:
+  floci:
+    image: hectorvent/floci:latest
+    ports:
+      - "4566:4566"
+    volumes:
+      - floci-data:/app/data
+    environment:
+      FLOCI_STORAGE_MODE: persistent
+      FLOCI_STORAGE_PERSISTENT_PATH: /app/data
+
+volumes:
+  floci-data:
+```
+
+Named volumes are managed entirely by Docker and won't create files in your repository. This works with both the JVM and native images.
 
 ## Environment Variables Reference
 

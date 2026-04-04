@@ -2,7 +2,7 @@ services:
   floci:
     build:
       context: .
-      dockerfile: Dockerfile.native
+      dockerfile: Dockerfile
     ports:
       - "4566:4566"
       - "6379-6399:6379-6399"
@@ -16,8 +16,12 @@ services:
       FLOCI_SERVICES_RDS_PROXY_BASE_PORT: "7001"
       FLOCI_STORAGE_PERSISTENT_PATH: /app/data
     networks:
-      default:
+      floci_default:
         aliases:
           - localhost.floci.cloud
+
+networks:
+  floci_default:
+    name: floci_default
 
 

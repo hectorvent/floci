@@ -43,6 +43,7 @@ public class ContainerLauncher {
 
     private static final Logger LOG = Logger.getLogger(ContainerLauncher.class);
     private static final String TASK_DIR = "/var/task";
+    private static final String RUNTIME_DIR = "/var/runtime";
 
     private static final DateTimeFormatter LOG_STREAM_DATE_FMT = DateTimeFormatter.ofPattern("yyyy/MM/dd");
 
@@ -161,11 +162,12 @@ public class ContainerLauncher {
                     }
                 }, "tar-streamer-" + fn.getFunctionName()).start();
 
+                String codeDir = isProvidedRuntime(fn.getRuntime()) ? RUNTIME_DIR : TASK_DIR;
                 dockerClient.copyArchiveToContainerCmd(containerId)
-                        .withRemotePath(TASK_DIR)
+                        .withRemotePath(codeDir)
                         .withTarInputStream(pis)
                         .exec();
-                LOG.debugv("Copied code into container {0} at {1}", containerId, TASK_DIR);
+                LOG.debugv("Copied code into container {0} at {1}", containerId, codeDir);
             } catch (java.nio.file.NoSuchFileException e) {
                 // Race condition: code directory deleted between the pre-launch check and the copy
                 // (e.g. function deleted while the image was being pulled).
@@ -268,6 +270,10 @@ public class ContainerLauncher {
         } catch (Exception e) {
             LOG.debugv("Could not forward log line to CloudWatch Logs: {0}", e.getMessage());
         }
+    }
+
+    private static boolean isProvidedRuntime(String runtime) {
+        return runtime != null && runtime.startsWith("provided");
     }
 
     private static String extractRegionFromArn(String arn) {

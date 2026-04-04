@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Future;
 
 /**
  * Handles CloudFormation Query-protocol API calls (form-encoded POST, XML response).
@@ -97,7 +98,7 @@ public class CloudFormationQueryHandler {
 
         cfnService.createChangeSet(stackName, "initial-create", "CREATE",
                 templateBody, templateUrl, parameters, capabilities, tags, region);
-        cfnService.executeChangeSet(stackName, "initial-create", region);
+        awaitExecution(cfnService.executeChangeSet(stackName, "initial-create", region));
 
         Stack stack = cfnService.describeStacks(stackName, region).get(0);
         String xml = new XmlBuilder()
@@ -122,7 +123,7 @@ public class CloudFormationQueryHandler {
 
         ChangeSet cs = cfnService.createChangeSet(stackName, "update-" + UUID.randomUUID().toString().substring(0, 8),
                 "UPDATE", templateBody, templateUrl, parameters, capabilities, Map.of(), region);
-        cfnService.executeChangeSet(stackName, cs.getChangeSetName(), region);
+        awaitExecution(cfnService.executeChangeSet(stackName, cs.getChangeSetName(), region));
 
         Stack stack = cfnService.describeStacks(stackName, region).get(0);
         String xml = new XmlBuilder()
@@ -535,6 +536,14 @@ public class CloudFormationQueryHandler {
                 .raw(AwsQueryResponse.responseMetadata())
                 .end(responseName)
                 .build();
+    }
+
+    private void awaitExecution(Future<?> future) {
+        try {
+            future.get();
+        } catch (Exception e) {
+            LOG.warnv("Stack execution failed: {0}", e.getMessage());
+        }
     }
 
     private Response xmlError(String code, String message, int status) {

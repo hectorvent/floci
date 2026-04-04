@@ -9,6 +9,7 @@ Floci emulates 25 AWS services on a single port (`4566`). All services use the r
 | [SSM](ssm.md) | `POST /` + `X-Amz-Target: AmazonSSM.*` | JSON 1.1 | 12 |
 | [SQS](sqs.md) | `POST /` with `Action=` param | Query / JSON | 20 |
 | [SNS](sns.md) | `POST /` with `Action=` param | Query / JSON | 17 |
+| [SES](ses.md) | `POST /` with `Action=` param | Query | 16 |
 | [S3](s3.md) | `/{bucket}/{key}` | REST XML | 50+ |
 | [DynamoDB](dynamodb.md) | `POST /` + `X-Amz-Target: DynamoDB_20120810.*` | JSON 1.1 | 19 |
 | [DynamoDB Streams](dynamodb.md#streams) | `POST /` + `X-Amz-Target: DynamoDBStreams_20120810.*` | JSON 1.1 | 4 |
