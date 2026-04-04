@@ -228,8 +228,9 @@ class StepFunctionsJsonataIntegrationTest {
     }
 
     @Test
-    void jsonataPassState_withResult_accepted() throws Exception {
-        // JSONata Pass states may use "Result" (static pass-through value) — must not be rejected at validation.
+    void jsonataPassState_withResult_rejected() {
+        // AWS rejects Result in JSONata states (SCHEMA_VALIDATION_FAILED).
+        // Result is a JSONPath-only field; the JSONata equivalent is Output.
         String definition = """
                 {
                     "QueryLanguage": "JSONata",
@@ -244,18 +245,20 @@ class StepFunctionsJsonataIntegrationTest {
                 }
                 """;
 
-        String smArn = createStateMachine("jsonata-result-test", definition);
-        String execArn = startExecution(smArn, "{}");
-        String output = waitForExecution(execArn);
-        assertTrue(output.contains("ok"));
-        assertTrue(output.contains("200"));
+        given()
+                .header("X-Amz-Target", "AWSStepFunctions.CreateStateMachine")
+                .contentType(SFN_CONTENT_TYPE)
+                .body(String.format("""
+                        {"name":"jsonata-result-test","definition":%s,"roleArn":"%s","type":"STANDARD"}
+                        """, quote(definition), ROLE_ARN))
+                .when().post("/")
+                .then().statusCode(400);
     }
 
     @Test
-    void jsonataPassState_withParameters_accepted() throws Exception {
-        // JSONata states that include "Parameters" must be accepted (not validation-rejected).
-        // AWS allows Parameters in JSONata states even though it is a JSONPath concept;
-        // Floci ignores it at execution time, matching AWS behavior.
+    void jsonataPassState_withParameters_rejected() {
+        // AWS rejects Parameters in JSONata states (SCHEMA_VALIDATION_FAILED).
+        // Parameters is a JSONPath-only field; the JSONata equivalent is Arguments.
         String definition = """
                 {
                     "QueryLanguage": "JSONata",
@@ -273,9 +276,14 @@ class StepFunctionsJsonataIntegrationTest {
                 }
                 """;
 
-        // Should not throw InvalidDefinition — state machine must be created successfully.
-        String smArn = createStateMachine("jsonata-parameters-test", definition);
-        assertNotNull(smArn);
+        given()
+                .header("X-Amz-Target", "AWSStepFunctions.CreateStateMachine")
+                .contentType(SFN_CONTENT_TYPE)
+                .body(String.format("""
+                        {"name":"jsonata-parameters-test","definition":%s,"roleArn":"%s","type":"STANDARD"}
+                        """, quote(definition), ROLE_ARN))
+                .when().post("/")
+                .then().statusCode(400);
     }
 
     // ──────────────── Helpers ────────────────
