@@ -547,7 +547,7 @@ public class ApiGatewayExecuteController {
             }
 
             if (template != null) {
-                transformedBody = vtlEngine.evaluate(template, vtlCtx);
+                transformedBody = vtlEngine.evaluate(template, vtlCtx).body();
             } else {
                 // No matching template for this Content-Type
                 String behavior = integration.getPassthroughBehavior();
@@ -667,6 +667,7 @@ public class ApiGatewayExecuteController {
         // Determine final status code and body
         int finalStatus;
         String finalBody;
+        VtlTemplateEngine.EvaluateResult templateResult = null;
 
         if (matchedResponse != null) {
             finalStatus = Integer.parseInt(matchedResponse.statusCode());
@@ -679,7 +680,8 @@ public class ApiGatewayExecuteController {
                     VtlTemplateEngine.VtlContext responseMappingCtx = new VtlTemplateEngine.VtlContext(
                             responseBodyStr, headerMap, queryMap, pathMap, stageName, httpMethod,
                             resource.getPath(), requestId, "000000000000", null);
-                    finalBody = vtlEngine.evaluate(responseTemplate, responseMappingCtx);
+                    templateResult = vtlEngine.evaluate(responseTemplate, responseMappingCtx);
+                    finalBody = templateResult.body();
                 } else {
                     finalBody = responseBodyStr;
                 }
@@ -691,11 +693,25 @@ public class ApiGatewayExecuteController {
             finalBody = responseBodyStr;
         }
 
+        // Apply $context.responseOverride assignments from the response template (if any).
+        if (templateResult != null) {
+            if (templateResult.statusOverride() != null) {
+                finalStatus = templateResult.statusOverride();
+            }
+        }
+
         Response.ResponseBuilder rb = Response.status(finalStatus)
                 .entity(finalBody)
                 .type(MediaType.APPLICATION_JSON);
 
-        // Apply response parameter mapping (header mapping)
+        // Apply $context.responseOverride header assignments.
+        if (templateResult != null && !templateResult.headerOverrides().isEmpty()) {
+            for (Map.Entry<String, String> hdr : templateResult.headerOverrides().entrySet()) {
+                rb.header(hdr.getKey(), hdr.getValue());
+            }
+        }
+
+        // Apply response parameter mapping (header mapping from responseParameters config).
         if (matchedResponse != null && matchedResponse.responseParameters() != null) {
             Map<String, String> serviceResponseHeaders = new HashMap<>();
             if (serviceResponse != null) {
