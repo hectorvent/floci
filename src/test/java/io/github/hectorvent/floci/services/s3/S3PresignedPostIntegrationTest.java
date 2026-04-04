@@ -129,7 +129,10 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(400)
-            .body(containsString("EntityTooLarge"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("EntityTooLarge")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Your proposed upload exceeds the maximum allowed size.")));
     }
 
     @Test
@@ -143,7 +146,10 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(400)
-            .body(containsString("InvalidArgument"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("InvalidArgument")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Bucket POST must contain a field named 'key'.")));
     }
 
     @Test
@@ -157,7 +163,10 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(400)
-            .body(containsString("InvalidArgument"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("InvalidArgument")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Bucket POST must contain a file field.")));
     }
 
     @Test
@@ -227,7 +236,8 @@ class S3PresignedPostIntegrationTest {
             .post("/nonexistent-presigned-bucket")
         .then()
             .statusCode(404)
-            .body(containsString("NoSuchBucket"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("NoSuchBucket")));
     }
 
     @Test
@@ -277,7 +287,11 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(403)
-            .body(containsString("Policy Condition failed"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("AccessDenied")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Invalid according to Policy: Policy Condition failed: "
+                            + "[\"eq\", \"$Content-Type\", \"image/png\"]")));
     }
 
     @Test
@@ -302,7 +316,11 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(403)
-            .body(containsString("Policy Condition failed"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("AccessDenied")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Invalid according to Policy: Policy Condition failed: "
+                            + "[\"eq\", \"$key\", \"uploads/expected-key.txt\"]")));
     }
 
     @Test
@@ -351,7 +369,11 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(403)
-            .body(containsString("Policy Condition failed"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("AccessDenied")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Invalid according to Policy: Policy Condition failed: "
+                            + "[\"starts-with\", \"$key\", \"uploads/\"]")));
     }
 
     @Test
