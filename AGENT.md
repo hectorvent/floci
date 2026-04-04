@@ -310,6 +310,8 @@ Conventional commits:
 - `docs:`
 - `chore:`
 
+Do not add `Co-Authored-By` trailers for AI tools in commit messages. Keep attribution limited to human contributors.
+
 ---
 
 ## Release Awareness

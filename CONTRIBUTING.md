@@ -68,6 +68,8 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) â
 | `chore:` | Build, CI, dependencies | none |
 | `BREAKING CHANGE:` | Footer or `!` suffix â€” incompatible change | major |
 
+Do not include `Co-Authored-By` trailers for AI tools in commit messages. Attribution should be limited to human contributors.
+
 **Examples:**
 
 ```
