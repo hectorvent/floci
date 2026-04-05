@@ -308,6 +308,21 @@ class EventBridgeServiceTest {
     }
 
     @Test
+    void matchesPatternByResources() {
+     Map<String, Object> event = Map.of(
+        "Source", "my.app",
+        "Detail", "Payload",
+        "Resources", OBJECT_MAPPER.createArrayNode().add("resource1").add("resource2")
+     );
+
+     assertTrue(service.matchesPattern(event, "{\"resources\":[\"resource1\"]}"));
+     assertTrue(service.matchesPattern(event, "{\"resources\":[\"resource2\"]}"));
+     assertTrue(service.matchesPattern(event, "{\"resources\":[\"resource1\",\"resource2\"]}"));
+     assertFalse(service.matchesPattern(event, "{\"resources\":[\"resource3\"]}"));
+     assertFalse(service.matchesPattern(event, "{\"resources\":[\"*\"]}"));
+    }
+
+    @Test
     void putEventsReturnsEventIds() {
         List<Map<String, Object>> entries = List.of(
                 Map.of("Source", "my.app", "DetailType", "Test", "Detail", "{}")

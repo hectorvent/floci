@@ -390,6 +390,17 @@ public class EventBridgeService {
                     }
                 }
             }
+            JsonNode resourcesPattern = pattern.get("resources");
+            if (resourcesPattern != null && resourcesPattern.isArray()) {
+                var resources = ((ArrayNode) event.get("Resources")).elements();
+                while (resources.hasNext()) {
+                    var resource = resources.next().asText(null);
+                    if (matchesArrayField(resourcesPattern, resource)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
             return true;
         } catch (Exception e) {
             LOG.warnv("Failed to parse event pattern: {0}", e.getMessage());
