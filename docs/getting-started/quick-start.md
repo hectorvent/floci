@@ -57,7 +57,7 @@ This guide gets Floci running and verifies that AWS CLI commands work against it
 === "Build from source"
 
     ```bash
-    git clone https://github.com/hectorvent/floci.git
+    git clone https://github.com/floci-io/floci.git
     cd floci
     mvn quarkus:dev   # hot reload, port 4566
     ```
