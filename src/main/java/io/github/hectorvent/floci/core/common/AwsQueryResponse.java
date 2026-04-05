@@ -78,6 +78,14 @@ public final class AwsQueryResponse {
     }
 
     /**
+     * Same as {@link #envelope} but with an empty Result element.
+     * Some services (e.g. SES) require the Result element even if it is empty.
+     */
+    public static String envelopeEmptyResult(String action, String xmlns) {
+        return envelope(action, xmlns, "");
+    }
+
+    /**
      * Builds a Query-protocol XML error response and returns a JAX-RS {@link Response}.
      *
      * <pre>{@code

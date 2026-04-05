@@ -28,7 +28,8 @@ class SesIntegrationTest {
             .post("/")
         .then()
             .statusCode(200)
-            .body(containsString("VerifyEmailIdentityResponse"));
+            .body(containsString("VerifyEmailIdentityResponse"))
+            .body(containsString("VerifyEmailIdentityResult"));
     }
 
     @Test
@@ -265,7 +266,8 @@ class SesIntegrationTest {
         .when()
             .post("/")
         .then()
-            .statusCode(200);
+            .statusCode(200)
+            .body(containsString("SetIdentityNotificationTopicResult"));
     }
 
     @Test
@@ -320,7 +322,8 @@ class SesIntegrationTest {
         .when()
             .post("/")
         .then()
-            .statusCode(200);
+            .statusCode(200)
+            .body(containsString("DeleteIdentityResult"));
 
         // Verify it's gone
         given()
