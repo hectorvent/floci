@@ -496,6 +496,62 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void describeStackEvents_byArn() {
+        String template = """
+            {
+              "Resources": {
+                "MyBucket": {
+                  "Type": "AWS::S3::Bucket",
+                  "Properties": {
+                    "BucketName": "arn-events-test-bucket"
+                  }
+                }
+              }
+            }
+            """;
+
+        // 1. Create stack and capture the ARN
+        String createResponse = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "arn-events-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"))
+            .extract().asString();
+
+        // Extract the ARN from the response
+        String stackArn = createResponse.substring(
+                createResponse.indexOf("<StackId>") + "<StackId>".length(),
+                createResponse.indexOf("</StackId>"));
+
+        // 2. Describe stack events using the ARN
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackEvents")
+            .formParam("StackName", stackArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackName>arn-events-stack</StackName>"));
+
+        // 3. Describe stacks using the ARN
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", stackArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackName>arn-events-stack</StackName>"));
+    }
+
+    @Test
     void deleteChangeSet_nonExistentChangeSet_returnsError() {
         String template = """
             {
