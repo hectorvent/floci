@@ -53,8 +53,15 @@ public class DockerHostResolver {
             }
         }
 
-        LOG.debugv("Using host.docker.internal for container-to-host communication");
-        return HOST_DOCKER_INTERNAL;
+        // On Docker Desktop (macOS/Windows/Linux Desktop), host.docker.internal works.
+        // On native Linux Docker, it doesn't exist - fall back to bridge IP.
+        if (isHostDockerInternalResolvable()) {
+            LOG.debugv("Using host.docker.internal for container-to-host communication");
+            return HOST_DOCKER_INTERNAL;
+        }
+
+        LOG.infov("host.docker.internal not resolvable (native Linux Docker?) — using bridge IP: {0}", LINUX_DOCKER_BRIDGE);
+        return LINUX_DOCKER_BRIDGE;
     }
 
     private boolean isRunningInContainer() {
@@ -65,6 +72,15 @@ public class DockerHostResolver {
         try {
             String content = Files.readString(cgroup);
             return content.contains("docker") || content.contains("kubepods");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean isHostDockerInternalResolvable() {
+        try {
+            InetAddress.getByName(HOST_DOCKER_INTERNAL);
+            return true;
         } catch (Exception e) {
             return false;
         }
