@@ -237,8 +237,8 @@ All settings are overridable via environment variables (`FLOCI_` prefix).
 | `FLOCI_STORAGE_PERSISTENT_PATH` | `./data` | Directory used for persisted state                                                  |
 | `FLOCI_ECR_BASE_URI` | `public.ecr.aws` | AWS ECR base URI used when pulling container images (e.g. Lambda)                   |
 
-→ Full reference: [configuration docs](https://hectorvent.dev/floci/configuration/application-yml/)
-→ Per-service storage overrides: [storage docs](https://hectorvent.dev/floci/configuration/storage/#per-service-storage-overrides)
+* Full reference: [configuration docs](https://floci.io/floci/configuration/application-yml/)
+* Per-service storage overrides: [storage docs](https://floci.io/floci/configuration/storage/#per-service-storage-overrides)
 
 **Multi-container Docker Compose:** When your application runs in a separate container from Floci, set `FLOCI_HOSTNAME` to the Floci service name so that returned URLs (e.g. SQS QueueUrl) resolve correctly:
 
