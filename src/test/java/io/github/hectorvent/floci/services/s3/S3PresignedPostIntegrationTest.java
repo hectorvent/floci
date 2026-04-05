@@ -129,7 +129,10 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(400)
-            .body(containsString("EntityTooLarge"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("EntityTooLarge")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Your proposed upload exceeds the maximum allowed size.")));
     }
 
     @Test
@@ -143,7 +146,10 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(400)
-            .body(containsString("InvalidArgument"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("InvalidArgument")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Bucket POST must contain a field named 'key'.")));
     }
 
     @Test
@@ -157,7 +163,10 @@ class S3PresignedPostIntegrationTest {
             .post("/" + BUCKET)
         .then()
             .statusCode(400)
-            .body(containsString("InvalidArgument"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("InvalidArgument")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Bucket POST must contain a file field.")));
     }
 
     @Test
@@ -227,7 +236,8 @@ class S3PresignedPostIntegrationTest {
             .post("/nonexistent-presigned-bucket")
         .then()
             .statusCode(404)
-            .body(containsString("NoSuchBucket"));
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("NoSuchBucket")));
     }
 
     @Test
@@ -256,6 +266,117 @@ class S3PresignedPostIntegrationTest {
     }
 
     @Test
+    @Order(91)
+    void presignedPostRejectsContentTypeMismatch() {
+        String key = "uploads/ct-mismatch.png";
+        String fileContent = "not a real png";
+
+        String policy = buildPolicy(BUCKET, key, "image/png", 0, 10485760);
+        String policyBase64 = Base64.getEncoder().encodeToString(policy.getBytes(StandardCharsets.UTF_8));
+
+        given()
+            .multiPart("key", key)
+            .multiPart("Content-Type", "image/gif")
+            .multiPart("policy", policyBase64)
+            .multiPart("x-amz-algorithm", "AWS4-HMAC-SHA256")
+            .multiPart("x-amz-credential", "AKIAIOSFODNN7EXAMPLE/20260330/us-east-1/s3/aws4_request")
+            .multiPart("x-amz-date", AMZ_DATE_FORMAT.format(Instant.now()))
+            .multiPart("x-amz-signature", "dummysignature")
+            .multiPart("file", "ct-mismatch.png", fileContent.getBytes(StandardCharsets.UTF_8), "image/gif")
+        .when()
+            .post("/" + BUCKET)
+        .then()
+            .statusCode(403)
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("AccessDenied")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Invalid according to Policy: Policy Condition failed: "
+                            + "[\"eq\", \"$Content-Type\", \"image/png\"]")));
+    }
+
+    @Test
+    @Order(92)
+    void presignedPostRejectsKeyMismatch() {
+        String key = "uploads/wrong-key.txt";
+        String fileContent = "test content";
+
+        String policy = buildPolicy(BUCKET, "uploads/expected-key.txt", "text/plain", 0, 10485760);
+        String policyBase64 = Base64.getEncoder().encodeToString(policy.getBytes(StandardCharsets.UTF_8));
+
+        given()
+            .multiPart("key", key)
+            .multiPart("Content-Type", "text/plain")
+            .multiPart("policy", policyBase64)
+            .multiPart("x-amz-algorithm", "AWS4-HMAC-SHA256")
+            .multiPart("x-amz-credential", "AKIAIOSFODNN7EXAMPLE/20260330/us-east-1/s3/aws4_request")
+            .multiPart("x-amz-date", AMZ_DATE_FORMAT.format(Instant.now()))
+            .multiPart("x-amz-signature", "dummysignature")
+            .multiPart("file", "wrong-key.txt", fileContent.getBytes(StandardCharsets.UTF_8), "text/plain")
+        .when()
+            .post("/" + BUCKET)
+        .then()
+            .statusCode(403)
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("AccessDenied")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Invalid according to Policy: Policy Condition failed: "
+                            + "[\"eq\", \"$key\", \"uploads/expected-key.txt\"]")));
+    }
+
+    @Test
+    @Order(93)
+    void presignedPostWithStartsWithCondition() {
+        String key = "uploads/prefix-test.txt";
+        String fileContent = "starts-with test";
+
+        String policy = buildStartsWithPolicy(BUCKET, "uploads/", "text/", 0, 10485760);
+        String policyBase64 = Base64.getEncoder().encodeToString(policy.getBytes(StandardCharsets.UTF_8));
+
+        given()
+            .multiPart("key", key)
+            .multiPart("Content-Type", "text/plain")
+            .multiPart("policy", policyBase64)
+            .multiPart("x-amz-algorithm", "AWS4-HMAC-SHA256")
+            .multiPart("x-amz-credential", "AKIAIOSFODNN7EXAMPLE/20260330/us-east-1/s3/aws4_request")
+            .multiPart("x-amz-date", AMZ_DATE_FORMAT.format(Instant.now()))
+            .multiPart("x-amz-signature", "dummysignature")
+            .multiPart("file", "prefix-test.txt", fileContent.getBytes(StandardCharsets.UTF_8), "text/plain")
+        .when()
+            .post("/" + BUCKET)
+        .then()
+            .statusCode(204);
+    }
+
+    @Test
+    @Order(94)
+    void presignedPostRejectsStartsWithMismatch() {
+        String key = "other/wrong-prefix.txt";
+        String fileContent = "starts-with mismatch";
+
+        String policy = buildStartsWithPolicy(BUCKET, "uploads/", "text/", 0, 10485760);
+        String policyBase64 = Base64.getEncoder().encodeToString(policy.getBytes(StandardCharsets.UTF_8));
+
+        given()
+            .multiPart("key", key)
+            .multiPart("Content-Type", "text/plain")
+            .multiPart("policy", policyBase64)
+            .multiPart("x-amz-algorithm", "AWS4-HMAC-SHA256")
+            .multiPart("x-amz-credential", "AKIAIOSFODNN7EXAMPLE/20260330/us-east-1/s3/aws4_request")
+            .multiPart("x-amz-date", AMZ_DATE_FORMAT.format(Instant.now()))
+            .multiPart("x-amz-signature", "dummysignature")
+            .multiPart("file", "wrong-prefix.txt", fileContent.getBytes(StandardCharsets.UTF_8), "text/plain")
+        .when()
+            .post("/" + BUCKET)
+        .then()
+            .statusCode(403)
+            .contentType("application/xml")
+            .body(hasXPath("/Error/Code", equalTo("AccessDenied")))
+            .body(hasXPath("/Error/Message", equalTo(
+                    "Invalid according to Policy: Policy Condition failed: "
+                            + "[\"starts-with\", \"$key\", \"uploads/\"]")));
+    }
+
+    @Test
     @Order(100)
     void cleanupBucket() {
         // Delete all objects
@@ -264,6 +385,7 @@ class S3PresignedPostIntegrationTest {
         given().delete("/" + BUCKET + "/uploads/no-policy.txt");
         given().delete("/" + BUCKET + "/uploads/typed-file.json");
         given().delete("/" + BUCKET + "/uploads/within-range.txt");
+        given().delete("/" + BUCKET + "/uploads/prefix-test.txt");
 
         given()
         .when()
@@ -287,5 +409,23 @@ class S3PresignedPostIntegrationTest {
                   ]
                 }
                 """.formatted(expiration, bucket, key, contentType, minSize, maxSize);
+    }
+
+    private String buildStartsWithPolicy(String bucket, String keyPrefix, String contentTypePrefix,
+                                         long minSize, long maxSize) {
+        String expiration = Instant.now().plusSeconds(3600)
+                .atZone(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_INSTANT);
+        return """
+                {
+                  "expiration": "%s",
+                  "conditions": [
+                    {"bucket": "%s"},
+                    ["starts-with", "$key", "%s"],
+                    ["starts-with", "$Content-Type", "%s"],
+                    ["content-length-range", %d, %d]
+                  ]
+                }
+                """.formatted(expiration, bucket, keyPrefix, contentTypePrefix, minSize, maxSize);
     }
 }
