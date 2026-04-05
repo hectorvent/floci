@@ -90,4 +90,5 @@ nav:
     - ACM: services/acm.md
     - ECS: services/ecs.md
     - OpenSearch: services/opensearch.md
+    - EC2: services/ec2.md
   - Contributing: contributing.md
