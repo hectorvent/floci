@@ -1,6 +1,5 @@
 package io.github.hectorvent.floci.lifecycle;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;

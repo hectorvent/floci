@@ -1,13 +1,8 @@
 package io.github.hectorvent.floci.services.sqs;
 
+import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.RestAssured;
-import io.restassured.config.EncoderConfig;
-import io.restassured.http.ContentType;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.*;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -17,6 +12,11 @@ import static org.hamcrest.Matchers.*;
 class SqsIntegrationTest {
 
     private static String queueUrl;
+
+    @BeforeAll
+    static void configureRestAssured() {
+        RestAssuredJsonUtils.configureAwsContentTypes();
+    }
 
     @Test
     @Order(1)
@@ -336,9 +336,6 @@ class SqsIntegrationTest {
     @Test
     void jsonProtocol_nonExistentQueue_returnsQueueDoesNotExist() {
         given()
-            .config(RestAssured.config().encoderConfig(
-                EncoderConfig.encoderConfig()
-                    .encodeContentTypeAs("application/x-amz-json-1.0", ContentType.TEXT)))
             .contentType("application/x-amz-json-1.0")
             .header("X-Amz-Target", "AmazonSQS.GetQueueUrl")
             .body("{\"QueueName\": \"no-such-queue-xyz\"}")
@@ -346,6 +343,7 @@ class SqsIntegrationTest {
             .post("/")
         .then()
             .statusCode(400)
+            .header("x-amzn-query-error", "AWS.SimpleQueueService.NonExistentQueue;Sender")
             .body(containsString("QueueDoesNotExist"))
             .body(not(containsString("AWS.SimpleQueueService.NonExistentQueue")));
     }

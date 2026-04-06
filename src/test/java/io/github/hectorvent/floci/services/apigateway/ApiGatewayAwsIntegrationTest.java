@@ -2,9 +2,8 @@ package io.github.hectorvent.floci.services.apigateway;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.RestAssured;
-import io.restassured.config.EncoderConfig;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.*;
 
@@ -37,9 +36,7 @@ class ApiGatewayAwsIntegrationTest {
 
     @BeforeAll
     static void configureRestAssured() {
-        RestAssured.config = RestAssured.config().encoderConfig(
-                EncoderConfig.encoderConfig()
-                        .encodeContentTypeAs(SFN_CONTENT_TYPE, ContentType.TEXT));
+        RestAssuredJsonUtils.configureAwsContentTypes();
     }
 
     // ──────────────── Setup: DynamoDB table + SFN state machine ────────────────

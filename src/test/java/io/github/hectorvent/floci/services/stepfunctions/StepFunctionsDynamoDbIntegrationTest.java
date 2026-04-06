@@ -2,10 +2,8 @@ package io.github.hectorvent.floci.services.stepfunctions;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.RestAssured;
-import io.restassured.config.EncoderConfig;
-import io.restassured.http.ContentType;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.*;
 
@@ -29,9 +27,7 @@ class StepFunctionsDynamoDbIntegrationTest {
 
     @BeforeAll
     static void configureRestAssured() {
-        RestAssured.config = RestAssured.config().encoderConfig(
-                EncoderConfig.encoderConfig()
-                        .encodeContentTypeAs(SFN_CONTENT_TYPE, ContentType.TEXT));
+        RestAssuredJsonUtils.configureAwsContentTypes();
     }
 
     @Test
