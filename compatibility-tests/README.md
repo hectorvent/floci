@@ -92,6 +92,13 @@ just test-typescript
 just test-awscli
 ```
 
+Bats-based suites keep their normal console output and also write JUnit XML reports:
+
+- `sdk-test-awscli/test-results/junit.xml`
+- `compat-cdk/test-results/junit.xml`
+- `compat-terraform/test-results/junit.xml`
+- `compat-opentofu/test-results/junit.xml`
+
 ### TAP Output
 
 All test frameworks support TAP (Test Anything Protocol) output:

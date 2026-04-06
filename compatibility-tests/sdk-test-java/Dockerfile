@@ -11,4 +11,4 @@ COPY src/ src/
 ENV FLOCI_ENDPOINT=http://floci:4566
 
 RUN mkdir -p /results
-ENTRYPOINT ["/bin/bash", "-c", "mvn test -q && cp -r target/surefire-reports/*.xml /results/ 2>/dev/null || true"]
+ENTRYPOINT ["bash", "-c", "status=0; mvn test -q -Dorg.slf4j.simpleLogger.defaultLogLevel=warn || status=$?; if [ -d target/surefire-reports ]; then ls -la target/surefire-reports/; cp target/surefire-reports/TEST-*.xml /results/ 2>/dev/null || true; else echo 'No surefire-reports directory found'; fi; exit $status"]

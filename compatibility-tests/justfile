@@ -37,7 +37,7 @@ test-typescript:
 
 # Run AWS CLI tests (JUnit XML output via bats)
 test-awscli:
-    mkdir -p sdk-test-awscli/test-results && ./lib/bats-core/bin/bats --formatter junit sdk-test-awscli/test/ > sdk-test-awscli/test-results/junit.xml
+    ./lib/run-bats-with-junit.sh sdk-test-awscli/test/ sdk-test-awscli/test-results/junit.xml
 
 # Run Java SDK tests (JUnit XML output via Maven Surefire)
 [working-directory: 'sdk-test-java']
@@ -109,15 +109,15 @@ setup-bats:
 
 # Run CDK compatibility tests (JUnit XML output via bats)
 test-cdk:
-    mkdir -p compat-cdk/test-results && ./lib/bats-core/bin/bats --formatter junit compat-cdk/test/ > compat-cdk/test-results/junit.xml
+    ./lib/run-bats-with-junit.sh compat-cdk/test/ compat-cdk/test-results/junit.xml
 
 # Run Terraform compatibility tests (JUnit XML output via bats)
 test-terraform:
-    mkdir -p compat-terraform/test-results && ./lib/bats-core/bin/bats --formatter junit compat-terraform/test/ > compat-terraform/test-results/junit.xml
+    ./lib/run-bats-with-junit.sh compat-terraform/test/ compat-terraform/test-results/junit.xml
 
 # Run OpenTofu compatibility tests (JUnit XML output via bats)
 test-opentofu:
-    mkdir -p compat-opentofu/test-results && ./lib/bats-core/bin/bats --formatter junit compat-opentofu/test/ > compat-opentofu/test-results/junit.xml
+    ./lib/run-bats-with-junit.sh compat-opentofu/test/ compat-opentofu/test-results/junit.xml
 
 # Run all IaC compatibility tests (continues on failure)
 test-compat:

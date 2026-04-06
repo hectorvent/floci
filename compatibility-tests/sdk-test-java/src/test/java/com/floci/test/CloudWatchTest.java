@@ -16,8 +16,7 @@ class CloudWatchTest {
 
     @BeforeAll
     static void setUp() {
-        cloudWatchClient = CloudWatchClient.builder()
-                .build();
+        cloudWatchClient = TestFixtures.cloudWatchClient();
     }
 
     @AfterAll

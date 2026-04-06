@@ -290,6 +290,44 @@ class S3Test {
     }
 
     @Test
+    @Order(19)
+    void copyObjectNonAsciiKey() throws Exception {
+        String srcKey = "src/テスト画像.png";
+        String dstKey = "dst/テスト画像.png";
+        String srcBucket = BUCKET;
+        String dstBucket = "sdk-test-bucket-copy-unicode";
+
+        try {
+            s3.createBucket(CreateBucketRequest.builder().bucket(dstBucket).build());
+
+            // Put source object with non-ASCII key
+            s3.putObject(PutObjectRequest.builder()
+                            .bucket(srcBucket).key(srcKey).build(),
+                    RequestBody.fromString("non-ascii content"));
+
+            // Copy with non-ASCII key
+            CopyObjectResponse response = s3.copyObject(CopyObjectRequest.builder()
+                    .sourceBucket(srcBucket).sourceKey(srcKey)
+                    .destinationBucket(dstBucket).destinationKey(dstKey)
+                    .build());
+
+            assertThat(response.copyObjectResult().eTag()).isNotNull();
+
+            // Verify copied content
+            var getResponse = s3.getObject(GetObjectRequest.builder()
+                    .bucket(dstBucket).key(dstKey).build());
+            String downloaded = new String(getResponse.readAllBytes(), StandardCharsets.UTF_8);
+            assertThat(downloaded).isEqualTo("non-ascii content");
+        } finally {
+            try {
+                s3.deleteObject(DeleteObjectRequest.builder().bucket(srcBucket).key(srcKey).build());
+                s3.deleteObject(DeleteObjectRequest.builder().bucket(dstBucket).key(dstKey).build());
+                s3.deleteBucket(DeleteBucketRequest.builder().bucket(dstBucket).build());
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
     @Order(20)
     void deleteObjectsBatch() {
         // Create batch objects

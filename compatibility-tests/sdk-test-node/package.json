@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "vitest run --reporter=verbose --reporter=junit --outputFile=test-results/junit.xml",
+    "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {

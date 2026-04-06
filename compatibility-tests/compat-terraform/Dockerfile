@@ -23,5 +23,5 @@ ENV AWS_SECRET_ACCESS_KEY=test
 ENV AWS_DEFAULT_REGION=us-east-1
 ENV BATS_LIB_PATH=/opt
 
-RUN mkdir -p /results
-ENTRYPOINT bash -c "/opt/bats-core/bin/bats --formatter junit test/ | tee /results/junit.xml"
+RUN chmod +x /app/run-bats-in-container.sh && mkdir -p /results
+ENTRYPOINT ["./run-bats-in-container.sh"]

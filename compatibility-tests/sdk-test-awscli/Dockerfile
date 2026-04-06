@@ -10,9 +10,10 @@ RUN git clone --depth 1 https://github.com/bats-core/bats-core.git /opt/bats-cor
     && git clone --depth 1 https://github.com/bats-core/bats-assert.git /opt/bats-assert
 
 COPY test/ test/
+COPY run-bats-in-container.sh /usr/local/bin/run-bats-in-container.sh
 
 ENV FLOCI_ENDPOINT=http://floci:4566
 ENV BATS_LIB_PATH=/opt
 
-RUN mkdir -p /results
-ENTRYPOINT bash -c "/opt/bats-core/bin/bats --formatter junit test/ | tee /results/junit.xml"
+RUN chmod +x /usr/local/bin/run-bats-in-container.sh && mkdir -p /results
+ENTRYPOINT ["run-bats-in-container.sh"]

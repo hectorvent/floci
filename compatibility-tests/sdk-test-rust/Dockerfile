@@ -17,4 +17,4 @@ ENV AWS_SECRET_ACCESS_KEY=test
 ENV AWS_DEFAULT_REGION=us-east-1
 
 RUN mkdir -p /results
-ENTRYPOINT ["cargo", "nextest", "run", "--profile", "ci", "--junit", "/results/junit.xml"]
+ENTRYPOINT ["cargo", "nextest", "run", "--profile", "ci"]

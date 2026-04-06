@@ -3,6 +3,7 @@ package tests
 import (
 	"bytes"
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -163,7 +164,7 @@ func TestS3NonASCIIKey(t *testing.T) {
 	// Copy with non-ASCII key
 	_, err = svc.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(bucket),
-		CopySource: aws.String(bucket + "/" + srcKey),
+		CopySource: aws.String(bucket + "/" + url.PathEscape(srcKey)),
 		Key:        aws.String(dstKey),
 	})
 	require.NoError(t, err, "CopyObject with non-ASCII key should succeed")

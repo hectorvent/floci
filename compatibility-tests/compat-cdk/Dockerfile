@@ -19,6 +19,7 @@ COPY --from=builder /app/bin ./bin
 COPY --from=builder /app/lib ./lib
 COPY package.json cdk.json tsconfig.json ./
 COPY run.sh ./
+COPY run-bats-in-container.sh ./
 COPY test/ test/
 
 ENV PATH="/app/node_modules/.bin:$PATH"
@@ -31,5 +32,5 @@ ENV AWS_DEFAULT_REGION=us-east-1
 ENV LOCALSTACK_HOSTNAME=floci
 ENV EDGE_PORT=4566
 
-RUN mkdir -p /results
-ENTRYPOINT bash -c "/opt/bats-core/bin/bats --formatter junit test/ | tee /results/junit.xml"
+RUN chmod +x /app/run-bats-in-container.sh && mkdir -p /results
+ENTRYPOINT ["./run-bats-in-container.sh"]

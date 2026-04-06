@@ -21,4 +21,6 @@ if [ ! -d "$REPO_ROOT/lib/bats-core" ]; then
 fi
 
 # Run bats tests
-exec "$REPO_ROOT/lib/bats-core/bin/bats" "$SCRIPT_DIR/test/"
+exec "$REPO_ROOT/lib/run-bats-with-junit.sh" \
+    "$SCRIPT_DIR/test/" \
+    "${BATS_JUNIT_XML:-$SCRIPT_DIR/test-results/junit.xml}"
