@@ -2,11 +2,37 @@
 
 All settings can be provided as YAML (mounted as a config file or in `src/main/resources/application.yml`) or overridden via environment variables (`FLOCI_` prefix, dots/dashes replaced with underscores).
 
+## URL configuration
+
+Floci generates absolute URLs for certain response fields (SQS queue URLs, SNS
+subscription endpoints, pre-signed S3 URLs). Two settings control the hostname
+embedded in those URLs:
+
+| Setting | Env variable | Default | Description |
+|---|---|---|---|
+| `floci.base-url` | `FLOCI_BASE_URL` | `http://localhost:4566` | Full base URL used to build response URLs. Change the scheme, host, and port together. |
+| `floci.hostname` | `FLOCI_HOSTNAME` | _(none)_ | Override only the hostname in `base-url`. Useful in Docker Compose where `localhost` is unreachable from other containers. |
+
+When `floci.hostname` is set it replaces just the host portion of `base-url`,
+leaving the scheme and port unchanged. Setting `FLOCI_HOSTNAME: floci` is
+equivalent to changing `base-url` from `http://localhost:4566` to
+`http://floci:4566`.
+
+**Example — Docker Compose multi-container setup:**
+
+```yaml
+environment:
+  FLOCI_HOSTNAME: floci   # matches the compose service name
+```
+
+See [Docker Compose — Multi-container networking](./docker-compose.md#multi-container-networking) for a full example.
+
 ## Full Reference
 
 ```yaml
 floci:
   base-url: "http://localhost:4566"  # Used to build callback URLs (e.g. SNS subscription endpoints)
+  hostname: ""                       # Override host in base-url for multi-container Docker setups (e.g. "floci")
   default-region: us-east-1
   default-account-id: "000000000000"
   max-request-size: 512              # Max HTTP request body size in MB (default 512 MB)
