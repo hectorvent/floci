@@ -10,6 +10,8 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using the *
 | `sqs`                   | Queues, send/receive/delete, DLQ, visibility                                                       |
 | `sns`                   | Topics, subscriptions, publish, SQS delivery                                                       |
 | `s3`                    | Buckets, objects, tagging, copy, batch delete                                                      |
+| `s3-cors`               | CORS configuration                                                                                 |
+| `s3-notifications`      | S3 → SQS and S3 → SNS event notifications                                                          |
 | `dynamodb`              | Tables, CRUD, batch, TTL, tags                                                                     |
 | `lambda`                | Create/invoke/update/delete functions                                                              |
 | `iam`                   | Users, roles, policies, access keys                                                                |
@@ -24,7 +26,7 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using the *
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 20+
 - npm
 
 ## Running
@@ -33,13 +35,10 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using the *
 npm install
 
 # All groups
-node test-all.mjs
+npm test
 
-# Specific groups (comma-separated)
-node test-all.mjs sqs,s3
-
-# Env var
-FLOCI_TESTS=kms node test-all.mjs
+# Via just (from compatibility-tests/)
+just test-typescript
 ```
 
 ## Configuration

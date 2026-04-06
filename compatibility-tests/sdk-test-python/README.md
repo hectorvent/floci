@@ -10,6 +10,8 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using **bot
 | `sqs`                   | Queues, send/receive/delete, DLQ, visibility                             |
 | `sns`                   | Topics, subscriptions, publish, SQS delivery                             |
 | `s3`                    | Buckets, objects, tagging, copy, batch delete                            |
+| `s3-cors`               | CORS configuration                                                       |
+| `s3-notifications`      | S3 → SQS event notifications                                             |
 | `dynamodb`              | Tables, CRUD, batch, TTL, tags                                           |
 | `lambda`                | Create/invoke/update/delete functions                                    |
 | `iam`                   | Users, roles, policies, access keys                                      |
@@ -32,13 +34,13 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using **bot
 pip install -r requirements.txt
 
 # All groups
-python test_all.py
+pytest tests/ --junit-xml=test-results/junit.xml
 
-# Specific groups
-python test_all.py sqs s3
+# Specific tests
+pytest tests/test_s3.py
 
-# Env var (comma-separated)
-FLOCI_TESTS=kms python test_all.py
+# Via just (from compatibility-tests/)
+just test-python
 ```
 
 ## Configuration

@@ -25,22 +25,22 @@ just test-awscli
 
 ## Test Runners
 
-| Module | Language | Test Framework | Command |
-|---|---|---|---|
-| [`sdk-test-python`](sdk-test-python/) | Python 3 | pytest | `just test-python` |
-| [`sdk-test-node`](sdk-test-node/) | TypeScript | vitest | `just test-typescript` |
-| [`sdk-test-awscli`](sdk-test-awscli/) | Bash / AWS CLI | bats-core | `just test-awscli` |
-| [`sdk-test-java`](sdk-test-java/) | Java 17 | JUnit 5 | `just test-java` |
-| [`sdk-test-go`](sdk-test-go/) | Go 1.24 | go test | `just test-go` |
-| [`sdk-test-rust`](sdk-test-rust/) | Rust | cargo test | `cargo run` |
+| Module                                | Language       | Test Framework | Command                |
+| ------------------------------------- | -------------- | -------------- | ---------------------- |
+| [`sdk-test-python`](sdk-test-python/) | Python 3       | pytest         | `just test-python`     |
+| [`sdk-test-node`](sdk-test-node/)     | TypeScript     | vitest         | `just test-typescript` |
+| [`sdk-test-awscli`](sdk-test-awscli/) | Bash / AWS CLI | bats-core      | `just test-awscli`     |
+| [`sdk-test-java`](sdk-test-java/)     | Java 17        | JUnit 5        | `just test-java`       |
+| [`sdk-test-go`](sdk-test-go/)         | Go 1.24        | go test        | `just test-go`         |
+| [`sdk-test-rust`](sdk-test-rust/)     | Rust           | cargo-nextest  | `just test-rust`       |
 
 ### IaC Compatibility
 
-| Module | Tool | Command |
-|---|---|---|
-| [`compat-cdk`](compat-cdk/) | AWS CDK v2 | `./run.sh` |
-| [`compat-opentofu`](compat-opentofu/) | OpenTofu | `./run.sh` |
-| [`compat-terraform`](compat-terraform/) | Terraform | `./run.sh` |
+| Module                                  | Tool       | Command    |
+| --------------------------------------- | ---------- | ---------- |
+| [`compat-cdk`](compat-cdk/)             | AWS CDK v2 | `./run.sh` |
+| [`compat-opentofu`](compat-opentofu/)   | OpenTofu   | `./run.sh` |
+| [`compat-terraform`](compat-terraform/) | Terraform  | `./run.sh` |
 
 ## Prerequisites
 
@@ -50,14 +50,14 @@ just test-awscli
 
 Per-module requirements:
 
-| Module | Requirements |
-|---|---|
-| `sdk-test-python` | Python 3.9+, pip |
-| `sdk-test-node` | Node.js 20+, npm |
-| `sdk-test-awscli` | AWS CLI v2, bash, jq |
-| `sdk-test-java` | Java 17+, Maven |
-| `sdk-test-go` | Go 1.24+ |
-| `sdk-test-rust` | Rust (stable), Cargo |
+| Module            | Requirements                        |
+| ----------------- | ----------------------------------- |
+| `sdk-test-python` | Python 3.9+, pip                    |
+| `sdk-test-node`   | Node.js 20+, npm, vitest            |
+| `sdk-test-awscli` | AWS CLI v2, bash, jq                |
+| `sdk-test-java`   | Java 17+, Maven                     |
+| `sdk-test-go`     | Go 1.24+                            |
+| `sdk-test-rust`   | Rust (stable), Cargo, cargo-nextest |
 
 ## Setup
 
@@ -129,11 +129,14 @@ AWS_DEFAULT_REGION=us-east-1
 
 ### Python SDK (`sdk-test-python`)
 
-14 test files covering:
+16 test files covering:
+
 - SSM Parameter Store
 - SQS Queues
 - SNS Topics
 - S3 Buckets & Objects
+- S3 CORS
+- S3 Notifications
 - DynamoDB Tables
 - Lambda Functions
 - IAM Users, Roles, Policies
@@ -148,12 +151,15 @@ AWS_DEFAULT_REGION=us-east-1
 ### TypeScript SDK (`sdk-test-node`)
 
 17 test files covering:
+
 - SSM Parameter Store
 - SQS Queues
 - SNS Topics
-- S3 Buckets, Objects, CORS, Notifications
-- DynamoDB Tables, GSI/LSI
-- Lambda Functions & Aliases
+- S3 Buckets & Objects
+- S3 CORS
+- S3 Notifications
+- DynamoDB Tables
+- Lambda Functions
 - IAM Roles & Policies
 - STS Identity
 - Secrets Manager
@@ -162,17 +168,21 @@ AWS_DEFAULT_REGION=us-east-1
 - CloudWatch Metrics & Alarms
 - CloudFormation Naming
 - Cognito User Pools
+- Cognito OAuth
 
 ### AWS CLI Tests (`sdk-test-awscli`)
 
-10 test files covering:
+12 test files covering:
+
 - SSM Parameter Store
 - SQS Queues
 - SNS Topics
 - S3 Buckets & Objects
+- S3 Notifications
 - DynamoDB Tables
 - IAM Roles & Policies
 - STS Identity
+- SES Identities & Sending
 - Secrets Manager
 - KMS Keys & Encryption
 - Cognito User Pools

@@ -4,20 +4,22 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using the *
 
 ## Services Covered
 
-| Group            | Description                                             |
-| ---------------- | ------------------------------------------------------- |
-| `ssm`            | Parameter Store — put, get, label, history, path, tags  |
-| `sqs`            | Queues, send/receive/delete, DLQ, visibility            |
-| `sns`            | Topics, subscriptions, publish, SQS delivery            |
-| `s3`             | Buckets, objects, tagging, copy, batch delete           |
-| `dynamodb`       | Tables, CRUD, batch, TTL, tags                          |
-| `lambda`         | Create/invoke/update/delete functions                   |
-| `iam`            | Users, roles, policies, access keys                     |
-| `sts`            | GetCallerIdentity, AssumeRole, GetSessionToken          |
-| `secretsmanager` | Create/get/put/list/delete secrets, versioning, tags    |
-| `kms`            | Keys, aliases, encrypt/decrypt, data keys, sign/verify  |
-| `kinesis`        | Streams, shards, PutRecord/GetRecords                   |
-| `cloudwatch`     | PutMetricData, ListMetrics, GetMetricStatistics, alarms |
+| Group              | Description                                             |
+| ------------------ | ------------------------------------------------------- |
+| `ssm`              | Parameter Store — put, get, label, history, path, tags  |
+| `sqs`              | Queues, send/receive/delete, DLQ, visibility            |
+| `sns`              | Topics, subscriptions, publish, SQS delivery            |
+| `s3`               | Buckets, objects, tagging, copy, batch delete           |
+| `s3-cors`          | CORS configuration                                      |
+| `s3-notifications` | S3 → SQS event notifications                            |
+| `dynamodb`         | Tables, CRUD, batch, TTL, tags                          |
+| `lambda`           | Create/invoke/update/delete functions                   |
+| `iam`              | Users, roles, policies, access keys                     |
+| `sts`              | GetCallerIdentity, AssumeRole, GetSessionToken          |
+| `secretsmanager`   | Create/get/put/list/delete secrets, versioning, tags    |
+| `kms`              | Keys, aliases, encrypt/decrypt, data keys, sign/verify  |
+| `kinesis`          | Streams, shards, PutRecord/GetRecords                   |
+| `cloudwatch`       | PutMetricData, ListMetrics, GetMetricStatistics, alarms |
 
 ## Requirements
 
@@ -27,13 +29,13 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using the *
 
 ```bash
 # All groups
-go run main.go
+gotestsum --junitfile test-results.xml ./tests/...
 
-# Specific groups
-go run main.go ssm sqs s3
+# Specific tests
+go test ./tests/ -run TestSsm
 
-# Env var (comma-separated)
-FLOCI_TESTS=kms,s3 go run main.go
+# Via just (from compatibility-tests/)
+just test-go
 ```
 
 ## Configuration

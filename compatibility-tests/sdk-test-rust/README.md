@@ -4,31 +4,41 @@ Compatibility tests for [Floci](https://github.com/hectorvent/floci) using the *
 
 ## Services Covered
 
-| Group            | Description                             |
-| ---------------- | --------------------------------------- |
-| `ssm`            | Parameter Store — put, get, path        |
-| `sqs`            | Queues, send/receive/delete, visibility |
-| `s3`             | Buckets, objects, tagging, copy, delete |
-| `sts`            | GetCallerIdentity                       |
-| `kms`            | Keys, aliases, encrypt/decrypt          |
-| `secretsmanager` | Create/get/put/list/delete secrets      |
+| Group              | Description                                             |
+| ------------------ | ------------------------------------------------------- |
+| `ssm`              | Parameter Store — put, get, path                        |
+| `sqs`              | Queues, send/receive/delete, visibility                 |
+| `sns`              | Topics, subscriptions, publish                          |
+| `s3`               | Buckets, objects, tagging, copy, delete                 |
+| `s3-cors`          | CORS configuration                                      |
+| `s3-notifications` | S3 event notifications                                  |
+| `dynamodb`         | Tables, CRUD, batch                                     |
+| `lambda`           | Create/invoke/update/delete functions                   |
+| `iam`              | Users, roles, policies, access keys                     |
+| `sts`              | GetCallerIdentity                                       |
+| `kms`              | Keys, aliases, encrypt/decrypt                          |
+| `secretsmanager`   | Create/get/put/list/delete secrets                      |
+| `kinesis`          | Streams, shards, PutRecord/GetRecords                   |
+| `cloudwatch`       | PutMetricData, ListMetrics, GetMetricStatistics, alarms |
+| `cloudformation`   | Stack operations                                        |
 
 ## Requirements
 
 - Rust (stable)
 - Cargo
+- cargo-nextest
 
 ## Running
 
 ```bash
 # All groups
-cargo run
+cargo nextest run --profile ci
 
 # Specific groups
-cargo run -- ssm sqs s3
+cargo nextest run --profile ci -E 'test(ssm) | test(sqs) | test(s3)'
 
-# Env var (comma-separated)
-FLOCI_TESTS=kms cargo run
+# Via just (from compatibility-tests/)
+just test-rust
 ```
 
 ## Configuration

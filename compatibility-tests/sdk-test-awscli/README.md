@@ -6,36 +6,36 @@ Tests are plain bash scripts that call `aws` CLI commands with `--endpoint-url` 
 
 ## Services Covered
 
-| Group            | Description                                          |
-| ---------------- | ---------------------------------------------------- |
-| `ssm`            | Parameter Store — put, get, path, tags               |
-| `sqs`            | Queues, send/receive/delete, attributes              |
-| `sns`            | Topics, publish, attributes                          |
-| `s3`             | Buckets, objects, tagging, copy, delete              |
-| `dynamodb`       | Tables, put/get/update/query/delete items            |
-| `iam`            | Users, roles, create/get/delete                      |
-| `sts`            | GetCallerIdentity                                    |
-| `ses`            | Identities, sending, quotas, notification attributes |
-| `secretsmanager` | Create/get/put/list/tag/delete secrets               |
-| `kms`            | Keys, aliases, encrypt/decrypt                       |
+| Group              | Description                                          |
+| ------------------ | ---------------------------------------------------- |
+| `ssm`              | Parameter Store — put, get, path, tags               |
+| `sqs`              | Queues, send/receive/delete, attributes              |
+| `sns`              | Topics, publish, attributes                          |
+| `s3`               | Buckets, objects, tagging, copy, delete              |
+| `dynamodb`         | Tables, put/get/update/query/delete items            |
+| `iam`              | Users, roles, create/get/delete                      |
+| `sts`              | GetCallerIdentity                                    |
+| `ses`              | Identities, sending, quotas, notification attributes |
+| `secretsmanager`   | Create/get/put/list/tag/delete secrets               |
+| `kms`              | Keys, aliases, encrypt/decrypt                       |
+| `cognito`          | User pools, clients                                  |
+| `s3-notifications` | S3 → SQS event notifications                         |
 
 ## Requirements
 
 - AWS CLI v2
 - bash
-- python3 (used to parse JSON output)
+- jq
+- bats-core (installed via `just setup-awscli`)
 
 ## Running
 
 ```bash
-# All groups
-./test_all.sh
+# All groups (from compatibility-tests/)
+just test-awscli
 
-# Specific groups
-./test_all.sh sqs s3
-
-# Env var (comma-separated)
-FLOCI_TESTS=kms ./test_all.sh
+# Run bats directly
+./lib/run-bats-with-junit.sh sdk-test-awscli/test/ sdk-test-awscli/test-results/junit.xml
 ```
 
 ## Configuration
