@@ -42,29 +42,44 @@ public class VtlTemplateEngine {
     }
 
     /**
+     * Result returned by {@link #evaluate(String, VtlContext)} that carries both the
+     * rendered template body and any {@code $context.responseOverride} values the template
+     * set during evaluation.
+     */
+    public record EvaluateResult(
+            String body,
+            Integer statusOverride,
+            Map<String, String> headerOverrides
+    ) {}
+
+    /**
      * Evaluates a VTL template with the given request context.
      *
      * @param template the VTL template string
      * @param ctx      the request context
-     * @return the evaluated template output
+     * @return result containing the rendered body and any {@code $context.responseOverride} assignments
      */
-    public String evaluate(String template, VtlContext ctx) {
+    public EvaluateResult evaluate(String template, VtlContext ctx) {
+        ResponseOverride override = new ResponseOverride();
         if (template == null || template.isEmpty()) {
-            return ctx.body() != null ? ctx.body() : "";
+            return new EvaluateResult(ctx.body() != null ? ctx.body() : "", null, Map.of());
         }
 
         VelocityContext vc = new VelocityContext();
         vc.put("input", new InputVariable(ctx, objectMapper));
         vc.put("util", new UtilVariable(objectMapper));
-        vc.put("context", buildContextMap(ctx));
+        vc.put("context", buildContextMap(ctx, override));
         vc.put("stageVariables", ctx.stageVariables() != null ? ctx.stageVariables() : Map.of());
 
         StringWriter writer = new StringWriter();
         engine.evaluate(vc, writer, "apigw-template", template);
-        return writer.toString();
+        return new EvaluateResult(
+                writer.toString(),
+                override.getStatus(),
+                override.getHeader().isEmpty() ? Map.of() : Map.copyOf(override.getHeader()));
     }
 
-    private Map<String, Object> buildContextMap(VtlContext ctx) {
+    private Map<String, Object> buildContextMap(VtlContext ctx, ResponseOverride responseOverride) {
         Map<String, Object> map = new HashMap<>();
         map.put("requestId", ctx.requestId());
         map.put("stage", ctx.stage());
@@ -76,7 +91,39 @@ public class VtlTemplateEngine {
         identity.put("sourceIp", "127.0.0.1");
         map.put("identity", identity);
 
+        map.put("responseOverride", responseOverride);
+
         return map;
+    }
+
+    /**
+     * Mutable holder for {@code $context.responseOverride} assignments made inside VTL templates.
+     *
+     * <p>Velocity calls the JavaBean setters when a template contains:
+     * <pre>{@code
+     * #set($context.responseOverride.status = 500)
+     * #set($context.responseOverride.header["Content-Type"] = "application/problem+json")
+     * }</pre>
+     *
+     * <p>The first form calls {@link #setStatus(Integer)}.
+     * The second form calls {@link #getHeader()} (which returns a mutable Map) followed by
+     * {@code map.put("Content-Type", "application/problem+json")}.
+     */
+    public static class ResponseOverride {
+        private Integer status;
+        private final Map<String, String> header = new HashMap<>();
+
+        public Integer getStatus() {
+            return status;
+        }
+
+        public void setStatus(Integer status) {
+            this.status = status;
+        }
+
+        public Map<String, String> getHeader() {
+            return header;
+        }
     }
 
     // ────────── Context variable classes ──────────

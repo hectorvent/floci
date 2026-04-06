@@ -40,6 +40,50 @@ services:
 !!! warning "Docker socket"
     Lambda, ElastiCache, and RDS require access to the Docker socket (`/var/run/docker.sock`) to spawn and manage containers. If you don't use these services, you can omit that volume.
 
+## Multi-container networking
+
+By default, Floci embeds `localhost` in response URLs — for example, SQS queue
+URLs look like `http://localhost:4566/000000000000/my-queue`. This is fine when
+your application runs on the same machine, but breaks inside Docker Compose:
+other containers cannot reach `localhost` of the Floci container.
+
+Set `FLOCI_HOSTNAME` to the Compose service name so that Floci uses that name
+in every URL it generates:
+
+```yaml title="docker-compose.yml"
+services:
+  floci:
+    image: hectorvent/floci:latest
+    ports:
+      - "4566:4566"
+    environment:
+      FLOCI_HOSTNAME: floci   # (1)
+
+  app:
+    build: .
+    environment:
+      AWS_ENDPOINT_URL: http://floci:4566
+    depends_on:
+      - floci
+```
+
+1. Must match the Compose service name so other containers can resolve it.
+
+With this setting Floci returns URLs like
+`http://floci:4566/000000000000/my-queue` that other containers in the same
+network can reach.
+
+This affects any response field that embeds the endpoint hostname:
+
+- SQS — `QueueUrl`
+- SNS — `TopicArn` callback URLs and subscription `SubscriptionArn` endpoints
+- Any pre-signed URL or callback that is generated from `floci.base-url`
+
+!!! tip "CI pipelines"
+    In GitHub Actions or GitLab CI where both your app and Floci run as
+    `services`, set `FLOCI_HOSTNAME` to the service name (e.g. `floci`) and
+    point your SDK at `http://floci:4566`.
+
 ## Initialization Hooks
 
 Hook scripts can be mounted into the container to run custom setup and teardown logic:
@@ -102,6 +146,7 @@ All `application.yml` options can be overridden via environment variables using 
 
 | Environment variable | Default | Description |
 |---|---|---|
+| `FLOCI_HOSTNAME` | _(none)_ | Hostname embedded in response URLs (SQS, SNS, pre-signed). Set to the Compose service name in multi-container setups |
 | `FLOCI_DEFAULT_REGION` | `us-east-1` | AWS region reported in ARNs |
 | `FLOCI_DEFAULT_ACCOUNT_ID` | `000000000000` | AWS account ID used in ARNs |
 | `FLOCI_STORAGE_MODE` | `memory` | Global storage mode (`memory`, `persistent`, `hybrid`, `wal`) |

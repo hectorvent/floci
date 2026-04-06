@@ -183,7 +183,7 @@ public class ApiGatewayExecuteController {
                     matched, integration, headers, uriInfo, body);
             case "AWS" -> invokeAwsIntegration(region, httpMethod, path, proxy, stageName,
                     matched, integration, headers, uriInfo, body);
-            case "MOCK" -> invokeMock(integration);
+            case "MOCK" -> invokeMock(region, httpMethod, path, stageName, matched, integration, headers, uriInfo, body);
             default -> Response.status(500)
                     .entity(jsonMessage("Unsupported integration type: " + integration.getType()))
                     .type(MediaType.APPLICATION_JSON).build();
@@ -413,6 +413,7 @@ public class ApiGatewayExecuteController {
 
         ObjectNode pathParams = event.putObject("pathParameters");
         if (proxy != null && !proxy.isEmpty()) pathParams.put("proxy", proxy);
+        extractPathParams(resourcePath, path).forEach(pathParams::put);
 
         event.putNull("stageVariables");
 
@@ -505,6 +506,7 @@ public class ApiGatewayExecuteController {
         }
         Map<String, String> pathMap = new HashMap<>();
         if (proxy != null && !proxy.isEmpty()) pathMap.put("proxy", proxy);
+        pathMap.putAll(extractPathParams(resource.getPath(), path));
 
         VtlTemplateEngine.VtlContext vtlCtx = new VtlTemplateEngine.VtlContext(
                 bodyStr, headerMap, queryMap, pathMap, stageName, httpMethod,
@@ -547,7 +549,7 @@ public class ApiGatewayExecuteController {
             }
 
             if (template != null) {
-                transformedBody = vtlEngine.evaluate(template, vtlCtx);
+                transformedBody = vtlEngine.evaluate(template, vtlCtx).body();
             } else {
                 // No matching template for this Content-Type
                 String behavior = integration.getPassthroughBehavior();
@@ -667,6 +669,7 @@ public class ApiGatewayExecuteController {
         // Determine final status code and body
         int finalStatus;
         String finalBody;
+        VtlTemplateEngine.EvaluateResult templateResult = null;
 
         if (matchedResponse != null) {
             finalStatus = Integer.parseInt(matchedResponse.statusCode());
@@ -679,7 +682,8 @@ public class ApiGatewayExecuteController {
                     VtlTemplateEngine.VtlContext responseMappingCtx = new VtlTemplateEngine.VtlContext(
                             responseBodyStr, headerMap, queryMap, pathMap, stageName, httpMethod,
                             resource.getPath(), requestId, "000000000000", null);
-                    finalBody = vtlEngine.evaluate(responseTemplate, responseMappingCtx);
+                    templateResult = vtlEngine.evaluate(responseTemplate, responseMappingCtx);
+                    finalBody = templateResult.body();
                 } else {
                     finalBody = responseBodyStr;
                 }
@@ -691,11 +695,25 @@ public class ApiGatewayExecuteController {
             finalBody = responseBodyStr;
         }
 
+        // Apply $context.responseOverride assignments from the response template (if any).
+        if (templateResult != null) {
+            if (templateResult.statusOverride() != null) {
+                finalStatus = templateResult.statusOverride();
+            }
+        }
+
         Response.ResponseBuilder rb = Response.status(finalStatus)
                 .entity(finalBody)
                 .type(MediaType.APPLICATION_JSON);
 
-        // Apply response parameter mapping (header mapping)
+        // Apply $context.responseOverride header assignments.
+        if (templateResult != null && !templateResult.headerOverrides().isEmpty()) {
+            for (Map.Entry<String, String> hdr : templateResult.headerOverrides().entrySet()) {
+                rb.header(hdr.getKey(), hdr.getValue());
+            }
+        }
+
+        // Apply response parameter mapping (header mapping from responseParameters config).
         if (matchedResponse != null && matchedResponse.responseParameters() != null) {
             Map<String, String> serviceResponseHeaders = new HashMap<>();
             if (serviceResponse != null) {
@@ -764,18 +782,57 @@ public class ApiGatewayExecuteController {
 
     // ──────────────────────────── MOCK ────────────────────────────
 
-    private Response invokeMock(Integration integration) {
+    private Response invokeMock(String region, String httpMethod, String path, String stageName,
+                                ApiGatewayResource resource, Integration integration,
+                                HttpHeaders headers, UriInfo uriInfo, byte[] body) {
         // Use the "200" integration response if present, else return empty 200
         IntegrationResponse ir = integration.getIntegrationResponses().get("200");
         if (ir == null) {
             return Response.ok().build();
         }
+
         String template = ir.responseTemplates() != null
                 ? ir.responseTemplates().getOrDefault("application/json", "") : "";
-        return Response.status(Integer.parseInt(ir.statusCode()))
-                .entity(template)
-                .type(MediaType.APPLICATION_JSON)
-                .build();
+
+        if (template.isEmpty()) {
+            return Response.status(Integer.parseInt(ir.statusCode()))
+                    .type(MediaType.APPLICATION_JSON)
+                    .build();
+        }
+
+        // Evaluate the response template through VTL (supports $context.responseOverride etc.)
+        String requestId = UUID.randomUUID().toString();
+        String bodyStr = body != null && body.length > 0 ? new String(body) : null;
+
+        Map<String, String> headerMap = new HashMap<>();
+        for (Map.Entry<String, List<String>> e : headers.getRequestHeaders().entrySet()) {
+            if (!e.getValue().isEmpty()) headerMap.put(e.getKey(), e.getValue().get(0));
+        }
+        Map<String, String> queryMap = new HashMap<>();
+        for (Map.Entry<String, List<String>> e : uriInfo.getQueryParameters().entrySet()) {
+            if (!e.getValue().isEmpty()) queryMap.put(e.getKey(), e.getValue().get(0));
+        }
+        Map<String, String> pathMap = new HashMap<>(extractPathParams(resource.getPath(), path));
+
+        VtlTemplateEngine.VtlContext vtlCtx = new VtlTemplateEngine.VtlContext(
+                bodyStr, headerMap, queryMap, pathMap, stageName, httpMethod,
+                resource.getPath(), requestId, "000000000000", null);
+
+        VtlTemplateEngine.EvaluateResult result = vtlEngine.evaluate(template, vtlCtx);
+
+        int status = result.statusOverride() != null
+                ? result.statusOverride()
+                : Integer.parseInt(ir.statusCode());
+
+        Response.ResponseBuilder rb = Response.status(status)
+                .entity(result.body())
+                .type(MediaType.APPLICATION_JSON);
+
+        for (Map.Entry<String, String> hdr : result.headerOverrides().entrySet()) {
+            rb.header(hdr.getKey(), hdr.getValue());
+        }
+
+        return rb.build();
     }
 
     // ──────────────────────────── API Gateway v2 dispatch ────────────────────────────
@@ -1013,7 +1070,7 @@ public class ApiGatewayExecuteController {
 
     /**
      * Finds the best-matching resource for {@code requestPath}.
-     * Priority: exact match > wildcard/proxy+ match.
+     * Priority: exact match > template path match (e.g. /items/{id}) > proxy+ wildcard.
      */
     private ApiGatewayResource matchResource(List<ApiGatewayResource> resources, String requestPath) {
         // 1. Exact match
@@ -1022,12 +1079,57 @@ public class ApiGatewayExecuteController {
                 return r;
             }
         }
-        // 2. Wildcard / {proxy+} — any resource whose pathPart contains "{"
+        // 2. Template path match — /items/{id} matches /items/anything
+        for (ApiGatewayResource r : resources) {
+            if (r.getPath() != null && r.getPath().contains("{") && !r.getPath().contains("{proxy+}")) {
+                if (pathMatchesTemplate(r.getPath(), requestPath)) {
+                    return r;
+                }
+            }
+        }
+        // 3. Proxy+ wildcard — {proxy+} matches any remaining path
         for (ApiGatewayResource r : resources) {
             if (r.getPathPart() != null && r.getPathPart().contains("{")) {
                 return r;
             }
         }
         return null;
+    }
+
+    /**
+     * Returns true if {@code requestPath} matches the template path (e.g. {@code /items/{id}}).
+     * Segments wrapped in {@code {}} match any single path segment.
+     */
+    private boolean pathMatchesTemplate(String templatePath, String requestPath) {
+        String[] tParts = templatePath.split("/", -1);
+        String[] rParts = requestPath.split("/", -1);
+        if (tParts.length != rParts.length) return false;
+        for (int i = 0; i < tParts.length; i++) {
+            if (tParts[i].startsWith("{") && tParts[i].endsWith("}")) continue; // wildcard segment
+            if (!tParts[i].equals(rParts[i])) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Extracts named path parameters from a matched template path.
+     * Given template {@code /items/{id}} and request {@code /items/item-1}, returns {@code {id=item-1}}.
+     */
+    private Map<String, String> extractPathParams(String templatePath, String requestPath) {
+        Map<String, String> params = new HashMap<>();
+        if (templatePath == null || requestPath == null) return params;
+        String[] tParts = templatePath.split("/", -1);
+        String[] rParts = requestPath.split("/", -1);
+        if (tParts.length != rParts.length) return params;
+        for (int i = 0; i < tParts.length; i++) {
+            String t = tParts[i];
+            if (t.startsWith("{") && t.endsWith("}")) {
+                String name = t.substring(1, t.length() - 1);
+                if (!name.endsWith("+")) { // skip {proxy+}
+                    params.put(name, rParts[i]);
+                }
+            }
+        }
+        return params;
     }
 }

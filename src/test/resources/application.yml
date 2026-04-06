@@ -97,3 +97,8 @@ floci:
     opensearch:
       enabled: true
       mode: mock
+    ec2:
+      enabled: true
+    ecs:
+      enabled: true
+      mock: true

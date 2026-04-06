@@ -62,7 +62,7 @@ public class SesQueryHandler {
     private Response handleVerifyEmailIdentity(MultivaluedMap<String, String> params, String region) {
         String emailAddress = getParam(params, "EmailAddress");
         sesService.verifyEmailIdentity(emailAddress, region);
-        return Response.ok(AwsQueryResponse.envelopeNoResult("VerifyEmailIdentity", AwsNamespaces.SES)).build();
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult("VerifyEmailIdentity", AwsNamespaces.SES)).build();
     }
 
     private Response handleVerifyEmailAddress(MultivaluedMap<String, String> params, String region) {
@@ -81,7 +81,7 @@ public class SesQueryHandler {
     private Response handleDeleteIdentity(MultivaluedMap<String, String> params, String region) {
         String identityValue = getParam(params, "Identity");
         sesService.deleteIdentity(identityValue, region);
-        return Response.ok(AwsQueryResponse.envelopeNoResult("DeleteIdentity", AwsNamespaces.SES)).build();
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult("DeleteIdentity", AwsNamespaces.SES)).build();
     }
 
     private Response handleListIdentities(MultivaluedMap<String, String> params, String region) {
@@ -197,7 +197,7 @@ public class SesQueryHandler {
         String notificationType = getParam(params, "NotificationType");
         String snsTopic = getParam(params, "SnsTopic");
         sesService.setIdentityNotificationTopic(identityValue, notificationType, snsTopic, region);
-        return Response.ok(AwsQueryResponse.envelopeNoResult("SetIdentityNotificationTopic", AwsNamespaces.SES)).build();
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult("SetIdentityNotificationTopic", AwsNamespaces.SES)).build();
     }
 
     private Response handleGetIdentityNotificationAttributes(MultivaluedMap<String, String> params, String region) {

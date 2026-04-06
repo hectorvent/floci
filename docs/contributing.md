@@ -4,15 +4,15 @@ Floci is MIT licensed and welcomes contributions of all kinds.
 
 ## Ways to Help 
 
-- **Bug reports** — open a [GitHub issue](https://github.com/hectorvent/floci/issues/new?template=bug_report.md) with a minimal reproduction
-- **Missing API actions** — open a [feature request](https://github.com/hectorvent/floci/issues/new?template=feature_request.md)
+- **Bug reports** — open a [GitHub issue](https://github.com/floci-io/floci/issues/new?template=bug_report.md) with a minimal reproduction
+- **Missing API actions** — open a [feature request](https://github.com/floci-io/floci/issues/new?template=feature_request.md)
 - **Pull requests** — new service actions, bug fixes, documentation improvements
 
 ## Development Setup
 
 ```bash
 # Clone
-git clone https://github.com/hectorvent/floci.git
+git clone https://github.com/floci-io/floci.git
 cd floci
 
 # Run in dev mode (hot reload, port 4566)
@@ -41,7 +41,7 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) �
 
 ## Adding a New AWS Service
 
-See [AGENT.md](https://github.com/hectorvent/floci/blob/main/AGENT.md) for the full architecture guide. `AGENT.md` is the canonical agent instructions file for this repository. If your coding agent expects a different filename, create a local symlink to `AGENT.md` instead of copying it.
+See [AGENT.md](https://github.com/floci-io/floci/blob/main/AGENT.md) for the full architecture guide. `AGENT.md` is the canonical agent instructions file for this repository. If your coding agent expects a different filename, create a local symlink to `AGENT.md` instead of copying it.
 
 ```bash
 ln -s AGENT.md CLAUDE.md

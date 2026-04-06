@@ -12,6 +12,8 @@ import jakarta.inject.Inject;
 import java.util.Iterator;
 import java.util.Map;
 
+import static io.github.hectorvent.floci.services.stepfunctions.AslExecutor.FailStateException;
+
 import static com.dashjoin.jsonata.Jsonata.jsonata;
 
 /**
@@ -50,6 +52,15 @@ public class JsonataEvaluator {
     /**
      * Evaluate a single JSONata expression string with $states bound.
      * The expression may or may not have {% %} delimiters.
+     *
+     * <p><b>Singleton sequence reduction:</b>
+     * Both real AWS Step Functions and the JSONata spec apply singleton sequence reduction:
+     * a 1-element sequence produced by an object-mapping expression (e.g.
+     * {@code $states.result.Items.{"id": id}}) is reduced to the single object rather than
+     * remaining a 1-element array. Floci's behavior matches AWS.
+     *
+     * <p>To force an array regardless of element count, wrap in {@code [...]}, e.g.
+     * {@code [$states.result.Items.{"id": id}]}.
      */
     JsonNode evaluate(String expression, JsonNode statesVar) {
         String expr = isExpression(expression) ? unwrap(expression) : expression;
@@ -87,14 +98,28 @@ public class JsonataEvaluator {
             Iterator<Map.Entry<String, JsonNode>> fields = template.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> entry = fields.next();
-                resolved.set(entry.getKey(), resolveTemplate(entry.getValue(), statesVar));
+                JsonNode value = resolveTemplate(entry.getValue(), statesVar);
+                // Per JSONata spec: undefined (null) values are omitted from object output,
+                // matching real AWS Step Functions behavior.
+                if (value != null && !value.isNull() && !value.isMissingNode()) {
+                    resolved.set(entry.getKey(), value);
+                }
             }
             return resolved;
         }
         if (template.isArray()) {
             ArrayNode resolved = objectMapper.createArrayNode();
-            for (JsonNode element : template) {
-                resolved.add(resolveTemplate(element, statesVar));
+            for (int i = 0; i < template.size(); i++) {
+                JsonNode element = template.get(i);
+                JsonNode value = resolveTemplate(element, statesVar);
+                // Per real AWS behavior: undefined array elements fail the execution.
+                // Unlike object fields (which are omitted), undefined in an array is a runtime error.
+                if (value == null || value.isNull() || value.isMissingNode()) {
+                    String expr = element.isTextual() ? element.asText() : element.toString();
+                    throw new FailStateException("States.Runtime",
+                            "The JSONata expression '" + expr + "' at array index " + i + " returned nothing (undefined).");
+                }
+                resolved.add(value);
             }
             return resolved;
         }

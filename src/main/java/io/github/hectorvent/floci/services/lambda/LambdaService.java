@@ -12,6 +12,8 @@ import io.github.hectorvent.floci.services.lambda.model.LambdaFunction;
 import io.github.hectorvent.floci.services.lambda.model.LambdaUrlConfig;
 import io.github.hectorvent.floci.services.lambda.zip.CodeStore;
 import io.github.hectorvent.floci.services.lambda.zip.ZipExtractor;
+import io.github.hectorvent.floci.services.s3.S3Service;
+import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.sqs.SqsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -23,6 +25,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +50,7 @@ public class LambdaService {
     private final RegionResolver regionResolver;
     private final EsmStore esmStore;
     private final LambdaAliasStore aliasStore;
+    private final S3Service s3Service;
     private final SqsService sqsService;
     private final SqsEventSourcePoller poller;
     private final KinesisEventSourcePoller kinesisPoller;
@@ -68,6 +72,7 @@ public class LambdaService {
         this.regionResolver = regionResolver;
         this.esmStore = null;
         this.aliasStore = null;
+        this.s3Service = null;
         this.sqsService = null;
         this.poller = null;
         this.kinesisPoller = null;
@@ -84,6 +89,7 @@ public class LambdaService {
                           RegionResolver regionResolver,
                           EsmStore esmStore,
                           LambdaAliasStore aliasStore,
+                          S3Service s3Service,
                           SqsService sqsService,
                           SqsEventSourcePoller poller,
                           KinesisEventSourcePoller kinesisPoller,
@@ -97,6 +103,7 @@ public class LambdaService {
         this.regionResolver = regionResolver;
         this.esmStore = esmStore;
         this.aliasStore = aliasStore;
+        this.s3Service = s3Service;
         this.sqsService = sqsService;
         this.poller = poller;
         this.kinesisPoller = kinesisPoller;
@@ -171,6 +178,11 @@ public class LambdaService {
             if (zipFileBase64 != null) {
                 extractZipCode(fn, zipFileBase64);
             }
+            String s3Bucket = (String) code.get("S3Bucket");
+            String s3Key = (String) code.get("S3Key");
+            if (s3Bucket != null && s3Key != null) {
+                extractZipCodeFromS3(fn, s3Bucket, s3Key);
+            }
         }
 
         functionStore.save(region, fn);
@@ -193,12 +205,17 @@ public class LambdaService {
 
         String zipFileBase64 = (String) request.get("ZipFile");
         String imageUri = (String) request.get("ImageUri");
+        String s3Bucket = (String) request.get("S3Bucket");
+        String s3Key = (String) request.get("S3Key");
 
         if (zipFileBase64 != null) {
             extractZipCode(fn, zipFileBase64);
         }
         if (imageUri != null) {
             fn.setImageUri(imageUri);
+        }
+        if (s3Bucket != null && s3Key != null) {
+            extractZipCodeFromS3(fn, s3Bucket, s3Key);
         }
 
         fn.setLastModified(System.currentTimeMillis());
@@ -262,6 +279,11 @@ public class LambdaService {
         int batchSize = toInt(request.get("BatchSize"), 10);
         boolean enabled = !Boolean.FALSE.equals(request.get("Enabled"));
 
+        @SuppressWarnings("unchecked")
+        List<String> functionResponseTypes = request.get("FunctionResponseTypes") instanceof List
+                ? (List<String>) request.get("FunctionResponseTypes")
+                : new ArrayList<>();
+
         String queueUrl = eventSourceArn.contains(":sqs:") ? AwsArnUtils.arnToQueueUrl(eventSourceArn, config.effectiveBaseUrl()) : null;
 
         EventSourceMapping esm = new EventSourceMapping();
@@ -274,6 +296,7 @@ public class LambdaService {
         esm.setBatchSize(batchSize);
         esm.setEnabled(enabled);
         esm.setState(enabled ? "Enabled" : "Disabled");
+        esm.setFunctionResponseTypes(functionResponseTypes);
         esm.setLastModified(System.currentTimeMillis());
 
         esmStore.save(esm);
@@ -610,6 +633,114 @@ public class LambdaService {
             throw new AwsException("InvalidParameterValueException",
                     "Failed to extract deployment package: " + e.getMessage(), 400);
         }
+    }
+
+    private void extractZipCodeFromS3(LambdaFunction fn, String s3Bucket, String s3Key) {
+        if (s3Service == null) {
+            throw new AwsException("ServiceUnavailableException", "S3 service not available", 503);
+        }
+        S3Object obj;
+        try {
+            obj = s3Service.getObject(s3Bucket, s3Key);
+        } catch (Exception e) {
+            throw new AwsException("InvalidParameterValueException",
+                    "Unable to fetch code from s3://" + s3Bucket + "/" + s3Key + ": " + e.getMessage(), 400);
+        }
+        extractZipCode(fn, Base64.getEncoder().encodeToString(obj.getData()));
+    }
+
+    // ──────────────────────────── Permissions (Policy) ────────────────────────────
+
+    public Map<String, Object> addPermission(String region, String functionName, Map<String, Object> request) {
+        LambdaFunction fn = getFunction(region, functionName);
+        String statementId = (String) request.get("StatementId");
+        if (statementId == null || statementId.isBlank()) {
+            throw new AwsException("InvalidParameterValueException", "StatementId is required", 400);
+        }
+        fn.getPolicies().stream()
+                .filter(s -> statementId.equals(s.get("Sid")))
+                .findFirst()
+                .ifPresent(s -> {
+                    throw new AwsException("ResourceConflictException",
+                            "The statement id (" + statementId + ") already exists. Please try again with a new Statement Id.", 409);
+                });
+
+        String principal = (String) request.get("Principal");
+        String action = (String) request.get("Action");
+        String sourceArn = (String) request.get("SourceArn");
+        String sourceAccount = (String) request.get("SourceAccount");
+
+        Map<String, Object> statement = new java.util.LinkedHashMap<>();
+        statement.put("Sid", statementId);
+        statement.put("Effect", "Allow");
+        if (principal != null && principal.contains(".")) {
+            statement.put("Principal", Map.of("Service", principal));
+        } else if (principal != null && principal.startsWith("arn:")) {
+            statement.put("Principal", Map.of("AWS", principal));
+        } else {
+            statement.put("Principal", principal);
+        }
+        statement.put("Action", action);
+        statement.put("Resource", fn.getFunctionArn());
+        if (sourceArn != null) {
+            statement.put("Condition", Map.of("ArnLike", Map.of("AWS:SourceArn", sourceArn)));
+        } else if (sourceAccount != null) {
+            statement.put("Condition", Map.of("StringEquals", Map.of("AWS:SourceAccount", sourceAccount)));
+        }
+
+        fn.getPolicies().add(statement);
+        functionStore.save(region, fn);
+        LOG.infov("Added permission {0} to function {1}", statementId, functionName);
+        return statement;
+    }
+
+    public Map<String, Object> getPolicy(String region, String functionName) {
+        LambdaFunction fn = getFunction(region, functionName);
+        if (fn.getPolicies().isEmpty()) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Function not found: " + functionName, 404);
+        }
+        Map<String, Object> policy = new java.util.LinkedHashMap<>();
+        policy.put("Version", "2012-10-17");
+        policy.put("Id", "default");
+        policy.put("Statement", fn.getPolicies());
+        return Map.of("policy", policy, "revisionId", fn.getRevisionId());
+    }
+
+    public void removePermission(String region, String functionName, String statementId) {
+        LambdaFunction fn = getFunction(region, functionName);
+        boolean removed = fn.getPolicies().removeIf(s -> statementId.equals(s.get("Sid")));
+        if (!removed) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Statement " + statementId + " not found in function " + functionName, 404);
+        }
+        functionStore.save(region, fn);
+        LOG.infov("Removed permission {0} from function {1}", statementId, functionName);
+    }
+
+    // ──────────────────────────── Tags ────────────────────────────
+
+    public Map<String, String> listTags(String functionArn) {
+        String[] parts = functionArn.split(":");
+        LambdaFunction fn = getFunction(parts[3], parts[6]);
+        return fn.getTags() != null ? fn.getTags() : Map.of();
+    }
+
+    public void tagResource(String functionArn, Map<String, String> tags) {
+        String[] parts = functionArn.split(":");
+        LambdaFunction fn = getFunction(parts[3], parts[6]);
+        if (fn.getTags() == null) fn.setTags(new java.util.HashMap<>());
+        fn.getTags().putAll(tags);
+        functionStore.save(parts[3], fn);
+    }
+
+    public void untagResource(String functionArn, List<String> tagKeys) {
+        String[] parts = functionArn.split(":");
+        LambdaFunction fn = getFunction(parts[3], parts[6]);
+        if (fn.getTags() != null) {
+            tagKeys.forEach(fn.getTags()::remove);
+        }
+        functionStore.save(parts[3], fn);
     }
 
     private int toInt(Object value, int defaultValue) {

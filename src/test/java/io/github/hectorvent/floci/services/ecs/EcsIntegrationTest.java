@@ -1,0 +1,485 @@
+package io.github.hectorvent.floci.services.ecs;
+
+import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.RestAssured;
+import io.restassured.config.EncoderConfig;
+import io.restassured.http.ContentType;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
+
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.*;
+
+/**
+ * Integration tests for the ECS service (mock mode — no Docker required).
+ *
+ * Coverage:
+ *  - Clusters: Create, Describe, List, Update, Delete
+ *  - Task Definitions: Register, Describe, List, ListFamilies, Deregister
+ *  - Tasks: RunTask, DescribeTask, ListTasks, StopTask
+ *  - Services: Create, Describe, List, Update, Delete
+ *  - Tags: TagResource, ListTagsForResource, UntagResource
+ */
+@QuarkusTest
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class EcsIntegrationTest {
+
+    private static final String TARGET_PREFIX = "AmazonEC2ContainerServiceV20141113.";
+    private static final String REGION = "us-east-1";
+    private static final String ACCOUNT = "000000000000";
+    private static final String CLUSTER_NAME = "test-cluster";
+    private static final String CLUSTER_ARN =
+            "arn:aws:ecs:" + REGION + ":" + ACCOUNT + ":cluster/" + CLUSTER_NAME;
+    private static final String TASK_DEF_FAMILY = "test-task";
+    private static final String SERVICE_NAME = "test-service";
+
+    private static final String CONTENT_TYPE = "application/x-amz-json-1.1";
+
+    private static String taskArn;
+    private static String serviceArn;
+    private static String taskDefArn;
+
+    @BeforeAll
+    static void configureRestAssured() {
+        RestAssured.config = RestAssured.config().encoderConfig(
+                EncoderConfig.encoderConfig()
+                        .encodeContentTypeAs(CONTENT_TYPE, ContentType.TEXT));
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static io.restassured.specification.RequestSpecification ecs(String action) {
+        return given()
+                .contentType(CONTENT_TYPE)
+                .header("X-Amz-Target", TARGET_PREFIX + action);
+    }
+
+    // ── Clusters ──────────────────────────────────────────────────────────────
+
+    @Test
+    @Order(1)
+    void createCluster() {
+        ecs("CreateCluster")
+            .body("""
+                {"clusterName": "%s"}
+                """.formatted(CLUSTER_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("cluster.clusterName", equalTo(CLUSTER_NAME))
+            .body("cluster.clusterArn", containsString(CLUSTER_NAME))
+            .body("cluster.status", equalTo("ACTIVE"));
+    }
+
+    @Test
+    @Order(2)
+    void createClusterIdempotent() {
+        ecs("CreateCluster")
+            .body("""
+                {"clusterName": "%s"}
+                """.formatted(CLUSTER_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("cluster.clusterName", equalTo(CLUSTER_NAME));
+    }
+
+    @Test
+    @Order(3)
+    void describeCluster() {
+        ecs("DescribeClusters")
+            .body("""
+                {"clusters": ["%s"]}
+                """.formatted(CLUSTER_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("clusters", hasSize(1))
+            .body("clusters[0].clusterName", equalTo(CLUSTER_NAME))
+            .body("clusters[0].status", equalTo("ACTIVE"))
+            .body("failures", empty());
+    }
+
+    @Test
+    @Order(4)
+    void listClusters() {
+        ecs("ListClusters")
+            .body("{}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("clusterArns", hasItem(containsString(CLUSTER_NAME)));
+    }
+
+    // ── Task Definitions ──────────────────────────────────────────────────────
+
+    @Test
+    @Order(10)
+    void registerTaskDefinition() {
+        taskDefArn = ecs("RegisterTaskDefinition")
+            .body("""
+                {
+                    "family": "%s",
+                    "containerDefinitions": [
+                        {
+                            "name": "app",
+                            "image": "nginx:latest",
+                            "cpu": 256,
+                            "memory": 512,
+                            "essential": true,
+                            "portMappings": [{"containerPort": 80, "protocol": "tcp"}]
+                        }
+                    ],
+                    "requiresCompatibilities": ["FARGATE"],
+                    "cpu": "256",
+                    "memory": "512",
+                    "networkMode": "awsvpc"
+                }
+                """.formatted(TASK_DEF_FAMILY))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("taskDefinition.family", equalTo(TASK_DEF_FAMILY))
+            .body("taskDefinition.revision", equalTo(1))
+            .body("taskDefinition.status", equalTo("ACTIVE"))
+            .body("taskDefinition.taskDefinitionArn", containsString(TASK_DEF_FAMILY))
+            .body("taskDefinition.containerDefinitions", hasSize(1))
+            .body("taskDefinition.containerDefinitions[0].name", equalTo("app"))
+        .extract()
+            .path("taskDefinition.taskDefinitionArn");
+    }
+
+    @Test
+    @Order(11)
+    void describeTaskDefinition() {
+        ecs("DescribeTaskDefinition")
+            .body("""
+                {"taskDefinition": "%s:1"}
+                """.formatted(TASK_DEF_FAMILY))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("taskDefinition.family", equalTo(TASK_DEF_FAMILY))
+            .body("taskDefinition.revision", equalTo(1))
+            .body("taskDefinition.status", equalTo("ACTIVE"));
+    }
+
+    @Test
+    @Order(12)
+    void listTaskDefinitions() {
+        ecs("ListTaskDefinitions")
+            .body("{}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("taskDefinitionArns", hasItem(containsString(TASK_DEF_FAMILY)));
+    }
+
+    @Test
+    @Order(13)
+    void listTaskDefinitionFamilies() {
+        ecs("ListTaskDefinitionFamilies")
+            .body("{}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("families", hasItem(TASK_DEF_FAMILY));
+    }
+
+    // ── Tasks ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @Order(20)
+    void runTask() {
+        taskArn = ecs("RunTask")
+            .body("""
+                {
+                    "cluster": "%s",
+                    "taskDefinition": "%s",
+                    "launchType": "FARGATE",
+                    "count": 1
+                }
+                """.formatted(CLUSTER_NAME, TASK_DEF_FAMILY))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("tasks", hasSize(1))
+            .body("tasks[0].taskArn", containsString("task/"))
+            .body("tasks[0].clusterArn", containsString(CLUSTER_NAME))
+            .body("tasks[0].lastStatus", notNullValue())
+            .body("failures", empty())
+        .extract()
+            .path("tasks[0].taskArn");
+    }
+
+    @Test
+    @Order(21)
+    void describeTask() {
+        ecs("DescribeTasks")
+            .body("""
+                {
+                    "cluster": "%s",
+                    "tasks": ["%s"]
+                }
+                """.formatted(CLUSTER_NAME, taskArn))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("tasks", hasSize(1))
+            .body("tasks[0].taskArn", equalTo(taskArn))
+            .body("failures", empty());
+    }
+
+    @Test
+    @Order(22)
+    void listTasks() {
+        ecs("ListTasks")
+            .body("""
+                {"cluster": "%s"}
+                """.formatted(CLUSTER_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("taskArns", hasItem(taskArn));
+    }
+
+    @Test
+    @Order(23)
+    void stopTask() {
+        ecs("StopTask")
+            .body("""
+                {
+                    "cluster": "%s",
+                    "task": "%s",
+                    "reason": "integration-test"
+                }
+                """.formatted(CLUSTER_NAME, taskArn))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("task.taskArn", equalTo(taskArn))
+            .body("task.lastStatus", equalTo("STOPPED"));
+    }
+
+    // ── Services ──────────────────────────────────────────────────────────────
+
+    @Test
+    @Order(30)
+    void createService() {
+        serviceArn = ecs("CreateService")
+            .body("""
+                {
+                    "cluster": "%s",
+                    "serviceName": "%s",
+                    "taskDefinition": "%s",
+                    "desiredCount": 1,
+                    "launchType": "FARGATE"
+                }
+                """.formatted(CLUSTER_NAME, SERVICE_NAME, TASK_DEF_FAMILY))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("service.serviceName", equalTo(SERVICE_NAME))
+            .body("service.serviceArn", containsString(SERVICE_NAME))
+            .body("service.clusterArn", containsString(CLUSTER_NAME))
+            .body("service.desiredCount", equalTo(1))
+            .body("service.status", equalTo("ACTIVE"))
+        .extract()
+            .path("service.serviceArn");
+    }
+
+    @Test
+    @Order(31)
+    void describeService() {
+        ecs("DescribeServices")
+            .body("""
+                {
+                    "cluster": "%s",
+                    "services": ["%s"]
+                }
+                """.formatted(CLUSTER_NAME, SERVICE_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("services", hasSize(1))
+            .body("services[0].serviceName", equalTo(SERVICE_NAME))
+            .body("services[0].status", equalTo("ACTIVE"))
+            .body("failures", empty());
+    }
+
+    @Test
+    @Order(32)
+    void listServices() {
+        ecs("ListServices")
+            .body("""
+                {"cluster": "%s"}
+                """.formatted(CLUSTER_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("serviceArns", hasItem(containsString(SERVICE_NAME)));
+    }
+
+    @Test
+    @Order(33)
+    void updateService() {
+        ecs("UpdateService")
+            .body("""
+                {
+                    "cluster": "%s",
+                    "service": "%s",
+                    "desiredCount": 2
+                }
+                """.formatted(CLUSTER_NAME, SERVICE_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("service.desiredCount", equalTo(2));
+    }
+
+    // ── Tags ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @Order(40)
+    void tagResource() {
+        ecs("TagResource")
+            .body("""
+                {
+                    "resourceArn": "%s",
+                    "tags": [
+                        {"key": "env", "value": "test"},
+                        {"key": "team", "value": "platform"}
+                    ]
+                }
+                """.formatted(CLUSTER_ARN))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(41)
+    void listTagsForResource() {
+        ecs("ListTagsForResource")
+            .body("""
+                {"resourceArn": "%s"}
+                """.formatted(CLUSTER_ARN))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("tags", hasSize(2))
+            .body("tags.find { it.key == 'env' }.value", equalTo("test"))
+            .body("tags.find { it.key == 'team' }.value", equalTo("platform"));
+    }
+
+    @Test
+    @Order(42)
+    void untagResource() {
+        ecs("UntagResource")
+            .body("""
+                {
+                    "resourceArn": "%s",
+                    "tagKeys": ["env"]
+                }
+                """.formatted(CLUSTER_ARN))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        ecs("ListTagsForResource")
+            .body("""
+                {"resourceArn": "%s"}
+                """.formatted(CLUSTER_ARN))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("tags", hasSize(1))
+            .body("tags[0].key", equalTo("team"));
+    }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
+
+    @Test
+    @Order(50)
+    void deleteService() {
+        ecs("DeleteService")
+            .body("""
+                {
+                    "cluster": "%s",
+                    "service": "%s",
+                    "force": true
+                }
+                """.formatted(CLUSTER_NAME, SERVICE_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("service.serviceName", equalTo(SERVICE_NAME))
+            .body("service.status", equalTo("INACTIVE"));
+    }
+
+    @Test
+    @Order(51)
+    void deregisterTaskDefinition() {
+        ecs("DeregisterTaskDefinition")
+            .body("""
+                {"taskDefinition": "%s:1"}
+                """.formatted(TASK_DEF_FAMILY))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("taskDefinition.status", equalTo("INACTIVE"));
+    }
+
+    @Test
+    @Order(52)
+    void deleteCluster() {
+        ecs("DeleteCluster")
+            .body("""
+                {"cluster": "%s"}
+                """.formatted(CLUSTER_NAME))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("cluster.clusterName", equalTo(CLUSTER_NAME))
+            .body("cluster.status", equalTo("INACTIVE"));
+    }
+
+    @Test
+    @Order(53)
+    void deleteClusterNotFound() {
+        ecs("DeleteCluster")
+            .body("""
+                {"cluster": "non-existent-cluster"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400);
+    }
+}

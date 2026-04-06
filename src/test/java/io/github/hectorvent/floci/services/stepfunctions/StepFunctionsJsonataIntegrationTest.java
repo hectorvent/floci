@@ -227,6 +227,65 @@ class StepFunctionsJsonataIntegrationTest {
         assertTrue(output.contains("value"));
     }
 
+    @Test
+    void jsonataPassState_withResult_rejected() {
+        // AWS rejects Result in JSONata states (SCHEMA_VALIDATION_FAILED).
+        // Result is a JSONPath-only field; the JSONata equivalent is Output.
+        String definition = """
+                {
+                    "QueryLanguage": "JSONata",
+                    "StartAt": "SetResult",
+                    "States": {
+                        "SetResult": {
+                            "Type": "Pass",
+                            "Result": {"status": "ok", "code": 200},
+                            "End": true
+                        }
+                    }
+                }
+                """;
+
+        given()
+                .header("X-Amz-Target", "AWSStepFunctions.CreateStateMachine")
+                .contentType(SFN_CONTENT_TYPE)
+                .body(String.format("""
+                        {"name":"jsonata-result-test","definition":%s,"roleArn":"%s","type":"STANDARD"}
+                        """, quote(definition), ROLE_ARN))
+                .when().post("/")
+                .then().statusCode(400);
+    }
+
+    @Test
+    void jsonataPassState_withParameters_rejected() {
+        // AWS rejects Parameters in JSONata states (SCHEMA_VALIDATION_FAILED).
+        // Parameters is a JSONPath-only field; the JSONata equivalent is Arguments.
+        String definition = """
+                {
+                    "QueryLanguage": "JSONata",
+                    "StartAt": "PrepareData",
+                    "States": {
+                        "PrepareData": {
+                            "Type": "Pass",
+                            "Parameters": {
+                                "created_at.$": "$$.Execution.StartTime"
+                            },
+                            "Output": {"processed": true},
+                            "End": true
+                        }
+                    }
+                }
+                """;
+
+        given()
+                .header("X-Amz-Target", "AWSStepFunctions.CreateStateMachine")
+                .contentType(SFN_CONTENT_TYPE)
+                .body(String.format("""
+                        {"name":"jsonata-parameters-test","definition":%s,"roleArn":"%s","type":"STANDARD"}
+                        """, quote(definition), ROLE_ARN))
+                .when().post("/")
+                .then().statusCode(400);
+    }
+
     // ──────────────── Helpers ────────────────
 
     private String createStateMachine(String name, String definition) {

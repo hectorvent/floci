@@ -50,6 +50,8 @@ public class ServiceRegistry {
             case "acm" -> config.services().acm().enabled();
             case "email" -> config.services().ses().enabled();
             case "es" -> config.services().opensearch().enabled();
+            case "ec2" -> config.services().ec2().enabled();
+            case "ecs" -> config.services().ecs().enabled();
             default -> true;
         };
     }
@@ -110,6 +112,8 @@ public class ServiceRegistry {
         services.put("acm", status(config.services().acm().enabled()));
         services.put("email", status(config.services().ses().enabled()));
         services.put("es", status(config.services().opensearch().enabled()));
+        services.put("ec2", status(config.services().ec2().enabled()));
+        services.put("ecs", status(config.services().ecs().enabled()));
         return services;
     }
 

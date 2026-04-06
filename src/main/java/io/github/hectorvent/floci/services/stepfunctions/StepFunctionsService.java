@@ -14,6 +14,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -29,6 +32,8 @@ public class StepFunctionsService {
     private final AslExecutor aslExecutor;
     private final ObjectMapper objectMapper;
 
+    // Fields that are valid only in JSONPath mode. Validated against real AWS:
+    // creating a JSONata state machine with any of these fields returns SCHEMA_VALIDATION_FAILED.
     private static final Set<String> JSONPATH_ONLY_FIELDS = Set.of(
             "InputPath", "OutputPath", "ResultPath", "ResultSelector", "Parameters", "Result", "ItemsPath");
 
@@ -122,6 +127,44 @@ public class StepFunctionsService {
         return exec;
     }
 
+    public Execution startSyncExecution(String stateMachineArn, String name, String input, String region) {
+        StateMachine sm = describeStateMachine(stateMachineArn);
+        if (!"EXPRESS".equals(sm.getType())) {
+            throw new AwsException("StateMachineTypeNotSupported",
+                    "StartSyncExecution is only supported for EXPRESS state machines", 400);
+        }
+
+        String execName = (name != null && !name.isBlank()) ? name : UUID.randomUUID().toString();
+        // Real AWS express execution ARN format: express:<smName>:<startDate>:<execName>
+        // where startDate is ISO-8601 UTC, e.g. 2024-01-15T10:30:00.123Z
+        String startDate = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+                .withZone(ZoneOffset.UTC)
+                .format(Instant.now());
+        String arn = regionResolver.buildArn("states", region,
+                "express:" + sm.getName() + ":" + startDate + ":" + execName);
+
+        Execution exec = new Execution();
+        exec.setExecutionArn(arn);
+        exec.setStateMachineArn(stateMachineArn);
+        exec.setName(execName);
+        exec.setInput(input);
+        exec.setStatus("RUNNING");
+
+        List<HistoryEvent> history = new ArrayList<>();
+        HistoryEvent startEvent = new HistoryEvent();
+        startEvent.setId(1L);
+        startEvent.setType("ExecutionStarted");
+        startEvent.setDetails(Map.of("input", input != null ? input : "{}",
+                                     "roleArn", sm.getRoleArn() != null ? sm.getRoleArn() : ""));
+        history.add(startEvent);
+
+        aslExecutor.executeSync(sm, exec, history, (updatedExec, updatedHistory) -> {
+            LOG.infov("Sync execution {0} completed with status {1}", updatedExec.getExecutionArn(), updatedExec.getStatus());
+        });
+
+        return exec;
+    }
+
     public Execution describeExecution(String arn) {
         return executionStore.get(arn)
                 .orElseThrow(() -> new AwsException("ExecutionDoesNotExist", "Execution does not exist", 400));
@@ -204,11 +247,6 @@ public class StepFunctionsService {
     private void validateState(String stateName, JsonNode stateDef, boolean topLevelJsonata, List<String> errors) {
         String stateQL = stateDef.path("QueryLanguage").asText(null);
         boolean stateIsJsonata = stateQL != null ? "JSONata".equals(stateQL) : topLevelJsonata;
-
-        // Cannot override to JSONPath when top-level is JSONata
-        if (topLevelJsonata && "JSONPath".equals(stateQL)) {
-            errors.add("'QueryLanguage' can not be 'JSONPath' if set to 'JSONata' for whole state machine at /States/" + stateName);
-        }
 
         // JSONPath-only fields are not allowed when the state uses JSONata
         if (stateIsJsonata) {

@@ -133,6 +133,26 @@ class SnsIntegrationTest {
 
     @Test
     @Order(7)
+    void subscribe_idempotent() {
+        String arn = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "Subscribe")
+            .formParam("TopicArn", topicArn)
+            .formParam("Protocol", "sqs")
+            .formParam("Endpoint", sqsQueueUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().xmlPath()
+                .getString("SubscribeResponse.SubscribeResult.SubscriptionArn");
+
+        assert arn.equals(subscriptionArn) : "Expected existing subscription ARN but got a new one";
+
+    }
+
+    @Test
+    @Order(7)
     void listSubscriptionsByTopic() {
         given()
             .contentType("application/x-www-form-urlencoded")

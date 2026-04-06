@@ -249,6 +249,10 @@ public class LambdaController {
         node.put("BatchSize", esm.getBatchSize());
         node.put("State", esm.getState());
         node.put("LastModified", (double) esm.getLastModified() / 1000.0);
+        ArrayNode responseTypes = node.putArray("FunctionResponseTypes");
+        if (esm.getFunctionResponseTypes() != null) {
+            esm.getFunctionResponseTypes().forEach(responseTypes::add);
+        }
         @SuppressWarnings("unchecked")
         Map<String, Object> result = objectMapper.convertValue(node, Map.class);
         return result;
@@ -363,6 +367,60 @@ public class LambdaController {
                                 @PathParam("aliasName") String aliasName) {
         String region = regionResolver.resolveRegion(headers);
         lambdaService.deleteAlias(region, functionName, aliasName);
+        return Response.noContent().build();
+    }
+
+    // ──────────────────────────── Permissions (Policy) ────────────────────────────
+
+    @POST
+    @Path("/functions/{functionName}/policy")
+    public Response addPermission(@Context HttpHeaders headers,
+                                  @PathParam("functionName") String functionName,
+                                  String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Map<String, Object> statement = lambdaService.addPermission(region, functionName, request);
+            String statementJson = objectMapper.writeValueAsString(statement);
+            ObjectNode root = objectMapper.createObjectNode();
+            root.put("Statement", statementJson);
+            return Response.status(201).entity(root).build();
+        } catch (AwsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AwsException("InvalidParameterValueException", e.getMessage(), 400);
+        }
+    }
+
+    @GET
+    @Path("/functions/{functionName}/policy")
+    public Response getPolicy(@Context HttpHeaders headers,
+                              @PathParam("functionName") String functionName) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            Map<String, Object> data = lambdaService.getPolicy(region, functionName);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> policy = (Map<String, Object>) data.get("policy");
+            String policyJson = objectMapper.writeValueAsString(policy);
+            ObjectNode root = objectMapper.createObjectNode();
+            root.put("Policy", policyJson);
+            root.put("RevisionId", (String) data.get("revisionId"));
+            return Response.ok(root).build();
+        } catch (AwsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AwsException("ServiceException", e.getMessage(), 500);
+        }
+    }
+
+    @DELETE
+    @Path("/functions/{functionName}/policy/{statementId}")
+    public Response removePermission(@Context HttpHeaders headers,
+                                     @PathParam("functionName") String functionName,
+                                     @PathParam("statementId") String statementId) {
+        String region = regionResolver.resolveRegion(headers);
+        lambdaService.removePermission(region, functionName, statementId);
         return Response.noContent().build();
     }
 

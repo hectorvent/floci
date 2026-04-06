@@ -38,7 +38,8 @@ class HealthControllerIntegrationTest {
                 "cloudformation": "running",
                 "acm": "running",
                 "email": "running",
-                "es": "running"
+                "es": "running",
+                "ecs": "running"
               },
               "edition": "floci-always-free",
               "version": "dev"
