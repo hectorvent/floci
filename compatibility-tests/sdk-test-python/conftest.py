@@ -5,9 +5,14 @@ import uuid
 import io
 import zipfile
 
+import logging
+
 import boto3
 import pytest
 from botocore.config import Config
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session")
@@ -176,8 +181,8 @@ def test_bucket(s3_client, unique_name):
                 for obj in page["Contents"]:
                     s3_client.delete_object(Bucket=bucket_name, Key=obj["Key"])
         s3_client.delete_bucket(Bucket=bucket_name)
-    except Exception:
-        pass
+    except ClientError as e:
+        logger.warning("Failed to clean up S3 bucket %s: %s", bucket_name, e)
 
 
 @pytest.fixture
@@ -192,8 +197,8 @@ def test_queue(sqs_client, unique_name):
     # Cleanup
     try:
         sqs_client.delete_queue(QueueUrl=queue_url)
-    except Exception:
-        pass
+    except ClientError as e:
+        logger.warning("Failed to clean up SQS queue %s: %s", queue_url, e)
 
 
 @pytest.fixture
@@ -208,8 +213,8 @@ def test_topic(sns_client, unique_name):
     # Cleanup
     try:
         sns_client.delete_topic(TopicArn=topic_arn)
-    except Exception:
-        pass
+    except ClientError as e:
+        logger.warning("Failed to clean up SNS topic %s: %s", topic_arn, e)
 
 
 @pytest.fixture
@@ -232,5 +237,5 @@ def test_table(dynamodb_client, unique_name):
     # Cleanup
     try:
         dynamodb_client.delete_table(TableName=table_name)
-    except Exception:
-        pass
+    except ClientError as e:
+        logger.warning("Failed to clean up DynamoDB table %s: %s", table_name, e)

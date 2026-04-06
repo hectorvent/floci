@@ -5,7 +5,7 @@ FROM amazon/aws-cli:2.15.52
 # Copy tofu binary from official OpenTofu image
 COPY --from=opentofu /usr/local/bin/tofu /usr/local/bin/tofu
 
-RUN yum install -y git jq >/dev/null 2>&1
+RUN yum install -y git jq
 
 WORKDIR /app
 

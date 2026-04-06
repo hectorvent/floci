@@ -1263,9 +1263,14 @@ public class S3Controller {
         String source = copySource.startsWith("/") ? copySource.substring(1) : copySource;
         
         // URL decode the entire source first, then split
-        String decodedSource = URLDecoder.decode(source, StandardCharsets.UTF_8);
+        String decodedSource;
+        try {
+            decodedSource = URLDecoder.decode(source, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            throw new AwsException("InvalidArgument", "Invalid copy source: " + copySource, 400);
+        }
         int slashIndex = decodedSource.indexOf('/');
-        if (slashIndex < 0) {
+        if (slashIndex <= 0) {
             throw new AwsException("InvalidArgument", "Invalid copy source: " + copySource, 400);
         }
         String sourceBucket = decodedSource.substring(0, slashIndex);
@@ -1294,9 +1299,14 @@ public class S3Controller {
         String source = copySource.startsWith("/") ? copySource.substring(1) : copySource;
 
         // URL decode the entire source first, then split.
-        String decodedSource = URLDecoder.decode(source, StandardCharsets.UTF_8);
+        String decodedSource;
+        try {
+            decodedSource = URLDecoder.decode(source, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            throw new AwsException("InvalidArgument", "Invalid copy source: " + copySource, 400);
+        }
         int slashIndex = decodedSource.indexOf('/');
-        if (slashIndex < 0) {
+        if (slashIndex <= 0) {
             throw new AwsException("InvalidArgument", "Invalid copy source: " + copySource, 400);
         }
         String sourceBucket = decodedSource.substring(0, slashIndex);

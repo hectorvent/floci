@@ -5,7 +5,7 @@ FROM amazon/aws-cli:2.15.52
 # Copy terraform binary from official Terraform image
 COPY --from=terraform /bin/terraform /usr/local/bin/terraform
 
-RUN yum install -y git jq >/dev/null 2>&1
+RUN yum install -y git jq
 
 WORKDIR /app
 

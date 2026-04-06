@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Environment setup for Docker container
 export AWS_REGION=us-east-1

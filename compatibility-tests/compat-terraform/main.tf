@@ -1,3 +1,5 @@
+# NOTE: Keep resource definitions in sync with ../compat-opentofu/main.tf
+
 # -- S3 Bucket ------------------------------------------------------------------
 resource "aws_s3_bucket" "app" {
   bucket = "floci-compat-app"

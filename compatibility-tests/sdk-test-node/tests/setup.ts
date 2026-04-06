@@ -100,11 +100,12 @@ function makeCrcTable(): Uint32Array {
   return table;
 }
 
+const crcTable = makeCrcTable();
+
 function crc32(buf: Buffer): number {
-  const table = makeCrcTable();
   let crc = 0xffffffff;
   for (let i = 0; i < buf.length; i++) {
-    crc = (crc >>> 8) ^ table[(crc ^ buf[i]) & 0xff];
+    crc = (crc >>> 8) ^ crcTable[(crc ^ buf[i]) & 0xff];
   }
   return (crc ^ 0xffffffff) >>> 0;
 }

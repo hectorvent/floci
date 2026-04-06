@@ -373,6 +373,30 @@ class S3IntegrationTest {
 
     @Test
     @Order(21)
+    void copyObjectWithMalformedEncodedSourceReturns400() {
+        given()
+            .header("x-amz-copy-source", "/test-bucket/%ZZinvalid")
+        .when()
+            .put("/test-bucket/dest-key")
+        .then()
+            .statusCode(400)
+            .body(containsString("InvalidArgument"));
+    }
+
+    @Test
+    @Order(22)
+    void copyObjectWithEmptyBucketReturns400() {
+        given()
+            .header("x-amz-copy-source", "/key-only-no-bucket")
+        .when()
+            .put("/test-bucket/dest-key")
+        .then()
+            .statusCode(400)
+            .body(containsString("InvalidArgument"));
+    }
+
+    @Test
+    @Order(21)
     void putLargeObject() {
         // 22 MB – exceeds the old Jackson 20 MB maxStringLength default
         byte[] largeBody = new byte[22 * 1024 * 1024];

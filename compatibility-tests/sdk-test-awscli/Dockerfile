@@ -1,6 +1,6 @@
 FROM amazon/aws-cli:latest
 
-RUN yum install -y git jq bc >/dev/null 2>&1
+RUN yum install -y git jq bc
 
 WORKDIR /app
 

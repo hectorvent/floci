@@ -36,6 +36,7 @@ lib/bats-assert/
 
 # Test results
 test-results/
+test-results.xml
 
 # Rust
 sdk-test-rust/target/
@@ -45,6 +46,7 @@ sdk-test-go/floci-sdk-test-go
 
 # Terraform / OpenTofu
 .terraform/
+.terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 *.tfplan
