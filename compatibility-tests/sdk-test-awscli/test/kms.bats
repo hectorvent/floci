@@ -82,3 +82,49 @@ teardown() {
     ciphertext=$(json_get "$output" '.CiphertextBlob')
     [ -n "$ciphertext" ]
 }
+
+# --- KMS Alias Tests ---
+
+@test "KMS: create alias" {
+    out=$(aws_cmd kms create-key --description "bats-test-key")
+    KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
+    alias_name="alias/bats-test-$(date +%s)"
+
+    run aws_cmd kms create-alias --alias-name "$alias_name" --target-key-id "$KEY_ID"
+    assert_success
+
+    # Cleanup alias
+    aws_cmd kms delete-alias --alias-name "$alias_name" >/dev/null 2>&1 || true
+}
+
+@test "KMS: list aliases" {
+    out=$(aws_cmd kms create-key --description "bats-test-key")
+    KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
+    alias_name="alias/bats-test-$(date +%s)"
+
+    aws_cmd kms create-alias --alias-name "$alias_name" --target-key-id "$KEY_ID" >/dev/null
+
+    run aws_cmd kms list-aliases
+    assert_success
+    found=$(echo "$output" | jq --arg name "$alias_name" '.Aliases | any(.AliasName == $name)')
+    [ "$found" = "true" ]
+
+    # Cleanup alias
+    aws_cmd kms delete-alias --alias-name "$alias_name" >/dev/null 2>&1 || true
+}
+
+@test "KMS: delete alias" {
+    out=$(aws_cmd kms create-key --description "bats-test-key")
+    KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
+    alias_name="alias/bats-test-$(date +%s)"
+
+    aws_cmd kms create-alias --alias-name "$alias_name" --target-key-id "$KEY_ID" >/dev/null
+
+    run aws_cmd kms delete-alias --alias-name "$alias_name"
+    assert_success
+
+    # Verify alias is deleted
+    run aws_cmd kms list-aliases
+    found=$(echo "$output" | jq --arg name "$alias_name" '.Aliases | any(.AliasName == $name)')
+    [ "$found" = "false" ]
+}

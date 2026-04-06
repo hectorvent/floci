@@ -69,3 +69,54 @@ teardown() {
         --force-delete-without-recovery
     assert_success
 }
+
+# --- Secrets Manager Tagging Tests ---
+
+@test "Secrets Manager: tag resource" {
+    out=$(aws_cmd secretsmanager create-secret \
+        --name "$SECRET_NAME" \
+        --secret-string '{"key":"value"}')
+    arn=$(json_get "$out" '.ARN')
+
+    run aws_cmd secretsmanager tag-resource \
+        --secret-id "$arn" \
+        --tags Key=Environment,Value=test Key=Project,Value=bats
+    assert_success
+}
+
+@test "Secrets Manager: describe secret with tags" {
+    out=$(aws_cmd secretsmanager create-secret \
+        --name "$SECRET_NAME" \
+        --secret-string '{"key":"value"}')
+    arn=$(json_get "$out" '.ARN')
+
+    aws_cmd secretsmanager tag-resource \
+        --secret-id "$arn" \
+        --tags Key=Environment,Value=test >/dev/null
+
+    run aws_cmd secretsmanager describe-secret --secret-id "$SECRET_NAME"
+    assert_success
+    found=$(echo "$output" | jq '.Tags | any(.Key == "Environment" and .Value == "test")')
+    [ "$found" = "true" ]
+}
+
+@test "Secrets Manager: untag resource" {
+    out=$(aws_cmd secretsmanager create-secret \
+        --name "$SECRET_NAME" \
+        --secret-string '{"key":"value"}')
+    arn=$(json_get "$out" '.ARN')
+
+    aws_cmd secretsmanager tag-resource \
+        --secret-id "$arn" \
+        --tags Key=Environment,Value=test >/dev/null
+
+    run aws_cmd secretsmanager untag-resource \
+        --secret-id "$arn" \
+        --tag-keys Environment
+    assert_success
+
+    # Verify tag is removed
+    run aws_cmd secretsmanager describe-secret --secret-id "$SECRET_NAME"
+    found=$(echo "$output" | jq '.Tags // [] | any(.Key == "Environment")')
+    [ "$found" = "false" ]
+}

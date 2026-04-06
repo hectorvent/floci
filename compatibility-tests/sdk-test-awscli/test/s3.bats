@@ -145,3 +145,163 @@ teardown() {
     run aws_cmd s3api delete-bucket --bucket "$BUCKET"
     assert_success
 }
+
+# --- S3 Versioning Tests ---
+
+@test "S3: put bucket versioning" {
+    aws_cmd s3api create-bucket --bucket "$BUCKET" >/dev/null
+
+    run aws_cmd s3api put-bucket-versioning \
+        --bucket "$BUCKET" \
+        --versioning-configuration Status=Enabled
+    assert_success
+}
+
+@test "S3: versioned objects have version IDs" {
+    aws_cmd s3api create-bucket --bucket "$BUCKET" >/dev/null
+    aws_cmd s3api put-bucket-versioning \
+        --bucket "$BUCKET" \
+        --versioning-configuration Status=Enabled >/dev/null
+
+    local body_file
+    body_file=$(mktemp)
+    echo -n "version-one" > "$body_file"
+
+    run aws_cmd s3api put-object --bucket "$BUCKET" --key "ver.txt" --body "$body_file"
+    assert_success
+    v1=$(json_get "$output" '.VersionId')
+    [ -n "$v1" ]
+
+    echo -n "version-two" > "$body_file"
+    run aws_cmd s3api put-object --bucket "$BUCKET" --key "ver.txt" --body "$body_file"
+    assert_success
+    v2=$(json_get "$output" '.VersionId')
+    [ -n "$v2" ]
+    [ "$v1" != "$v2" ]
+
+    rm -f "$body_file"
+}
+
+# --- S3 Multipart Upload Tests ---
+
+@test "S3: create multipart upload" {
+    aws_cmd s3api create-bucket --bucket "$BUCKET" >/dev/null
+
+    run aws_cmd s3api create-multipart-upload \
+        --bucket "$BUCKET" \
+        --key "multipart.bin"
+    assert_success
+    upload_id=$(json_get "$output" '.UploadId')
+    [ -n "$upload_id" ]
+
+    # Cleanup: abort the upload
+    aws_cmd s3api abort-multipart-upload \
+        --bucket "$BUCKET" \
+        --key "multipart.bin" \
+        --upload-id "$upload_id" >/dev/null 2>&1 || true
+}
+
+@test "S3: upload part" {
+    aws_cmd s3api create-bucket --bucket "$BUCKET" >/dev/null
+
+    output=$(aws_cmd s3api create-multipart-upload \
+        --bucket "$BUCKET" \
+        --key "multipart.bin")
+    upload_id=$(json_get "$output" '.UploadId')
+
+    local part_file
+    part_file=$(mktemp)
+    echo -n "part-one-data" > "$part_file"
+
+    run aws_cmd s3api upload-part \
+        --bucket "$BUCKET" \
+        --key "multipart.bin" \
+        --upload-id "$upload_id" \
+        --part-number 1 \
+        --body "$part_file"
+    assert_success
+    etag=$(json_get "$output" '.ETag')
+    [ -n "$etag" ]
+
+    rm -f "$part_file"
+    aws_cmd s3api abort-multipart-upload \
+        --bucket "$BUCKET" \
+        --key "multipart.bin" \
+        --upload-id "$upload_id" >/dev/null 2>&1 || true
+}
+
+@test "S3: complete multipart upload" {
+    aws_cmd s3api create-bucket --bucket "$BUCKET" >/dev/null
+
+    output=$(aws_cmd s3api create-multipart-upload \
+        --bucket "$BUCKET" \
+        --key "multipart.bin")
+    upload_id=$(json_get "$output" '.UploadId')
+
+    local part1_file part2_file
+    part1_file=$(mktemp)
+    part2_file=$(mktemp)
+    echo -n "part-one" > "$part1_file"
+    echo -n "part-two" > "$part2_file"
+
+    output=$(aws_cmd s3api upload-part \
+        --bucket "$BUCKET" \
+        --key "multipart.bin" \
+        --upload-id "$upload_id" \
+        --part-number 1 \
+        --body "$part1_file")
+    etag1=$(json_get "$output" '.ETag')
+
+    output=$(aws_cmd s3api upload-part \
+        --bucket "$BUCKET" \
+        --key "multipart.bin" \
+        --upload-id "$upload_id" \
+        --part-number 2 \
+        --body "$part2_file")
+    etag2=$(json_get "$output" '.ETag')
+
+    local mp_file
+    mp_file=$(mktemp)
+    cat > "$mp_file" <<EOF
+{
+  "Parts": [
+    { "ETag": $etag1, "PartNumber": 1 },
+    { "ETag": $etag2, "PartNumber": 2 }
+  ]
+}
+EOF
+
+    run aws_cmd s3api complete-multipart-upload \
+        --bucket "$BUCKET" \
+        --key "multipart.bin" \
+        --upload-id "$upload_id" \
+        --multipart-upload "file://$mp_file"
+    assert_success
+
+    rm -f "$part1_file" "$part2_file" "$mp_file"
+}
+
+# --- S3 Large File Test ---
+
+@test "S3: put object 25 MB" {
+    aws_cmd s3api create-bucket --bucket "$BUCKET" >/dev/null
+
+    local large_file
+    large_file=$(mktemp)
+    dd if=/dev/zero of="$large_file" bs=1048576 count=25 2>/dev/null
+
+    run aws_cmd s3api put-object \
+        --bucket "$BUCKET" \
+        --key "large-25mb.bin" \
+        --body "$large_file"
+    assert_success
+
+    run aws_cmd s3api head-object \
+        --bucket "$BUCKET" \
+        --key "large-25mb.bin"
+    assert_success
+    length=$(json_get "$output" '.ContentLength')
+    [ "$length" = "26214400" ]
+
+    rm -f "$large_file"
+}
