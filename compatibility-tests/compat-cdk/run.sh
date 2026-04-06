@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+# Environment setup for Docker container
+export AWS_REGION=us-east-1
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export LOCALSTACK_HOSTNAME=floci
+export EDGE_PORT=4566
+export FLOCI_ENDPOINT=http://floci:4566
+export AWS_ENDPOINT_URL=http://floci:4566
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Ensure bats is available
+if [ ! -d "$REPO_ROOT/lib/bats-core" ]; then
+    echo "Error: bats-core not found. Run 'just setup-bats' first."
+    exit 1
+fi
+
+# Run bats tests
+exec "$REPO_ROOT/lib/bats-core/bin/bats" "$SCRIPT_DIR/test/"
