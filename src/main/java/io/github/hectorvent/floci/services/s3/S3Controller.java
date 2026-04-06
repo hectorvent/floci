@@ -33,14 +33,16 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.logging.Logger;
 
 /**
@@ -55,6 +57,8 @@ public class S3Controller {
     private static final DateTimeFormatter RFC_822 = DateTimeFormatter
             .ofPattern("EEE, dd MMM yyyy HH:mm:ss z", Locale.US)
             .withZone(ZoneId.of("GMT"));
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final S3Service s3Service;
     private final S3SelectService s3SelectService;
@@ -1555,10 +1559,10 @@ public class S3Controller {
                     "Bucket POST must contain a file field.", 400);
         }
 
-        // Validate content-length-range from policy if present
+        // Validate policy conditions if present
         String policy = fields.get("policy");
         if (policy != null && !policy.isEmpty()) {
-            validateContentLengthRange(policy, fileData.length);
+            validatePolicyConditions(policy, bucket, fields, fileData.length);
         }
 
         // Use Content-Type from form fields, fall back to file part Content-Type
@@ -1588,43 +1592,90 @@ public class S3Controller {
                 .build();
     }
 
-    private void validateContentLengthRange(String policyBase64, int contentLength) {
+    private void validatePolicyConditions(String policyBase64, String bucket,
+                                           Map<String, String> fields, int contentLength) {
         try {
-            String decoded = new String(java.util.Base64.getDecoder().decode(policyBase64), StandardCharsets.UTF_8);
-            // Parse conditions array from the policy JSON to find content-length-range
-            int condIdx = decoded.indexOf("\"conditions\"");
-            if (condIdx < 0) {
+            byte[] decoded = java.util.Base64.getDecoder().decode(policyBase64);
+            JsonNode policy = OBJECT_MAPPER.readTree(decoded);
+            JsonNode conditions = policy.get("conditions");
+            if (conditions == null || !conditions.isArray()) {
                 return;
             }
-            // Look for content-length-range condition: ["content-length-range", min, max]
-            String lower = decoded.toLowerCase(Locale.ROOT);
-            int rangeIdx = lower.indexOf("content-length-range");
-            if (rangeIdx < 0) {
-                return;
-            }
-            // Find the enclosing array bracket
-            int bracketStart = decoded.lastIndexOf('[', rangeIdx);
-            int bracketEnd = decoded.indexOf(']', rangeIdx);
-            if (bracketStart < 0 || bracketEnd < 0) {
-                return;
-            }
-            String rangeArray = decoded.substring(bracketStart, bracketEnd + 1);
-            // Extract min and max values
-            String[] tokens = rangeArray.replaceAll("[\\[\\]\"]", "").split(",");
-            if (tokens.length >= 3) {
-                long min = Long.parseLong(tokens[1].trim());
-                long max = Long.parseLong(tokens[2].trim());
-                if (contentLength < min || contentLength > max) {
-                    throw new AwsException("EntityTooLarge",
-                            "Your proposed upload exceeds the maximum allowed size.", 400);
+            for (JsonNode condition : conditions) {
+                if (condition.isObject()) {
+                    validateExactMatchCondition(condition, bucket, fields);
+                } else if (condition.isArray()) {
+                    validateArrayCondition(condition, bucket, fields, contentLength);
                 }
             }
         } catch (AwsException e) {
             throw e;
         } catch (Exception e) {
-            // If policy parsing fails, skip validation (match AWS lenient behavior for emulator)
             LOG.debugv("Failed to parse presigned POST policy: {0}", e.getMessage());
         }
+    }
+
+    private void validateExactMatchCondition(JsonNode condition, String bucket, Map<String, String> fields) {
+        Iterator<Map.Entry<String, JsonNode>> fieldIter = condition.fields();
+        while (fieldIter.hasNext()) {
+            Map.Entry<String, JsonNode> entry = fieldIter.next();
+            String fieldName = entry.getKey();
+            String expectedValue = entry.getValue().asText();
+            String actualValue;
+            if ("bucket".equals(fieldName)) {
+                actualValue = bucket;
+            } else {
+                actualValue = fields.get(fieldName);
+            }
+            if (actualValue == null || !actualValue.equals(expectedValue)) {
+                throw new AwsException("AccessDenied",
+                        "Invalid according to Policy: Policy Condition failed: "
+                                + "[\"eq\", \"$" + fieldName + "\", \"" + expectedValue + "\"]", 403);
+            }
+        }
+    }
+
+    private void validateArrayCondition(JsonNode condition, String bucket,
+                                        Map<String, String> fields, int contentLength) {
+        if (condition.size() < 3) {
+            return;
+        }
+        String operator = condition.get(0).asText().toLowerCase(Locale.ROOT);
+        if ("content-length-range".equals(operator)) {
+            long min = condition.get(1).asLong();
+            long max = condition.get(2).asLong();
+            if (contentLength < min || contentLength > max) {
+                throw new AwsException("EntityTooLarge",
+                        "Your proposed upload exceeds the maximum allowed size.", 400);
+            }
+        } else if ("eq".equals(operator)) {
+            String fieldRef = condition.get(1).asText();
+            String expectedValue = condition.get(2).asText();
+            String fieldName = fieldRef.startsWith("$") ? fieldRef.substring(1) : fieldRef;
+            String actualValue = resolveFieldValue(fieldName, bucket, fields);
+            if (actualValue == null || !actualValue.equals(expectedValue)) {
+                throw new AwsException("AccessDenied",
+                        "Invalid according to Policy: Policy Condition failed: "
+                                + "[\"eq\", \"$" + fieldName + "\", \"" + expectedValue + "\"]", 403);
+            }
+        } else if ("starts-with".equals(operator)) {
+            String fieldRef = condition.get(1).asText();
+            String prefix = condition.get(2).asText();
+            String fieldName = fieldRef.startsWith("$") ? fieldRef.substring(1) : fieldRef;
+            String actualValue = resolveFieldValue(fieldName, bucket, fields);
+            if (actualValue == null || !actualValue.startsWith(prefix)) {
+                throw new AwsException("AccessDenied",
+                        "Invalid according to Policy: Policy Condition failed: "
+                                + "[\"starts-with\", \"$" + fieldName + "\", \"" + prefix + "\"]", 403);
+            }
+        }
+    }
+
+    private static String resolveFieldValue(String fieldName, String bucket, Map<String, String> fields) {
+        if ("bucket".equals(fieldName)) {
+            return bucket;
+        }
+        return fields.get(fieldName);
     }
 
     private static String extractBoundary(String contentType) {
