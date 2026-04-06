@@ -33,6 +33,7 @@ Floci emulates 26 AWS services on a single port (`4566`). All services use the r
 | [ECS](ecs.md) | `POST /` + `X-Amz-Target: AmazonEC2ContainerServiceV20141113.*` | JSON 1.1 | 58 |
 | [SES](ses.md) | `POST /` with `Action=` param | Query | 14 |
 | [OpenSearch](opensearch.md) | `/2021-01-01/opensearch/...` | REST JSON | 24 |
+| [EC2](ec2.md) | `POST /` with `Action=` param | EC2 Query | 61 |
 
 ## Common Setup
 
