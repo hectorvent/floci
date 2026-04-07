@@ -5,6 +5,7 @@ import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.scheduler.model.DeadLetterConfig;
 import io.github.hectorvent.floci.services.scheduler.model.FlexibleTimeWindow;
+import io.github.hectorvent.floci.services.scheduler.model.RetryPolicy;
 import io.github.hectorvent.floci.services.scheduler.model.Schedule;
 import io.github.hectorvent.floci.services.scheduler.model.ScheduleGroup;
 import io.github.hectorvent.floci.services.scheduler.model.ScheduleRequest;
@@ -12,6 +13,7 @@ import io.github.hectorvent.floci.services.scheduler.model.Target;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -509,6 +511,36 @@ class SchedulerServiceTest {
         Schedule updated = service.updateSchedule(updateReq, REGION);
         assertEquals("arn:aws:sqs:us-east-1:000000000000:dlq-updated",
                 updated.getTarget().getDeadLetterConfig().getArn());
+    }
+
+    @Test
+    void createScheduleWithRetryPolicy() {
+        Target target = new Target("arn:t", "arn:r", null, null);
+        target.setRetryPolicy(new RetryPolicy(3600, 5));
+        ScheduleRequest req = newRequest("retry-schedule", null, "rate(1 hour)",
+                new FlexibleTimeWindow("OFF", null), target);
+        Schedule s = service.createSchedule(req, REGION);
+        assertNotNull(s.getTarget().getRetryPolicy());
+        assertEquals(3600, s.getTarget().getRetryPolicy().getMaximumEventAgeInSeconds());
+        assertEquals(5, s.getTarget().getRetryPolicy().getMaximumRetryAttempts());
+    }
+
+    @Test
+    void createScheduleWithStartAndEndDate() {
+        Instant start = Instant.parse("2026-06-01T00:00:00Z");
+        Instant end = Instant.parse("2026-12-31T23:59:59Z");
+        ScheduleRequest req = newRequest("dated-schedule", null, "rate(1 hour)",
+                new FlexibleTimeWindow("OFF", null),
+                new Target("arn:t", "arn:r", null, null));
+        req.setStartDate(start);
+        req.setEndDate(end);
+        Schedule s = service.createSchedule(req, REGION);
+        assertEquals(start, s.getStartDate());
+        assertEquals(end, s.getEndDate());
+
+        Schedule fetched = service.getSchedule("dated-schedule", null, REGION);
+        assertEquals(start, fetched.getStartDate());
+        assertEquals(end, fetched.getEndDate());
     }
 
     @Test

@@ -360,6 +360,84 @@ class SchedulerIntegrationTest {
 
     @Test
     @Order(29)
+    void createScheduleWithRetryPolicy() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "ScheduleExpression": "rate(10 minutes)",
+                    "FlexibleTimeWindow": {"Mode": "OFF"},
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:rp-func",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                        "RetryPolicy": {
+                            "MaximumEventAgeInSeconds": 3600,
+                            "MaximumRetryAttempts": 5
+                        }
+                    }
+                }
+                """)
+        .when()
+            .post("/schedules/rp-schedule")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/schedules/rp-schedule")
+        .then()
+            .statusCode(200)
+            .body("Target.RetryPolicy.MaximumEventAgeInSeconds", equalTo(3600))
+            .body("Target.RetryPolicy.MaximumRetryAttempts", equalTo(5));
+
+        // Cleanup
+        given()
+        .when()
+            .delete("/schedules/rp-schedule")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(30)
+    void createScheduleWithStartAndEndDate() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "ScheduleExpression": "rate(1 hour)",
+                    "FlexibleTimeWindow": {"Mode": "OFF"},
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:dated-func",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r"
+                    },
+                    "StartDate": 1780329600.0,
+                    "EndDate": 1798761599.0
+                }
+                """)
+        .when()
+            .post("/schedules/dated-schedule")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/schedules/dated-schedule")
+        .then()
+            .statusCode(200)
+            .body("StartDate", notNullValue())
+            .body("EndDate", notNullValue());
+
+        // Cleanup
+        given()
+        .when()
+            .delete("/schedules/dated-schedule")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(31)
     void updateSchedule() {
         given()
             .contentType("application/json")
@@ -395,7 +473,7 @@ class SchedulerIntegrationTest {
     }
 
     @Test
-    @Order(30)
+    @Order(32)
     void updateScheduleNotFoundReturns404() {
         given()
             .contentType("application/json")
@@ -413,7 +491,7 @@ class SchedulerIntegrationTest {
     }
 
     @Test
-    @Order(31)
+    @Order(33)
     void deleteSchedule() {
         given()
         .when()
@@ -429,7 +507,7 @@ class SchedulerIntegrationTest {
     }
 
     @Test
-    @Order(32)
+    @Order(34)
     void deleteScheduleNotFoundReturns404() {
         given()
         .when()
@@ -439,7 +517,7 @@ class SchedulerIntegrationTest {
     }
 
     @Test
-    @Order(33)
+    @Order(35)
     void deleteScheduleInGroup() {
         given()
             .queryParam("groupName", "sched-test-group")
