@@ -603,6 +603,12 @@ class DynamoDbIntegrationTest {
             .body("Table.GlobalSecondaryIndexes[0].IndexName", equalTo("TestGsi"))
             .body("Table.GlobalSecondaryIndexes[0].IndexStatus", equalTo("ACTIVE"))
             .body("Table.GlobalSecondaryIndexes[0].IndexArn", containsString("/index/TestGsi"))
+            .body("Table.GlobalSecondaryIndexes[0].ProvisionedThroughput", notNullValue())
+            .body("Table.GlobalSecondaryIndexes[0].ProvisionedThroughput.ReadCapacityUnits", equalTo(0))
+            .body("Table.GlobalSecondaryIndexes[0].ProvisionedThroughput.WriteCapacityUnits", equalTo(0))
+            .body("Table.GlobalSecondaryIndexes[0].ProvisionedThroughput.NumberOfDecreasesToday", equalTo(0))
+            .body("Table.GlobalSecondaryIndexes[0].IndexSizeBytes", equalTo(0))
+            .body("Table.GlobalSecondaryIndexes[0].ItemCount", equalTo(0))
             .body("Table.AttributeDefinitions.size()", equalTo(3));
     }
 
