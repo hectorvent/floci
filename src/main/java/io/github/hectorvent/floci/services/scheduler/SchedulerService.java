@@ -4,8 +4,10 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.scheduler.model.FlexibleTimeWindow;
 import io.github.hectorvent.floci.services.scheduler.model.Schedule;
 import io.github.hectorvent.floci.services.scheduler.model.ScheduleGroup;
+import io.github.hectorvent.floci.services.scheduler.model.Target;
 import com.fasterxml.jackson.core.type.TypeReference;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -128,7 +130,7 @@ public class SchedulerService {
         LOG.infov("Deleted schedule group: {0} (removed {1} schedules)", name, orphanKeys.size());
     }
 
-    public java.util.List<ScheduleGroup> listScheduleGroups(String namePrefix, String region) {
+    public List<ScheduleGroup> listScheduleGroups(String namePrefix, String region) {
         getOrCreateDefaultGroup(region);
         String storagePrefix = "group:" + region + ":";
         return groupStore.scan(k -> {
@@ -147,8 +149,8 @@ public class SchedulerService {
 
     public Schedule createSchedule(String name, String groupName, String scheduleExpression,
                                    String scheduleExpressionTimezone,
-                                   io.github.hectorvent.floci.services.scheduler.model.FlexibleTimeWindow flexibleTimeWindow,
-                                   io.github.hectorvent.floci.services.scheduler.model.Target target,
+                                   FlexibleTimeWindow flexibleTimeWindow,
+                                   Target target,
                                    String description, String state, String actionAfterCompletion,
                                    Instant startDate, Instant endDate, String kmsKeyArn,
                                    String region) {
@@ -197,8 +199,8 @@ public class SchedulerService {
 
     public Schedule updateSchedule(String name, String groupName, String scheduleExpression,
                                    String scheduleExpressionTimezone,
-                                   io.github.hectorvent.floci.services.scheduler.model.FlexibleTimeWindow flexibleTimeWindow,
-                                   io.github.hectorvent.floci.services.scheduler.model.Target target,
+                                   FlexibleTimeWindow flexibleTimeWindow,
+                                   Target target,
                                    String description, String state, String actionAfterCompletion,
                                    Instant startDate, Instant endDate, String kmsKeyArn,
                                    String region) {
