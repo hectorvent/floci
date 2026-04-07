@@ -344,7 +344,9 @@ public class SchedulerController {
     private Instant instantField(JsonNode node, String field) {
         JsonNode f = node.get(field);
         if (f != null && !f.isNull() && f.isNumber()) {
-            return Instant.ofEpochSecond(f.longValue());
+            long secs = f.longValue();
+            long nanos = (long) ((f.doubleValue() - secs) * 1_000_000_000);
+            return Instant.ofEpochSecond(secs, nanos);
         }
         return null;
     }
