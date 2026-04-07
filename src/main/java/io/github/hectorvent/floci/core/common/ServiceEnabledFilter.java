@@ -93,6 +93,9 @@ public class ServiceEnabledFilter implements ContainerRequestFilter {
                 || CognitoWellKnownController.class.equals(resourceClass)) {
             return "cognito-idp";
         }
+        if (SesController.class.equals(resourceClass)) {
+            return "email";
+        }
         return null;
     }
 
@@ -103,10 +106,8 @@ public class ServiceEnabledFilter implements ContainerRequestFilter {
         boolean jsonEndpoint = serviceKeyFromMatchedResource() != null;
         String accept = ctx.getHeaderString("Accept");
         boolean acceptsJson = accept != null && accept.contains("json");
-        boolean isSesV2 = resourceInfo != null
-                && SesController.class.equals(resourceInfo.getResourceClass());
 
-        if (target != null || contentType.contains("json") || jsonEndpoint || acceptsJson || isSesV2) {
+        if (target != null || contentType.contains("json") || jsonEndpoint || acceptsJson) {
             return Response.status(400)
                     .type(MediaType.APPLICATION_JSON)
                     .entity(new AwsErrorResponse("ServiceNotAvailableException", message))
