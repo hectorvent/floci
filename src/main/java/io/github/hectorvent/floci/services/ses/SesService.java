@@ -17,7 +17,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @ApplicationScoped
 public class SesService {
@@ -26,8 +25,8 @@ public class SesService {
 
     private final StorageBackend<String, Identity> identityStore;
     private final StorageBackend<String, SentEmail> emailStore;
+    private final StorageBackend<String, Boolean> accountSettingsStore;
     private final RegionResolver regionResolver;
-    private final Map<String, Boolean> accountSendingEnabled = new ConcurrentHashMap<>();
 
     @Inject
     public SesService(StorageFactory storageFactory, EmulatorConfig config,
@@ -36,14 +35,18 @@ public class SesService {
                 new TypeReference<Map<String, Identity>>() {});
         this.emailStore = storageFactory.create("ses", "ses-emails.json",
                 new TypeReference<Map<String, SentEmail>>() {});
+        this.accountSettingsStore = storageFactory.create("ses", "ses-account-settings.json",
+                new TypeReference<Map<String, Boolean>>() {});
         this.regionResolver = regionResolver;
     }
 
     SesService(StorageBackend<String, Identity> identityStore,
                StorageBackend<String, SentEmail> emailStore,
+               StorageBackend<String, Boolean> accountSettingsStore,
                RegionResolver regionResolver) {
         this.identityStore = identityStore;
         this.emailStore = emailStore;
+        this.accountSettingsStore = accountSettingsStore;
         this.regionResolver = regionResolver;
     }
 
@@ -203,11 +206,11 @@ public class SesService {
     }
 
     public boolean isAccountSendingEnabled(String region) {
-        return accountSendingEnabled.getOrDefault(region, true);
+        return accountSettingsStore.get("sending::" + region).orElse(true);
     }
 
     public void setAccountSendingEnabled(String region, boolean enabled) {
-        accountSendingEnabled.put(region, enabled);
+        accountSettingsStore.put("sending::" + region, enabled);
         LOG.infov("Updated account sending enabled for region {0}: {1}", region, enabled);
     }
 

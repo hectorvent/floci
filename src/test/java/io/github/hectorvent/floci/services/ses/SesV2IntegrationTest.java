@@ -17,7 +17,7 @@ import static org.hamcrest.Matchers.*;
 class SesV2IntegrationTest {
 
     private static final String AUTH_HEADER =
-            "AWS4-HMAC-SHA256 Credential=AKID/20260101/us-east-1/sesv2/aws4_request";
+            "AWS4-HMAC-SHA256 Credential=AKID/20260101/us-east-1/ses/aws4_request";
 
     @Test
     @Order(1)

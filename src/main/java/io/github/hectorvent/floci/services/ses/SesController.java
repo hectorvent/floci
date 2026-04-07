@@ -184,6 +184,11 @@ public class SesController {
     public Response sendEmail(@Context HttpHeaders headers, String body) {
         String region = regionResolver.resolveRegion(headers);
         try {
+            if (!sesService.isAccountSendingEnabled(region)) {
+                throw new AwsException("SendingPausedException",
+                        "Account sending is disabled.", 400);
+            }
+
             JsonNode request = objectMapper.readTree(body);
 
             String fromEmailAddress = request.path("FromEmailAddress").asText(null);
