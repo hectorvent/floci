@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.scheduler.model.Schedule;
 import io.github.hectorvent.floci.services.scheduler.model.ScheduleGroup;
 import io.github.hectorvent.floci.services.scheduler.model.ScheduleRequest;
 import io.github.hectorvent.floci.services.scheduler.model.Target;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -70,7 +71,7 @@ public class SchedulerController {
             return Response.ok(response).build();
         } catch (AwsException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             throw new AwsException("ValidationException", e.getMessage(), 400);
         }
     }
@@ -131,7 +132,7 @@ public class SchedulerController {
             return Response.ok(response).build();
         } catch (AwsException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             throw new AwsException("ValidationException", e.getMessage(), 400);
         }
     }
@@ -166,7 +167,7 @@ public class SchedulerController {
             return Response.ok(response).build();
         } catch (AwsException e) {
             throw e;
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             throw new AwsException("ValidationException", e.getMessage(), 400);
         }
     }
@@ -391,7 +392,7 @@ public class SchedulerController {
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, String> parseTags(String body) throws Exception {
+    private Map<String, String> parseTags(String body) throws JsonProcessingException {
         if (body == null || body.isBlank()) {
             return Map.of();
         }
