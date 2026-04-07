@@ -192,6 +192,10 @@ public class SesController {
             JsonNode request = objectMapper.readTree(body);
 
             String fromEmailAddress = request.path("FromEmailAddress").asText(null);
+            if (fromEmailAddress == null || fromEmailAddress.isBlank()) {
+                throw new AwsException("BadRequestException",
+                        "FromEmailAddress is required.", 400);
+            }
 
             JsonNode destination = request.path("Destination");
             List<String> toAddresses = jsonArrayToList(destination.path("ToAddresses"));
@@ -206,10 +210,6 @@ public class SesController {
                 if (rawData == null || rawData.isBlank()) {
                     throw new AwsException("BadRequestException",
                             "Content.Raw.Data is required.", 400);
-                }
-                if (fromEmailAddress == null || fromEmailAddress.isBlank()) {
-                    throw new AwsException("BadRequestException",
-                            "FromEmailAddress is required.", 400);
                 }
                 List<String> allDestinations = mergeLists(toAddresses, ccAddresses, bccAddresses);
                 if (allDestinations.isEmpty()) {
