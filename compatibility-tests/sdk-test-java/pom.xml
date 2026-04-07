@@ -156,6 +156,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>ecs</artifactId>
         </dependency>
+        <!-- EventBridge Scheduler client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>scheduler</artifactId>
+        </dependency>
         <!-- CloudFormation client -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
