@@ -243,7 +243,9 @@ class SesV2IntegrationTest {
         .when()
             .delete("/v2/email/identities/v2sender@example.com")
         .then()
-            .statusCode(200);
+            .statusCode(200)
+            .contentType(containsString("application/json"))
+            .body("size()", equalTo(0)); // empty JSON object {}
 
         // Verify it's gone
         given()
@@ -503,6 +505,46 @@ class SesV2IntegrationTest {
         .then()
             .statusCode(400)
             .body("__type", equalTo("BadRequestException"));
+    }
+
+    @Test
+    @Order(57)
+    void sendEmail_ccOnly_noToAddresses() {
+        // Re-create identity
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {"EmailIdentity": "cc-only-sender@example.com"}
+                """)
+        .when()
+            .post("/v2/email/identities")
+        .then()
+            .statusCode(200);
+
+        // Send with only CcAddresses (no ToAddresses)
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                    "FromEmailAddress": "cc-only-sender@example.com",
+                    "Destination": {
+                        "CcAddresses": ["cc-recipient@example.com"]
+                    },
+                    "Content": {
+                        "Simple": {
+                            "Subject": {"Data": "CC Only Test"},
+                            "Body": {"Text": {"Data": "Hello via CC"}}
+                        }
+                    }
+                }
+                """)
+        .when()
+            .post("/v2/email/outbound-emails")
+        .then()
+            .statusCode(200)
+            .body("MessageId", notNullValue());
     }
 
     // ──────────────── Validation edge cases ────────────────

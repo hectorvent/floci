@@ -124,7 +124,7 @@ public class SesController {
         String region = regionResolver.resolveRegion(headers);
         sesService.deleteIdentity(emailIdentity, region);
         LOG.infov("SES V2 DeleteEmailIdentity: {0}", emailIdentity);
-        return Response.ok().build();
+        return Response.ok(objectMapper.createObjectNode()).build();
     }
 
     // ──────────────────────── Identity DKIM ─────────────────────────

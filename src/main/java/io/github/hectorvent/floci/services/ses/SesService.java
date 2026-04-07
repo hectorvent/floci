@@ -106,7 +106,10 @@ public class SesService {
         if (source == null || source.isBlank()) {
             throw new AwsException("InvalidParameterValue", "Source email is required.", 400);
         }
-        if (toAddresses == null || toAddresses.isEmpty()) {
+        boolean hasRecipient = (toAddresses != null && !toAddresses.isEmpty())
+                || (ccAddresses != null && !ccAddresses.isEmpty())
+                || (bccAddresses != null && !bccAddresses.isEmpty());
+        if (!hasRecipient) {
             throw new AwsException("InvalidParameterValue", "At least one destination address is required.", 400);
         }
 
