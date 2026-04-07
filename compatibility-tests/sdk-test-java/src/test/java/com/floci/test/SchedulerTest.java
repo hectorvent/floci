@@ -374,14 +374,10 @@ class SchedulerTest {
                 .name(GROUP_NAME)
                 .build());
 
-        try {
-            GetScheduleGroupResponse resp = scheduler.getScheduleGroup(
-                    GetScheduleGroupRequest.builder()
-                            .name(GROUP_NAME)
-                            .build());
-            assertThat(resp.state()).isEqualTo(ScheduleGroupState.DELETING);
-        } catch (ResourceNotFoundException e) {
-            // Expected
-        }
+        assertThatThrownBy(() -> scheduler.getScheduleGroup(
+                GetScheduleGroupRequest.builder()
+                        .name(GROUP_NAME)
+                        .build()))
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 }
