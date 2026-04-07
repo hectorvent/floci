@@ -33,6 +33,7 @@ Floci is a fast, free, and open-source local AWS service emulator built for deve
 | ElastiCache (Redis) | Query + RESP proxy |
 | RDS (PostgreSQL / MySQL) | Query + wire proxy |
 | EventBridge | JSON 1.1 |
+| EventBridge Scheduler | REST JSON |
 | CloudWatch Logs & Metrics | JSON 1.1 / Query |
 
 ## Why Floci?
