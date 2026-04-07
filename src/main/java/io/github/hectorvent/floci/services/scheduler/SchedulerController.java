@@ -27,8 +27,6 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.jboss.logging.Logger;
-
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -42,8 +40,6 @@ import java.util.Map;
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 public class SchedulerController {
-
-    private static final Logger LOG = Logger.getLogger(SchedulerController.class);
 
     private final SchedulerService schedulerService;
     private final RegionResolver regionResolver;
