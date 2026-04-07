@@ -21,3 +21,10 @@ COPILOT.md
 
 posts
 local
+
+.terraform.lock.hcl
+go.sum
+package-lock.json
+test-results.xml
+
+
