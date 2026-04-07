@@ -4,6 +4,8 @@ import org.junit.jupiter.api.*;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
 import software.amazon.awssdk.services.scheduler.model.*;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.*;
 
 @DisplayName("EventBridge Scheduler")
@@ -29,6 +31,14 @@ class SchedulerTest {
             try {
                 scheduler.deleteSchedule(DeleteScheduleRequest.builder()
                         .name("dlc-schedule").build());
+            } catch (Exception ignored) {}
+            try {
+                scheduler.deleteSchedule(DeleteScheduleRequest.builder()
+                        .name("rp-schedule").build());
+            } catch (Exception ignored) {}
+            try {
+                scheduler.deleteSchedule(DeleteScheduleRequest.builder()
+                        .name("dated-schedule").build());
             } catch (Exception ignored) {}
             try {
                 scheduler.deleteSchedule(DeleteScheduleRequest.builder()
@@ -284,7 +294,71 @@ class SchedulerTest {
     }
 
     @Test
+    @Order(19)
+    @DisplayName("CreateSchedule - with RetryPolicy")
+    void createScheduleWithRetryPolicy() {
+        CreateScheduleResponse resp = scheduler.createSchedule(CreateScheduleRequest.builder()
+                .name("rp-schedule")
+                .scheduleExpression("rate(10 minutes)")
+                .flexibleTimeWindow(FlexibleTimeWindow.builder().mode(FlexibleTimeWindowMode.OFF).build())
+                .target(Target.builder()
+                        .arn("arn:aws:lambda:us-east-1:000000000000:function:rp-func")
+                        .roleArn("arn:aws:iam::000000000000:role/r")
+                        .retryPolicy(software.amazon.awssdk.services.scheduler.model.RetryPolicy.builder()
+                                .maximumEventAgeInSeconds(3600)
+                                .maximumRetryAttempts(5)
+                                .build())
+                        .build())
+                .build());
+
+        assertThat(resp.scheduleArn()).isNotNull().contains("rp-schedule");
+
+        GetScheduleResponse get = scheduler.getSchedule(GetScheduleRequest.builder()
+                .name("rp-schedule").build());
+        assertThat(get.target().retryPolicy()).isNotNull();
+        assertThat(get.target().retryPolicy().maximumEventAgeInSeconds()).isEqualTo(3600);
+        assertThat(get.target().retryPolicy().maximumRetryAttempts()).isEqualTo(5);
+
+        // Cleanup
+        scheduler.deleteSchedule(DeleteScheduleRequest.builder()
+                .name("rp-schedule").build());
+    }
+
+    @Test
     @Order(20)
+    @DisplayName("CreateSchedule - with StartDate and EndDate")
+    void createScheduleWithStartAndEndDate() {
+        Instant start = Instant.parse("2026-06-01T00:00:00Z");
+        Instant end = Instant.parse("2026-12-31T23:59:59Z");
+
+        CreateScheduleResponse resp = scheduler.createSchedule(CreateScheduleRequest.builder()
+                .name("dated-schedule")
+                .scheduleExpression("rate(1 hour)")
+                .flexibleTimeWindow(FlexibleTimeWindow.builder().mode(FlexibleTimeWindowMode.OFF).build())
+                .target(Target.builder()
+                        .arn("arn:aws:lambda:us-east-1:000000000000:function:dated-func")
+                        .roleArn("arn:aws:iam::000000000000:role/r")
+                        .build())
+                .startDate(start)
+                .endDate(end)
+                .build());
+
+        assertThat(resp.scheduleArn()).isNotNull().contains("dated-schedule");
+
+        GetScheduleResponse get = scheduler.getSchedule(GetScheduleRequest.builder()
+                .name("dated-schedule").build());
+        assertThat(get.startDate()).isNotNull();
+        assertThat(get.startDate().getEpochSecond()).isEqualTo(start.getEpochSecond());
+        assertThat(get.endDate()).isNotNull();
+        assertThat(get.endDate().getEpochSecond()).isEqualTo(end.getEpochSecond());
+
+        // Cleanup
+        scheduler.deleteSchedule(DeleteScheduleRequest.builder()
+                .name("dated-schedule").build());
+    }
+
+    @Test
+    @Order(21)
     @DisplayName("UpdateSchedule - update expression and state")
     void updateSchedule() {
         UpdateScheduleResponse resp = scheduler.updateSchedule(UpdateScheduleRequest.builder()
@@ -315,7 +389,7 @@ class SchedulerTest {
     }
 
     @Test
-    @Order(21)
+    @Order(22)
     @DisplayName("UpdateSchedule - non-existent returns ResourceNotFoundException")
     void updateScheduleNotFound() {
         assertThatThrownBy(() -> scheduler.updateSchedule(UpdateScheduleRequest.builder()
@@ -328,7 +402,7 @@ class SchedulerTest {
     }
 
     @Test
-    @Order(22)
+    @Order(23)
     @DisplayName("DeleteSchedule - delete schedule")
     void deleteSchedule() {
         scheduler.deleteSchedule(DeleteScheduleRequest.builder()
@@ -341,7 +415,7 @@ class SchedulerTest {
     }
 
     @Test
-    @Order(23)
+    @Order(24)
     @DisplayName("DeleteSchedule - non-existent returns ResourceNotFoundException")
     void deleteScheduleNotFound() {
         assertThatThrownBy(() -> scheduler.deleteSchedule(DeleteScheduleRequest.builder()
@@ -351,7 +425,7 @@ class SchedulerTest {
     }
 
     @Test
-    @Order(24)
+    @Order(25)
     @DisplayName("DeleteSchedule - delete schedule in group")
     void deleteScheduleInGroup() {
         scheduler.deleteSchedule(DeleteScheduleRequest.builder()
@@ -367,7 +441,7 @@ class SchedulerTest {
     }
 
     @Test
-    @Order(25)
+    @Order(26)
     @DisplayName("DeleteScheduleGroup - cleanup test group")
     void deleteScheduleGroupCleanup() {
         scheduler.deleteScheduleGroup(DeleteScheduleGroupRequest.builder()
