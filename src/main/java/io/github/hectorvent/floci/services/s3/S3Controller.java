@@ -64,13 +64,16 @@ public class S3Controller {
     private final S3Service s3Service;
     private final S3SelectService s3SelectService;
     private final RegionResolver regionResolver;
+    private final io.quarkus.vertx.http.runtime.CurrentVertxRequest currentVertxRequest;
 
     @Inject
     public S3Controller(S3Service s3Service, S3SelectService s3SelectService,
-                        RegionResolver regionResolver) {
+                        RegionResolver regionResolver,
+                        io.quarkus.vertx.http.runtime.CurrentVertxRequest currentVertxRequest) {
         this.s3Service = s3Service;
         this.s3SelectService = s3SelectService;
         this.regionResolver = regionResolver;
+        this.currentVertxRequest = currentVertxRequest;
     }
 
     // --- Bucket operations ---
@@ -353,6 +356,8 @@ public class S3Controller {
                               @Context HttpHeaders httpHeaders,
                               byte[] body) {
         try {
+            key = extractObjectKey(uriInfo, bucket);
+
             if (hasQueryParam(uriInfo, "tagging")) {
                 return handlePutObjectTagging(bucket, key, body);
             }
@@ -426,6 +431,8 @@ public class S3Controller {
                               @Context UriInfo uriInfo,
                               @Context HttpHeaders httpHeaders) {
         try {
+            key = extractObjectKey(uriInfo, bucket);
+
             if (uploadId != null) {
                 return handleListParts(bucket, key, uploadId, maxPartsQuery, partNumberMarkerQuery);
             }
@@ -549,8 +556,10 @@ public class S3Controller {
                                @HeaderParam("If-Match") String ifMatch,
                                @HeaderParam("If-None-Match") String ifNoneMatch,
                                @HeaderParam("If-Modified-Since") String ifModifiedSince,
-                               @HeaderParam("If-Unmodified-Since") String ifUnmodifiedSince) {
+                               @HeaderParam("If-Unmodified-Since") String ifUnmodifiedSince,
+                               @Context UriInfo uriInfo) {
         try {
+            key = extractObjectKey(uriInfo, bucket);
             S3Object obj = s3Service.headObject(bucket, key, versionId);
             Response preconditionResponse = checkPreconditions(obj, ifMatch, ifNoneMatch, ifModifiedSince, ifUnmodifiedSince);
             if (preconditionResponse != null) {
@@ -653,6 +662,8 @@ public class S3Controller {
                                  @Context UriInfo uriInfo,
                                  @Context HttpHeaders httpHeaders) {
         try {
+            key = extractObjectKey(uriInfo, bucket);
+
             if (hasQueryParam(uriInfo, "tagging")) {
                 s3Service.deleteObjectTagging(bucket, key);
                 return Response.noContent().build();
@@ -710,6 +721,8 @@ public class S3Controller {
                                          @Context UriInfo uriInfo,
                                          byte[] body) {
         try {
+            key = extractObjectKey(uriInfo, bucket);
+
             if (hasQueryParam(uriInfo, "uploads")) {
                 MultipartUpload upload = s3Service.initiateMultipartUpload(bucket, key, contentType,
                         extractUserMetadata(httpHeaders), httpHeaders.getHeaderString("x-amz-storage-class"));
@@ -1882,5 +1895,23 @@ public class S3Controller {
         String query = uriInfo.getRequestUri().getQuery();
         if (query == null) return false;
         return query.equals(param) || query.contains(param + "&") || query.contains("&" + param);
+    }
+
+    /**
+     * Extracts the object key from the raw Vert.x request URI, preserving leading slashes
+     * that JAX-RS path normalization would otherwise strip.
+     */
+    private String extractObjectKey(UriInfo uriInfo, String bucket) {
+        String rawUri = currentVertxRequest.getCurrent().request().uri();
+        int qIdx = rawUri.indexOf('?');
+        String rawPath = qIdx >= 0 ? rawUri.substring(0, qIdx) : rawUri;
+        String bucketPrefix = "/" + bucket + "/";
+        int prefixIndex = rawPath.indexOf(bucketPrefix);
+        if (prefixIndex < 0) {
+            // Should not happen — route already matched /{bucket}/{key:.+}
+            return uriInfo.getPathParameters().getFirst("key");
+        }
+        String rawKey = rawPath.substring(prefixIndex + bucketPrefix.length());
+        return URLDecoder.decode(rawKey, StandardCharsets.UTF_8);
     }
 }
