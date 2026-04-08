@@ -172,7 +172,7 @@ class EventBridgeTest {
                 .waitTimeSeconds(2)
                 .build());
         assertThat(msg.messages()).hasSize(1);
-        assertThat(msg.messages().getFirst().body()).contains("com.myapp").contains("OrderPlaced");
+        assertThat(msg.messages().get(0).body()).contains("com.myapp").contains("OrderPlaced");
     }
 
     @Test
@@ -257,7 +257,7 @@ class EventBridgeTest {
                 .waitTimeSeconds(2)
                 .build());
         assertThat(msg.messages()).hasSize(1);
-        String body = msg.messages().getFirst().body();
+        String body = msg.messages().get(0).body();
         assertThat(body).contains("com.myapp").contains("OrderShipped");
         assertThat(body).doesNotContain("orderId");
     }
