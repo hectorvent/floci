@@ -54,7 +54,7 @@
 | EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**27 services. 1,873 automated compatibility tests. Free forever.**
+**28 services. 1,873 automated compatibility tests. Free forever.**
 
 ## Architecture Overview
 
@@ -66,7 +66,7 @@ flowchart LR
         Router["HTTP Router\n(JAX-RS / Vert.x)"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · CloudWatch\nStep Functions · CloudFormation\nACM · API Gateway · EC2"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · Scheduler\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · EC2"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -110,6 +110,7 @@ flowchart LR
 | **Step Functions** | 11 | In-process | ASL execution, task tokens, execution history |
 | **CloudFormation** | 12 | In-process | Stacks, change sets, resource provisioning |
 | **EventBridge** | 14 | In-process | Custom buses, rules, targets (SQS / SNS / Lambda) |
+| **EventBridge Scheduler** | 9 | In-process | Schedule groups, schedules, flexible time windows, retry policies, dead-letter queues |
 | **CloudWatch Logs** | 14 | In-process | Log groups, streams, ingestion, filtering |
 | **CloudWatch Metrics** | 5 | In-process | Custom metrics, statistics, alarms |
 | **ElastiCache** | 9 | **Real Docker containers** | Redis / Valkey, IAM auth, SigV4 validation |
@@ -118,6 +119,7 @@ flowchart LR
 | **EC2** | 61 | In-process | VPCs, subnets, security groups, instances, AMIs, key pairs, internet gateways, route tables, Elastic IPs, tags |
 | **ACM** | 8 | In-process | Certificate issuance, validation lifecycle |
 | **SES** | 14 | In-process | Send email / raw email, identity verification, DKIM attributes |
+| **SES v2 (HTTP)** | 9 | In-process | REST JSON API, identities, DKIM, feedback attributes, account sending |
 | **OpenSearch** | 24 | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
 
 > **Lambda, ElastiCache, RDS, and ECS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS.
@@ -198,9 +200,9 @@ const client = new S3Client({
 
 ## Compatibility Testing
 
-> For full compatibility validation against real SDK and client workflows, use [floci-compatibility-tests](https://github.com/floci-io/floci-compatibility-tests).
+> For full compatibility validation against real SDK and client workflows, see the [compatibility-tests](./compatibility-tests/) directory.
 
-This companion project provides a dedicated compatibility test suite for Floci across multiple SDKs and tooling scenarios, and is the recommended starting point when verifying integration behavior end to end.
+This directory provides a dedicated compatibility test suite for Floci across multiple SDKs and tooling scenarios, and is the recommended starting point when verifying integration behavior end to end.
 
 Available compatibility test modules:
 

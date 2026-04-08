@@ -1,6 +1,5 @@
 package io.github.hectorvent.floci.lifecycle;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
@@ -27,6 +26,7 @@ class HealthControllerIntegrationTest {
                 "elasticache": "running",
                 "rds": "running",
                 "events": "running",
+                "scheduler": "running",
                 "logs": "running",
                 "monitoring": "running",
                 "secretsmanager": "running",
@@ -39,6 +39,7 @@ class HealthControllerIntegrationTest {
                 "acm": "running",
                 "email": "running",
                 "es": "running",
+                "ec2": "running",
                 "ecs": "running"
               },
               "edition": "floci-always-free",

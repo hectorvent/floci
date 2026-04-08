@@ -2,13 +2,11 @@ package io.github.hectorvent.floci.core.common;
 
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
+import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.notNullValue;
 
-import io.restassured.RestAssured;
-import io.restassured.config.EncoderConfig;
-import io.restassured.http.ContentType;
 import org.junit.jupiter.api.BeforeAll;
 
 /**
@@ -28,10 +26,7 @@ class AwsRequestIdFilterIntegrationTest {
 
     @BeforeAll
     static void configureRestAssured() {
-        RestAssured.config = RestAssured.config().encoderConfig(
-                EncoderConfig.encoderConfig()
-                        .encodeContentTypeAs(SSM_CONTENT_TYPE, ContentType.TEXT)
-                        .encodeContentTypeAs(DYNAMODB_CONTENT_TYPE, ContentType.TEXT));
+        RestAssuredJsonUtils.configureAwsContentTypes();
     }
 
     // --- REST XML protocol (S3) ---
@@ -99,7 +94,7 @@ class AwsRequestIdFilterIntegrationTest {
     void dynamoDbSuccessResponseContainsRequestIdHeaders() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.ListTables")
-            .contentType("application/x-amz-json-1.0")
+            .contentType(DYNAMODB_CONTENT_TYPE)
             .body("{}")
         .when()
             .post("/")
@@ -113,7 +108,7 @@ class AwsRequestIdFilterIntegrationTest {
     void dynamoDbErrorResponseContainsRequestIdHeaders() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
-            .contentType("application/x-amz-json-1.0")
+            .contentType(DYNAMODB_CONTENT_TYPE)
             .body("{\"TableName\": \"NonExistentTable\", \"Key\": {\"id\": {\"S\": \"1\"}}}")
         .when()
             .post("/")
@@ -144,7 +139,7 @@ class AwsRequestIdFilterIntegrationTest {
     void ssmSuccessResponseContainsRequestIdHeaders() {
         given()
             .header("X-Amz-Target", "AmazonSSM.DescribeParameters")
-            .contentType("application/x-amz-json-1.1")
+            .contentType(SSM_CONTENT_TYPE)
             .body("{}")
         .when()
             .post("/")

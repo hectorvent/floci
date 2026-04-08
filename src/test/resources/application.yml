@@ -37,7 +37,7 @@ floci:
     presign-secret: test-secret
 
   init-hooks:
-    shell-executable: /bin/bash
+    shell-executable: /bin/sh
     timeout-seconds: 5
     shutdown-grace-period-seconds: 2
 
@@ -76,6 +76,8 @@ floci:
       default-mariadb-image: "mariadb:11"
     eventbridge:
       enabled: true
+    scheduler:
+      enabled: true
     cloudwatchlogs:
       enabled: true
       max-events-per-query: 10000
@@ -93,6 +95,8 @@ floci:
     stepfunctions:
       enabled: true
     cloudformation:
+      enabled: true
+    ses:
       enabled: true
     opensearch:
       enabled: true
