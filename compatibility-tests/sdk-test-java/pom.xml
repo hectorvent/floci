@@ -16,8 +16,8 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <aws.sdk.version>2.31.8</aws.sdk.version>
-        <awsjavasdk.version>2.31.8</awsjavasdk.version>
+        <aws.sdk.version>2.42.24</aws.sdk.version>
+        <awsjavasdk.version>2.42.24</awsjavasdk.version>
     </properties>
 
     <dependencyManagement>
@@ -69,6 +69,10 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>dynamodb</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb-enhanced</artifactId>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
