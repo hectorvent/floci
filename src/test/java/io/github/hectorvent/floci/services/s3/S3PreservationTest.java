@@ -10,15 +10,9 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
 /**
- * Preservation property tests for normal key behavior.
- *
- * Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5
- *
  * These tests verify that normal S3 object operations (keys without leading slashes)
  * continue to work correctly. They establish a baseline on UNFIXED code and must
  * continue to pass after the leading-slash key collision fix is applied.
- *
- * EXPECTED: These tests PASS on both unfixed and fixed code.
  */
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -40,7 +34,6 @@ class S3PreservationTest {
 
     // --- Test 1: Normal Key PUT/GET ---
     // For keys without leading slashes, PUT content and GET returns identical content with correct ETag.
-    // Validates: Requirement 3.1
 
     @Test
     @Order(1)
@@ -119,7 +112,6 @@ class S3PreservationTest {
 
     // --- Test 2: Interior Slash Preservation ---
     // For keys with interior slashes, PUT and GET round-trip correctly.
-    // Validates: Requirement 3.2
 
     @Test
     @Order(4)
@@ -171,7 +163,6 @@ class S3PreservationTest {
 
     // --- Test 3: HEAD Normal Key ---
     // For normal keys, HEAD returns correct Content-Length and Content-Type matching the PUT.
-    // Validates: Requirement 3.1
 
     @Test
     @Order(6)
@@ -199,7 +190,6 @@ class S3PreservationTest {
 
     // --- Test 4: DELETE Normal Key ---
     // For normal keys, DELETE removes the object and subsequent GET returns 404.
-    // Validates: Requirement 3.1
 
     @Test
     @Order(7)
@@ -240,7 +230,6 @@ class S3PreservationTest {
 
     // --- Test 5: List Objects Normal Keys ---
     // PUT multiple normal-key objects, list returns all with correct keys.
-    // Validates: Requirement 3.5
 
     @Test
     @Order(8)

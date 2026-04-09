@@ -18,12 +18,9 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Bug condition exploration tests for leading-slash key collision.
  *
- * Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5
- *
  * These tests verify that S3 object keys with leading slashes (e.g., /file.txt)
  * are treated as distinct from keys without leading slashes (e.g., file.txt).
  *
- * EXPECTED: These tests FAIL on unfixed code, confirming the bug exists.
  * The bug is that JAX-RS normalizes // to / in the URL path, so
  * PUT /bucket//file.txt stores under "file.txt" instead of "/file.txt".
  *
