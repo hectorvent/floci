@@ -13,7 +13,8 @@ quarkus:
       --initialize-at-run-time=org.bouncycastle.crypto.prng.SP800SecureRandom,
       --initialize-at-run-time=org.bouncycastle.jce.provider.BouncyCastleProvider,
       --initialize-at-run-time=io.github.hectorvent.floci.services.acm.AcmService,
-      --initialize-at-run-time=io.github.hectorvent.floci.services.acm.CertificateGenerator
+      --initialize-at-run-time=io.github.hectorvent.floci.services.acm.CertificateGenerator,
+      --initialize-at-run-time=io.github.hectorvent.floci.services.cognito.CognitoSrpHelper
 
 floci:
   max-request-size: 512
