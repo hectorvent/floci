@@ -813,4 +813,70 @@ class DynamoDbServiceTest {
         assertTrue(tagValues.containsAll(Arrays.asList("a", "b")));
     }
 
+
+    /**
+     * Test update with SET and REMOVE in the same expression.
+     * This mimics how the DynamoDB Enhanced Client generates expressions
+     * when ignoreNulls is false - it sets non-null fields and removes null fields.
+     *
+     * Using Spring Boot 4.0.5, AWS SDK v2 2.42.24, setting a boolean field to true after it was not created at row-creation time, would not set the value to true.
+     */
+    @Test
+    void testUpdateWithSetAndRemoveCombined() {
+        createUsersTable();
+
+        // Put initial item WITHOUT the boolean field
+        ObjectNode initialItem = mapper.createObjectNode();
+        initialItem.set("userId", attributeValue("S", "user-123"));
+        initialItem.set("created", attributeValue("N", "1234567890"));
+        initialItem.set("entries", attributeValue("S", "initial"));
+        initialItem.set("tempField", attributeValue("S", "to be removed"));
+        service.putItem("Users", initialItem);
+
+        // Verify initial state - isActive doesn't exist
+        ObjectNode key = mapper.createObjectNode();
+        key.set("userId", attributeValue("S", "user-123"));
+        JsonNode beforeUpdate = service.getItem("Users", key);
+        assertFalse(beforeUpdate.has("isActive"), "isActive should not exist initially");
+        assertTrue(beforeUpdate.has("tempField"), "tempField should exist initially");
+
+        // Update with SET and REMOVE - like Enhanced Client does
+        ObjectNode exprAttrNames = mapper.createObjectNode();
+        exprAttrNames.put("#entries", "entries");
+        exprAttrNames.put("#isActive", "isActive");
+        exprAttrNames.put("#tempField", "tempField");
+        exprAttrNames.put("#created", "created");
+
+        ObjectNode exprAttrValues = mapper.createObjectNode();
+        exprAttrValues.set(":entries", attributeValue("S", "updated entries"));
+        exprAttrValues.set(":isActive", boolAttributeValue(true));
+
+        // This is the key expression: SET multiple fields, then REMOVE multiple fields
+        String updateExpr = "SET #entries = :entries, #isActive = :isActive REMOVE #tempField, #created";
+
+        DynamoDbService.UpdateResult result = service.updateItem("Users", key, null,
+                updateExpr, exprAttrNames, exprAttrValues, "ALL_NEW");
+
+        // Verify the result
+        JsonNode newItem = result.newItem();
+        assertNotNull(newItem, "result should have newItem");
+
+        // Boolean should be set to true
+        assertTrue(newItem.has("isActive"), "isActive should exist");
+        assertTrue(newItem.get("isActive").has("BOOL"), "isActive should be BOOL type");
+        assertTrue(newItem.get("isActive").get("BOOL").asBoolean(), "isActive should be true");
+
+        // entries should be updated
+        assertEquals("updated entries", newItem.get("entries").get("S").asText());
+
+        // tempField and created should be removed
+        assertFalse(newItem.has("tempField"), "tempField should be removed");
+        assertFalse(newItem.has("created"), "created should be removed");
+
+        // Get item to double-check persistence
+        JsonNode stored = service.getItem("Users", key);
+        assertTrue(stored.get("isActive").get("BOOL").asBoolean(),
+                "isActive should still be true after get");
+    }
+
 }
