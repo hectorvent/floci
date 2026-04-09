@@ -63,6 +63,29 @@ public class KinesisJsonHandler {
         };
     }
 
+    private String resolveStreamName(JsonNode request) {
+        String streamName = request.path("StreamName").asText(null);
+        if (streamName != null && !streamName.isBlank()) {
+            return streamName;
+        }
+
+        String streamArn = request.path("StreamARN").asText(null);
+        if (streamArn != null) {
+            int streamIdx = streamArn.indexOf(":stream/");
+            if (streamIdx >= 0) {
+                String after = streamArn.substring(streamIdx + 8);
+                int slash = after.indexOf('/');
+                String name = slash >= 0 ? after.substring(0, slash) : after;
+                if (!name.isBlank()) {
+                    return name;
+                }
+            }
+        }
+
+        throw new AwsException("InvalidArgumentException",
+                "StreamName or valid StreamARN must be provided", 400);
+    }
+
     private Response handleCreateStream(JsonNode request, String region) {
         String streamName = request.path("StreamName").asText();
         int shardCount = request.path("ShardCount").asInt(1);
@@ -71,7 +94,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleDeleteStream(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         service.deleteStream(streamName, region);
         return Response.ok(objectMapper.createObjectNode()).build();
     }
@@ -86,7 +109,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleDescribeStream(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         KinesisStream stream = service.describeStream(streamName, region);
 
         ObjectNode response = objectMapper.createObjectNode();
@@ -125,7 +148,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleDescribeStreamSummary(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         KinesisStream stream = service.describeStream(streamName, region);
 
         ObjectNode response = objectMapper.createObjectNode();
@@ -197,7 +220,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleAddTagsToStream(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         Map<String, String> tags = new HashMap<>();
         request.path("Tags").fields().forEachRemaining(entry -> tags.put(entry.getKey(), entry.getValue().asText()));
         service.addTagsToStream(streamName, tags, region);
@@ -205,7 +228,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleRemoveTagsFromStream(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         java.util.List<String> tagKeys = new java.util.ArrayList<>();
         request.path("TagKeys").forEach(node -> tagKeys.add(node.asText()));
         service.removeTagsFromStream(streamName, tagKeys, region);
@@ -213,7 +236,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleListTagsForStream(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         Map<String, String> tags = service.listTagsForStream(streamName, region);
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode tagsArray = response.putArray("Tags");
@@ -227,7 +250,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleStartStreamEncryption(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         String type = request.path("EncryptionType").asText();
         String keyId = request.path("KeyId").asText();
         service.startStreamEncryption(streamName, type, keyId, region);
@@ -235,13 +258,13 @@ public class KinesisJsonHandler {
     }
 
     private Response handleStopStreamEncryption(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         service.stopStreamEncryption(streamName, region);
         return Response.ok(objectMapper.createObjectNode()).build();
     }
 
     private Response handleSplitShard(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         String shardId = request.path("ShardToSplit").asText();
         String newStart = request.path("NewStartingHashKey").asText();
         service.splitShard(streamName, shardId, newStart, region);
@@ -249,7 +272,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleMergeShards(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         String shard1 = request.path("ShardToMerge").asText();
         String shard2 = request.path("AdjacentShardToMerge").asText();
         service.mergeShards(streamName, shard1, shard2, region);
@@ -257,7 +280,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handlePutRecord(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         byte[] data = Base64.getDecoder().decode(request.path("Data").asText());
         String partitionKey = request.path("PartitionKey").asText();
 
@@ -270,7 +293,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handlePutRecords(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         JsonNode recordsNode = request.path("Records");
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode results = response.putArray("Records");
@@ -296,7 +319,7 @@ public class KinesisJsonHandler {
     }
 
     private Response handleGetShardIterator(JsonNode request, String region) {
-        String streamName = request.path("StreamName").asText();
+        String streamName = resolveStreamName(request);
         String shardId = request.path("ShardId").asText();
         String type = request.path("ShardIteratorType").asText();
         String seq = request.has("StartingSequenceNumber") ? request.path("StartingSequenceNumber").asText() : null;
@@ -344,25 +367,8 @@ public class KinesisJsonHandler {
         return Response.ok(objectMapper.createObjectNode()).build();
     }
 
-    private String resolveStreamName(JsonNode request) {
-        String streamName = request.has("StreamName") ? request.path("StreamName").asText(null) : null;
-        String streamArn = request.has("StreamARN") ? request.path("StreamARN").asText(null) : null;
-        if (streamName == null && streamArn != null) {
-            int idx = streamArn.lastIndexOf("/");
-            if (idx >= 0) {
-                streamName = streamArn.substring(idx + 1);
-            }
-        }
-        if (streamName == null) {
-            throw new AwsException("InvalidArgumentException",
-                    "StreamName or StreamARN must be provided", 400);
-        }
-        return streamName;
-    }
-
     private Response handleListShards(JsonNode request, String region) {
         String resolvedStreamName = resolveStreamName(request);
-
         KinesisStream stream = service.describeStream(resolvedStreamName, region);
 
         List<KinesisShard> shards = stream.getShards();

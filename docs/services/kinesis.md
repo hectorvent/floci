@@ -31,6 +31,18 @@
 | `StartStreamEncryption` | Enable KMS encryption |
 | `StopStreamEncryption` | Disable encryption |
 
+## Stream Addressing
+
+Most actions accept either `StreamName` or `StreamARN` to identify a stream. When both are provided, `StreamName` takes precedence. `CreateStream` only accepts `StreamName`.
+
+```bash
+# By name
+aws kinesis describe-stream --stream-name events --endpoint-url $AWS_ENDPOINT
+
+# By ARN
+aws kinesis describe-stream --stream-arn arn:aws:kinesis:us-east-1:000000000000:stream/events --endpoint-url $AWS_ENDPOINT
+```
+
 ## Examples
 
 ```bash
