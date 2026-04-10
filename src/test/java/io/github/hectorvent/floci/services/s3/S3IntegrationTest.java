@@ -1272,4 +1272,54 @@ class S3IntegrationTest {
         given().when().delete("/pag-test-bucket/c.txt");
         given().when().delete("/pag-test-bucket");
     }
+
+    @Test
+    @Order(120)
+    void getBucketLocation_usEast1ReturnsEmptyLocationConstraint() {
+        String bucket = "location-us-east-1-bucket";
+
+        given()
+        .when()
+            .put("/" + bucket)
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/" + bucket + "?location")
+        .then()
+            .statusCode(200)
+            .body(containsString("<LocationConstraint"))
+            .body(not(containsString("us-east-1")));
+
+        given().when().delete("/" + bucket);
+    }
+
+    @Test
+    @Order(121)
+    void getBucketLocation_nonUsEast1ReturnsRegionInBody() {
+        String bucket = "location-eu-central-bucket";
+        String createBucketConfiguration = """
+                <CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                    <LocationConstraint>eu-central-1</LocationConstraint>
+                </CreateBucketConfiguration>
+                """;
+
+        given()
+            .contentType("application/xml")
+            .body(createBucketConfiguration)
+        .when()
+            .put("/" + bucket)
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/" + bucket + "?location")
+        .then()
+            .statusCode(200)
+            .body(containsString("eu-central-1"));
+
+        given().when().delete("/" + bucket);
+    }
 }

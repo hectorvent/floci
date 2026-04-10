@@ -1147,16 +1147,17 @@ public class S3Controller {
 
     private Response handleGetBucketLocation(String bucket) {
         String region = s3Service.getBucketRegion(bucket);
-        if (region == null) {
-            region = regionResolver.getDefaultRegion();
+        XmlBuilder xml = new XmlBuilder()
+                .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+        if (region == null || "us-east-1".equals(region)) {
+            xml.start("LocationConstraint", AwsNamespaces.S3)
+                    .end("LocationConstraint");
+        } else {
+            xml.start("LocationConstraint", AwsNamespaces.S3)
+                    .raw(XmlBuilder.escape(region))
+                    .end("LocationConstraint");
         }
-        String xml = new XmlBuilder()
-                .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-                .start("LocationConstraint", AwsNamespaces.S3)
-                .raw(XmlBuilder.escape(region))
-                .end("LocationConstraint")
-                .build();
-        return Response.ok(xml).type(MediaType.APPLICATION_XML).build();
+        return Response.ok(xml.build()).type(MediaType.APPLICATION_XML).build();
     }
 
     // --- Bucket Tagging ---
