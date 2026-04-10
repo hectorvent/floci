@@ -217,6 +217,11 @@ public class ApiGatewayV2Service {
         return integrationStore.scan(k -> k.startsWith(prefix));
     }
 
+    public void deleteIntegration(String region, String apiId, String integrationId) {
+        getIntegration(region, apiId, integrationId);
+        integrationStore.delete(integrationKey(region, apiId, integrationId));
+    }
+
     // ──────────────────────────── Stage CRUD ────────────────────────────
 
     public Stage createStage(String region, String apiId, Map<String, Object> request) {
@@ -261,9 +266,19 @@ public class ApiGatewayV2Service {
         return deployment;
     }
 
+    public Deployment getDeployment(String region, String apiId, String deploymentId) {
+        return deploymentStore.get(deploymentKey(region, apiId, deploymentId))
+                .orElseThrow(() -> new AwsException("NotFoundException", "Deployment not found", 404));
+    }
+
     public List<Deployment> getDeployments(String region, String apiId) {
         String prefix = region + "::" + apiId + "::";
         return deploymentStore.scan(k -> k.startsWith(prefix));
+    }
+
+    public void deleteDeployment(String region, String apiId, String deploymentId) {
+        getDeployment(region, apiId, deploymentId);
+        deploymentStore.delete(deploymentKey(region, apiId, deploymentId));
     }
 
     // ──────────────────────────── Key helpers ────────────────────────────

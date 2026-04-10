@@ -17,6 +17,9 @@ import io.github.hectorvent.floci.services.secretsmanager.SecretsManagerService;
 import io.github.hectorvent.floci.services.sns.SnsService;
 import io.github.hectorvent.floci.services.sqs.SqsService;
 import io.github.hectorvent.floci.services.ssm.SsmService;
+import io.github.hectorvent.floci.services.apigateway.ApiGatewayService;
+import io.github.hectorvent.floci.services.apigatewayv2.ApiGatewayV2Service;
+import io.github.hectorvent.floci.services.apigatewayv2.model.*;
 import io.github.hectorvent.floci.core.common.AwsException;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -49,6 +52,8 @@ public class CloudFormationResourceProvisioner {
     private final KmsService kmsService;
     private final SecretsManagerService secretsManagerService;
     private final EventBridgeService eventBridgeService;
+    private final ApiGatewayService apiGatewayService;
+    private final ApiGatewayV2Service apiGatewayV2Service;
 
     @Inject
     public CloudFormationResourceProvisioner(S3Service s3Service, SqsService sqsService,
@@ -56,7 +61,9 @@ public class CloudFormationResourceProvisioner {
                                              LambdaService lambdaService, IamService iamService,
                                              SsmService ssmService, KmsService kmsService,
                                              SecretsManagerService secretsManagerService,
-                                             EventBridgeService eventBridgeService) {
+                                             EventBridgeService eventBridgeService,
+                                             ApiGatewayService apiGatewayService,
+                                             ApiGatewayV2Service apiGatewayV2Service) {
         this.s3Service = s3Service;
         this.sqsService = sqsService;
         this.snsService = snsService;
@@ -67,6 +74,8 @@ public class CloudFormationResourceProvisioner {
         this.kmsService = kmsService;
         this.secretsManagerService = secretsManagerService;
         this.eventBridgeService = eventBridgeService;
+        this.apiGatewayService = apiGatewayService;
+        this.apiGatewayV2Service = apiGatewayV2Service;
     }
 
     /**
@@ -106,6 +115,16 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::Route53::HostedZone" -> provisionRoute53HostedZone(resource, properties, engine);
                 case "AWS::Route53::RecordSet" -> provisionRoute53RecordSet(resource, properties, engine);
                 case "AWS::Events::Rule" -> provisionEventBridgeRule(resource, properties, engine, region, stackName);
+                case "AWS::ApiGateway::RestApi" -> provisionApiGatewayRestApi(resource, properties, engine, region, accountId, stackName);
+                case "AWS::ApiGateway::Resource" -> provisionApiGatewayResource(resource, properties, engine, region);
+                case "AWS::ApiGateway::Method" -> provisionApiGatewayMethod(resource, properties, engine, region);
+                case "AWS::ApiGateway::Deployment" -> provisionApiGatewayDeployment(resource, properties, engine, region);
+                case "AWS::ApiGateway::Stage" -> provisionApiGatewayStage(resource, properties, engine, region);
+                case "AWS::ApiGatewayV2::Api" -> provisionApiGatewayV2Api(resource, properties, engine, region, accountId, stackName);
+                case "AWS::ApiGatewayV2::Route" -> provisionApiGatewayV2Route(resource, properties, engine, region);
+                case "AWS::ApiGatewayV2::Integration" -> provisionApiGatewayV2Integration(resource, properties, engine, region);
+                case "AWS::ApiGatewayV2::Stage" -> provisionApiGatewayV2Stage(resource, properties, engine, region);
+                case "AWS::ApiGatewayV2::Deployment" -> provisionApiGatewayV2Deployment(resource, properties, engine, region);
                 default -> {
                     LOG.debugv("Stubbing unsupported resource type: {0} ({1})", resourceType, logicalId);
                     resource.setPhysicalId(logicalId + "-" + UUID.randomUUID().toString().substring(0, 8));
@@ -139,6 +158,8 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::SecretsManager::Secret" ->
                         secretsManagerService.deleteSecret(physicalId, null, true, region);
                 case "AWS::Events::Rule" -> deleteEventBridgeRuleSafe(physicalId, region);
+                case "AWS::ApiGateway::RestApi" -> apiGatewayService.deleteRestApi(region, physicalId);
+                case "AWS::ApiGatewayV2::Api" -> apiGatewayV2Service.deleteApi(region, physicalId);
                 default -> LOG.debugv("Skipping delete of unsupported resource type: {0}", resourceType);
             }
         } catch (Exception e) {
@@ -686,6 +707,149 @@ public class CloudFormationResourceProvisioner {
     private void provisionRoute53RecordSet(StackResource r, JsonNode props, CloudFormationTemplateEngine engine) {
         String name = resolveOptional(props, "Name", engine);
         r.setPhysicalId(name != null ? name : "record-" + UUID.randomUUID().toString().substring(0, 8));
+    }
+
+    // ── ApiGateway (V1) ──────────────────────────────────────────────────────
+
+    private void provisionApiGatewayRestApi(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                            String region, String accountId, String stackName) {
+        String name = resolveOptional(props, "Name", engine);
+        if (name == null || name.isBlank()) {
+            name = generatePhysicalName(stackName, r.getLogicalId(), 255, false);
+        }
+        Map<String, Object> req = new HashMap<>();
+        req.put("name", name);
+        req.put("description", resolveOptional(props, "Description", engine));
+
+        var api = apiGatewayService.createRestApi(region, req);
+        r.setPhysicalId(api.getId());
+        r.getAttributes().put("RootResourceId", apiGatewayService.getResources(region, api.getId()).get(0).getId());
+    }
+
+    private void provisionApiGatewayResource(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                             String region) {
+        String apiId = resolveOptional(props, "RestApiId", engine);
+        String parentId = resolveOptional(props, "ParentId", engine);
+        String pathPart = resolveOptional(props, "PathPart", engine);
+
+        Map<String, Object> req = new HashMap<>();
+        req.put("pathPart", pathPart);
+
+        var res = apiGatewayService.createResource(region, apiId, parentId, req);
+        r.setPhysicalId(res.getId());
+    }
+
+    private void provisionApiGatewayMethod(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                           String region) {
+        String apiId = resolveOptional(props, "RestApiId", engine);
+        String resourceId = resolveOptional(props, "ResourceId", engine);
+        String httpMethod = resolveOptional(props, "HttpMethod", engine);
+
+        Map<String, Object> req = new HashMap<>();
+        req.put("authorizationType", resolveOrDefault(props, "AuthorizationType", engine, "NONE"));
+
+        apiGatewayService.putMethod(region, apiId, resourceId, httpMethod, req);
+        r.setPhysicalId(apiId + "-" + resourceId + "-" + httpMethod);
+
+        // Provision integration if present
+        if (props != null && props.has("Integration")) {
+            JsonNode integNode = engine.resolveNode(props.get("Integration"));
+            Map<String, Object> integReq = new HashMap<>();
+            integReq.put("type", resolveOptional(integNode, "Type", engine));
+            integReq.put("httpMethod", resolveOptional(integNode, "IntegrationHttpMethod", engine));
+            integReq.put("uri", resolveOptional(integNode, "Uri", engine));
+
+            apiGatewayService.putIntegration(region, apiId, resourceId, httpMethod, integReq);
+        }
+    }
+
+    private void provisionApiGatewayDeployment(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                               String region) {
+        String apiId = resolveOptional(props, "RestApiId", engine);
+        Map<String, Object> req = new HashMap<>();
+        req.put("description", resolveOptional(props, "Description", engine));
+
+        var deployment = apiGatewayService.createDeployment(region, apiId, req);
+        r.setPhysicalId(deployment.id());
+    }
+
+    private void provisionApiGatewayStage(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                          String region) {
+        String apiId = resolveOptional(props, "RestApiId", engine);
+        String stageName = resolveOptional(props, "StageName", engine);
+        String deploymentId = resolveOptional(props, "DeploymentId", engine);
+
+        Map<String, Object> req = new HashMap<>();
+        req.put("stageName", stageName);
+        req.put("deploymentId", deploymentId);
+        req.put("description", resolveOptional(props, "Description", engine));
+
+        var stage = apiGatewayService.createStage(region, apiId, req);
+        r.setPhysicalId(stageName);
+    }
+
+    // ── ApiGatewayV2 (HTTP/WebSocket) ────────────────────────────────────────
+
+    private void provisionApiGatewayV2Api(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                          String region, String accountId, String stackName) {
+        String name = resolveOptional(props, "Name", engine);
+        if (name == null || name.isBlank()) {
+            name = generatePhysicalName(stackName, r.getLogicalId(), 255, false);
+        }
+        Map<String, Object> req = new HashMap<>();
+        req.put("name", name);
+        req.put("protocolType", resolveOrDefault(props, "ProtocolType", engine, "HTTP"));
+
+        Api api = apiGatewayV2Service.createApi(region, req);
+        r.setPhysicalId(api.getApiId());
+        r.getAttributes().put("ApiEndpoint", api.getApiEndpoint());
+    }
+
+    private void provisionApiGatewayV2Route(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                            String region) {
+        String apiId = resolveOptional(props, "ApiId", engine);
+        Map<String, Object> req = new HashMap<>();
+        req.put("routeKey", resolveOptional(props, "RouteKey", engine));
+        req.put("authorizationType", resolveOrDefault(props, "AuthorizationType", engine, "NONE"));
+        req.put("target", resolveOptional(props, "Target", engine));
+
+        Route route = apiGatewayV2Service.createRoute(region, apiId, req);
+        r.setPhysicalId(route.getRouteId());
+    }
+
+    private void provisionApiGatewayV2Integration(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                                  String region) {
+        String apiId = resolveOptional(props, "ApiId", engine);
+        Map<String, Object> req = new HashMap<>();
+        req.put("integrationType", resolveOptional(props, "IntegrationType", engine));
+        req.put("integrationUri", resolveOptional(props, "IntegrationUri", engine));
+        req.put("payloadFormatVersion", resolveOrDefault(props, "PayloadFormatVersion", engine, "2.0"));
+
+        Integration integration = apiGatewayV2Service.createIntegration(region, apiId, req);
+        r.setPhysicalId(integration.getIntegrationId());
+    }
+
+    private void provisionApiGatewayV2Stage(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                            String region) {
+        String apiId = resolveOptional(props, "ApiId", engine);
+        String stageName = resolveOptional(props, "StageName", engine);
+
+        Map<String, Object> req = new HashMap<>();
+        req.put("stageName", stageName);
+        req.put("autoDeploy", resolveOrDefault(props, "AutoDeploy", engine, "false"));
+
+        Stage stage = apiGatewayV2Service.createStage(region, apiId, req);
+        r.setPhysicalId(stageName);
+    }
+
+    private void provisionApiGatewayV2Deployment(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                                                 String region) {
+        String apiId = resolveOptional(props, "ApiId", engine);
+        Map<String, Object> req = new HashMap<>();
+        req.put("description", resolveOptional(props, "Description", engine));
+
+        Deployment deployment = apiGatewayV2Service.createDeployment(region, apiId, req);
+        r.setPhysicalId(deployment.getDeploymentId());
     }
 
     private String resolveOptional(JsonNode props, String name, CloudFormationTemplateEngine engine) {
