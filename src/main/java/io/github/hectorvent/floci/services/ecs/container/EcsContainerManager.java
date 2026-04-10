@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.ecs.container;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
 import io.github.hectorvent.floci.services.cloudwatch.logs.CloudWatchLogsService;
 import io.github.hectorvent.floci.services.ecs.model.Container;
 import io.github.hectorvent.floci.services.ecs.model.ContainerDefinition;
@@ -10,7 +11,6 @@ import io.github.hectorvent.floci.services.ecs.model.EcsTask;
 import io.github.hectorvent.floci.services.ecs.model.NetworkBinding;
 import io.github.hectorvent.floci.services.ecs.model.PortMapping;
 import io.github.hectorvent.floci.services.ecs.model.TaskDefinition;
-import io.github.hectorvent.floci.services.lambda.launcher.DockerHostResolver;
 import io.github.hectorvent.floci.services.lambda.launcher.ImageCacheService;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
@@ -42,26 +42,25 @@ import java.util.Map;
 public class EcsContainerManager {
 
     private static final Logger LOG = Logger.getLogger(EcsContainerManager.class);
-    private static final String HOST_DOCKER_INTERNAL = "host.docker.internal";
     private static final DateTimeFormatter LOG_STREAM_DATE_FMT = DateTimeFormatter.ofPattern("yyyy/MM/dd");
 
     private final DockerClient dockerClient;
     private final ImageCacheService imageCacheService;
-    private final DockerHostResolver dockerHostResolver;
+    private final ContainerDetector containerDetector;
     private final EmulatorConfig config;
     private final CloudWatchLogsService cloudWatchLogsService;
     private final RegionResolver regionResolver;
 
     @Inject
     public EcsContainerManager(DockerClient dockerClient,
-                                ImageCacheService imageCacheService,
-                                DockerHostResolver dockerHostResolver,
-                                EmulatorConfig config,
-                                CloudWatchLogsService cloudWatchLogsService,
-                                RegionResolver regionResolver) {
+                               ImageCacheService imageCacheService,
+                               ContainerDetector containerDetector,
+                               EmulatorConfig config,
+                               CloudWatchLogsService cloudWatchLogsService,
+                               RegionResolver regionResolver) {
         this.dockerClient = dockerClient;
         this.imageCacheService = imageCacheService;
-        this.dockerHostResolver = dockerHostResolver;
+        this.containerDetector = containerDetector;
         this.config = config;
         this.cloudWatchLogsService = cloudWatchLogsService;
         this.regionResolver = regionResolver;
@@ -73,7 +72,6 @@ public class EcsContainerManager {
      */
     public EcsTaskHandle startTask(EcsTask task, TaskDefinition taskDef, String region) {
         String taskId = extractTaskId(task.getTaskArn());
-        boolean nativeMode = HOST_DOCKER_INTERNAL.equals(dockerHostResolver.resolve());
 
         Map<String, String> containerIds = new LinkedHashMap<>();
         List<Closeable> logStreams = new ArrayList<>();
@@ -83,7 +81,7 @@ public class EcsContainerManager {
             imageCacheService.ensureImageExists(def.getImage());
 
             List<ExposedPort> exposedPorts = buildExposedPorts(def);
-            HostConfig hostConfig = buildHostConfig(nativeMode, def, exposedPorts);
+            HostConfig hostConfig = buildHostConfig(def, exposedPorts);
 
             applyDockerNetwork(hostConfig);
 
@@ -112,7 +110,7 @@ public class EcsContainerManager {
             dockerClient.startContainerCmd(dockerId).exec();
             LOG.infov("Started ECS container {0}", dockerId);
 
-            List<NetworkBinding> networkBindings = resolveNetworkBindings(dockerId, def, nativeMode);
+            List<NetworkBinding> networkBindings = resolveNetworkBindings(dockerId, def);
 
             Container container = buildContainer(task.getTaskArn(), def, dockerId, networkBindings, region);
             runtimeContainers.add(container);
@@ -169,14 +167,14 @@ public class EcsContainerManager {
         return exposed;
     }
 
-    private HostConfig buildHostConfig(boolean nativeMode, ContainerDefinition def, List<ExposedPort> exposedPorts) {
+    private HostConfig buildHostConfig(ContainerDefinition def, List<ExposedPort> exposedPorts) {
         HostConfig hostConfig = HostConfig.newHostConfig();
 
         if (def.getMemory() != null) {
             hostConfig.withMemory((long) def.getMemory() * 1024 * 1024);
         }
 
-        if (nativeMode && !exposedPorts.isEmpty()) {
+        if (!containerDetector.isRunningInContainer() && !exposedPorts.isEmpty()) {
             Ports portBindings = new Ports();
             for (ExposedPort ep : exposedPorts) {
                 portBindings.bind(ep, Ports.Binding.bindPort(0)); // 0 = dynamic host port
@@ -207,7 +205,7 @@ public class EcsContainerManager {
         return envVars;
     }
 
-    private List<NetworkBinding> resolveNetworkBindings(String dockerId, ContainerDefinition def, boolean nativeMode) {
+    private List<NetworkBinding> resolveNetworkBindings(String dockerId, ContainerDefinition def) {
         List<NetworkBinding> bindings = new ArrayList<>();
         if (def.getPortMappings() == null || def.getPortMappings().isEmpty()) {
             return bindings;
@@ -222,7 +220,7 @@ public class EcsContainerManager {
             int hostPort = pm.containerPort();
             String bindIp = "0.0.0.0";
 
-            if (nativeMode && binding != null && binding.length > 0) {
+            if (!containerDetector.isRunningInContainer() && binding != null && binding.length > 0) {
                 hostPort = Integer.parseInt(binding[0].getHostPortSpec());
                 if (binding[0].getHostIp() != null && !binding[0].getHostIp().isBlank()) {
                     bindIp = binding[0].getHostIp();
@@ -255,7 +253,7 @@ public class EcsContainerManager {
         ensureLogGroupAndStream(logGroup, logStream, region);
 
         try {
-            ResultCallback.Adapter<Frame> callback = dockerClient.logContainerCmd(dockerId)
+            return dockerClient.logContainerCmd(dockerId)
                     .withStdOut(true)
                     .withStdErr(true)
                     .withFollowStream(true)
@@ -270,7 +268,6 @@ public class EcsContainerManager {
                             }
                         }
                     });
-            return callback;
         } catch (Exception e) {
             LOG.warnv("Could not attach log stream for ECS container {0}: {1}", dockerId, e.getMessage());
             return null;

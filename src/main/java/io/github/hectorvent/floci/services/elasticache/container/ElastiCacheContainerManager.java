@@ -3,8 +3,8 @@ package io.github.hectorvent.floci.services.elasticache.container;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
 import io.github.hectorvent.floci.services.cloudwatch.logs.CloudWatchLogsService;
-import io.github.hectorvent.floci.services.lambda.launcher.DockerHostResolver;
 import io.github.hectorvent.floci.services.lambda.launcher.ImageCacheService;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
@@ -36,12 +36,11 @@ public class ElastiCacheContainerManager {
 
     private static final Logger LOG = Logger.getLogger(ElastiCacheContainerManager.class);
     private static final int BACKEND_PORT = 6379;
-    private static final String HOST_DOCKER_INTERNAL = "host.docker.internal";
     private static final DateTimeFormatter LOG_STREAM_DATE_FMT = DateTimeFormatter.ofPattern("yyyy/MM/dd");
 
     private final DockerClient dockerClient;
     private final ImageCacheService imageCacheService;
-    private final DockerHostResolver dockerHostResolver;
+    private final ContainerDetector containerDetector;
     private final EmulatorConfig config;
     private final CloudWatchLogsService cloudWatchLogsService;
     private final RegionResolver regionResolver;
@@ -49,13 +48,13 @@ public class ElastiCacheContainerManager {
     @Inject
     public ElastiCacheContainerManager(DockerClient dockerClient,
                                        ImageCacheService imageCacheService,
-                                       DockerHostResolver dockerHostResolver,
+                                       ContainerDetector containerDetector,
                                        EmulatorConfig config,
                                        CloudWatchLogsService cloudWatchLogsService,
                                        RegionResolver regionResolver) {
         this.dockerClient = dockerClient;
         this.imageCacheService = imageCacheService;
-        this.dockerHostResolver = dockerHostResolver;
+        this.containerDetector = containerDetector;
         this.config = config;
         this.cloudWatchLogsService = cloudWatchLogsService;
         this.regionResolver = regionResolver;
@@ -65,9 +64,7 @@ public class ElastiCacheContainerManager {
         LOG.infov("Starting ElastiCache backend container for group: {0}", groupId);
         imageCacheService.ensureImageExists(image);
 
-        boolean nativeMode = HOST_DOCKER_INTERNAL.equals(dockerHostResolver.resolve());
-
-        HostConfig hostConfig = buildHostConfig(nativeMode);
+        HostConfig hostConfig = buildHostConfig();
         String containerName = "floci-valkey-" + groupId;
 
         config.services().elasticache().dockerNetwork()
@@ -95,7 +92,7 @@ public class ElastiCacheContainerManager {
         String backendHost;
         int backendPort;
 
-        if (nativeMode) {
+        if (!containerDetector.isRunningInContainer()) {
             // Retrieve the actual allocated host port from the container inspect
             var inspect = dockerClient.inspectContainerCmd(containerId).exec();
             var bindings = inspect.getNetworkSettings().getPorts().getBindings();
@@ -163,9 +160,9 @@ public class ElastiCacheContainerManager {
         }
     }
 
-    private HostConfig buildHostConfig(boolean nativeMode) {
+    private HostConfig buildHostConfig() {
         HostConfig hostConfig = HostConfig.newHostConfig();
-        if (nativeMode) {
+        if (!containerDetector.isRunningInContainer()) {
             // Bind BACKEND_PORT → random host port so the JVM can reach the container
             int freePort = findFreePort();
             Ports portBindings = new Ports();

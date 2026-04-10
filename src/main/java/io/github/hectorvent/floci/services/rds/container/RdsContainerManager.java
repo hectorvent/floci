@@ -3,8 +3,8 @@ package io.github.hectorvent.floci.services.rds.container;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
 import io.github.hectorvent.floci.services.cloudwatch.logs.CloudWatchLogsService;
-import io.github.hectorvent.floci.services.lambda.launcher.DockerHostResolver;
 import io.github.hectorvent.floci.services.lambda.launcher.ImageCacheService;
 import io.github.hectorvent.floci.services.rds.model.DatabaseEngine;
 import com.github.dockerjava.api.DockerClient;
@@ -35,12 +35,11 @@ import java.util.Map;
 public class RdsContainerManager {
 
     private static final Logger LOG = Logger.getLogger(RdsContainerManager.class);
-    private static final String HOST_DOCKER_INTERNAL = "host.docker.internal";
     private static final DateTimeFormatter LOG_STREAM_DATE_FMT = DateTimeFormatter.ofPattern("yyyy/MM/dd");
 
     private final DockerClient dockerClient;
     private final ImageCacheService imageCacheService;
-    private final DockerHostResolver dockerHostResolver;
+    private final ContainerDetector containerDetector;
     private final EmulatorConfig config;
     private final CloudWatchLogsService cloudWatchLogsService;
     private final RegionResolver regionResolver;
@@ -48,13 +47,13 @@ public class RdsContainerManager {
     @Inject
     public RdsContainerManager(DockerClient dockerClient,
                                ImageCacheService imageCacheService,
-                               DockerHostResolver dockerHostResolver,
+                               ContainerDetector containerDetector,
                                EmulatorConfig config,
                                CloudWatchLogsService cloudWatchLogsService,
                                RegionResolver regionResolver) {
         this.dockerClient = dockerClient;
         this.imageCacheService = imageCacheService;
-        this.dockerHostResolver = dockerHostResolver;
+        this.containerDetector = containerDetector;
         this.config = config;
         this.cloudWatchLogsService = cloudWatchLogsService;
         this.regionResolver = regionResolver;
@@ -66,10 +65,9 @@ public class RdsContainerManager {
         LOG.infov("Starting RDS backend container for instance: {0} engine={1}", instanceId, engine);
         imageCacheService.ensureImageExists(image);
 
-        boolean nativeMode = HOST_DOCKER_INTERNAL.equals(dockerHostResolver.resolve());
         int enginePort = engine.defaultPort();
 
-        HostConfig hostConfig = buildHostConfig(nativeMode, enginePort);
+        HostConfig hostConfig = buildHostConfig(enginePort);
         String containerName = "floci-rds-" + instanceId;
 
         config.services().rds().dockerNetwork()
@@ -104,7 +102,7 @@ public class RdsContainerManager {
         String backendHost;
         int backendPort;
 
-        if (nativeMode) {
+        if (!containerDetector.isRunningInContainer()) {
             var inspect = dockerClient.inspectContainerCmd(containerId).exec();
             var bindings = inspect.getNetworkSettings().getPorts().getBindings();
             var binding = bindings.get(ExposedPort.tcp(enginePort));
@@ -165,9 +163,9 @@ public class RdsContainerManager {
         }
     }
 
-    private HostConfig buildHostConfig(boolean nativeMode, int enginePort) {
+    private HostConfig buildHostConfig(int enginePort) {
         HostConfig hostConfig = HostConfig.newHostConfig();
-        if (nativeMode) {
+        if (!containerDetector.isRunningInContainer()) {
             int freePort = findFreePort();
             Ports portBindings = new Ports();
             portBindings.bind(ExposedPort.tcp(enginePort), Ports.Binding.bindPort(freePort));
