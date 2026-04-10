@@ -22,11 +22,39 @@ Lambda runs your function code inside real Docker containers — the same way re
 | `UpdateEventSourceMapping` | Update a mapping |
 | `DeleteEventSourceMapping` | Remove a mapping |
 | `PublishVersion` | Publish an immutable version |
+| `ListVersionsByFunction` | List all published versions of a function |
 | `CreateAlias` | Create a named alias pointing to a version |
 | `GetAlias` | Get alias details |
 | `ListAliases` | List all aliases for a function |
 | `UpdateAlias` | Update an alias |
 | `DeleteAlias` | Delete an alias |
+| `AddPermission` | Add a resource-policy statement |
+| `GetPolicy` | Get the function resource policy |
+| `RemovePermission` | Remove a resource-policy statement |
+| `GetFunctionCodeSigningConfig` | Return code-signing config (always empty) |
+| `CreateFunctionUrlConfig` | Provision a function URL |
+| `GetFunctionUrlConfig` | Read function URL config |
+| `UpdateFunctionUrlConfig` | Update function URL config |
+| `DeleteFunctionUrlConfig` | Delete function URL config |
+| `ListTags` | List tags on a function |
+| `TagResource` | Tag a function |
+| `UntagResource` | Untag a function |
+
+Function URLs are also reachable directly on `/{proxy:.*}` under the Lambda URL controller, which routes the request into the normal `Invoke` path.
+
+**Stubbed:** `ListLayers` and `ListLayerVersions` return empty arrays. No layer storage exists.
+
+## Not Implemented
+
+These AWS Lambda operations have no handler in Floci. Calls will return `404` or an error:
+
+- Layers (`PublishLayerVersion`, `DeleteLayerVersion`, `GetLayerVersion`, `GetLayerVersionByArn`, `AddLayerVersionPermission`, `RemoveLayerVersionPermission`, `GetLayerVersionPolicy`)
+- Concurrency controls (`PutFunctionConcurrency`, `GetFunctionConcurrency`, `DeleteFunctionConcurrency`, `PutProvisionedConcurrencyConfig`, `GetProvisionedConcurrencyConfig`, `ListProvisionedConcurrencyConfigs`, `DeleteProvisionedConcurrencyConfig`)
+- `UpdateFunctionConfiguration` (use `UpdateFunctionCode` for code-only updates; configuration-only updates are not separately supported)
+- Dead-letter, async invoke config, and event invoke config operations
+- `InvokeWithResponseStream`
+- Code signing management (only `GetFunctionCodeSigningConfig` is wired; there is no `PutFunctionCodeSigningConfig` or `CreateCodeSigningConfig`)
+- Account and regional settings (`GetAccountSettings`)
 
 ## Configuration
 
@@ -60,7 +88,7 @@ services:
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Package a simple Node.js function
 cat > index.mjs << 'EOF'
@@ -78,7 +106,7 @@ aws lambda create-function \
   --role arn:aws:iam::000000000000:role/lambda-role \
   --handler index.handler \
   --zip-file fileb://function.zip \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Invoke synchronously
 aws lambda invoke \
@@ -86,7 +114,7 @@ aws lambda invoke \
   --payload '{"key":"value"}' \
   --cli-binary-format raw-in-base64-out \
   response.json \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 cat response.json
 
@@ -97,14 +125,14 @@ aws lambda invoke \
   --payload '{"key":"value"}' \
   --cli-binary-format raw-in-base64-out \
   /dev/null \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Update code
 zip function.zip index.mjs
 aws lambda update-function-code \
   --function-name my-function \
   --zip-file fileb://function.zip \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ## Event Source Mappings
@@ -114,16 +142,16 @@ Connect Lambda to SQS, Kinesis, or DynamoDB Streams:
 ```bash
 # SQS trigger
 QUEUE_ARN=$(aws sqs get-queue-attributes \
-  --queue-url $AWS_ENDPOINT/000000000000/orders \
+  --queue-url $AWS_ENDPOINT_URL/000000000000/orders \
   --attribute-names QueueArn \
   --query Attributes.QueueArn --output text \
-  --endpoint-url $AWS_ENDPOINT)
+  --endpoint-url $AWS_ENDPOINT_URL)
 
 aws lambda create-event-source-mapping \
   --function-name my-function \
   --event-source-arn $QUEUE_ARN \
   --batch-size 10 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ## Supported Runtimes

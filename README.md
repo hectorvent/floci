@@ -54,7 +54,7 @@
 | EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**31 services. 1,873 automated compatibility tests. Free forever.**
+**Broad AWS coverage. 1,850+ automated compatibility tests. Free forever.**
 
 ## Architecture Overview
 
@@ -90,41 +90,43 @@ flowchart LR
 
 ## Supported Services
 
-| Service | Ops | How it works | Notable features |
-|---|---|---|---|
-| **SSM Parameter Store** | 12 | In-process | Version history, labels, SecureString, tagging |
-| **SQS** | 17 | In-process | Standard & FIFO, DLQ, visibility timeout, batch, tagging |
-| **SNS** | 13 | In-process | Topics, subscriptions, SQS / Lambda / HTTP delivery, tagging |
-| **S3** | 30 | In-process | Versioning, multipart upload, pre-signed URLs, Object Lock, event notifications |
-| **DynamoDB** | 22 | In-process | GSI / LSI, Query, Scan, TTL, transactions, batch operations |
-| **DynamoDB Streams** | 5 | In-process | Shard iterators, records, Lambda ESM trigger |
-| **Lambda** | 25 | **Real Docker containers** | Warm pool, aliases, Function URLs, SQS / Kinesis / DDB Streams ESM |
-| **API Gateway REST** | 24 | In-process | Resources, methods, stages, Lambda proxy, MOCK integrations, AWS integrations |
-| **API Gateway v2 (HTTP)** | 16 | In-process | Routes, integrations, JWT authorizers, stages |
-| **IAM** | 65+ | In-process | Users, roles, groups, policies, instance profiles, access keys |
-| **STS** | 7 | In-process | AssumeRole, WebIdentity, SAML, GetFederationToken, GetSessionToken |
-| **Cognito** | 20 | In-process | User pools, app clients, auth flows, JWKS / OpenID well-known endpoints |
-| **KMS** | 15 | In-process | Encrypt / decrypt, sign / verify, data keys, aliases |
-| **Kinesis** | 15 | In-process | Streams, shards, enhanced fan-out, split / merge |
-| **Secrets Manager** | 10 | In-process | Versioning, resource policies, tagging |
-| **Step Functions** | 11 | In-process | ASL execution, task tokens, execution history |
-| **CloudFormation** | 12 | In-process | Stacks, change sets, resource provisioning |
-| **EventBridge** | 14 | In-process | Custom buses, rules, targets (SQS / SNS / Lambda) |
-| **EventBridge Scheduler** | 9 | In-process | Schedule groups, schedules, flexible time windows, retry policies, dead-letter queues |
-| **CloudWatch Logs** | 14 | In-process | Log groups, streams, ingestion, filtering |
-| **CloudWatch Metrics** | 5 | In-process | Custom metrics, statistics, alarms |
-| **ElastiCache** | 9 | **Real Docker containers** | Redis / Valkey, IAM auth, SigV4 validation |
-| **RDS** | 14 | **Real Docker containers** | PostgreSQL & MySQL, IAM auth, JDBC-compatible |
-| **ECS** | 58 | **Real Docker containers** | Clusters, task definitions, tasks, services, capacity providers, task sets |
-| **EC2** | 61 | In-process | VPCs, subnets, security groups, instances, AMIs, key pairs, internet gateways, route tables, Elastic IPs, tags |
-| **ACM** | 8 | In-process | Certificate issuance, validation lifecycle |
-| **SES** | 14 | In-process | Send email / raw email, identity verification, DKIM attributes |
-| **SES v2 (HTTP)** | 9 | In-process | REST JSON API, identities, DKIM, feedback attributes, account sending |
-| **OpenSearch** | 24 | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
-| **AppConfig** | 16 | In-process | Applications, environments, profiles, hosted configuration versions, deployments |
-| **AppConfigData** | 2 | In-process | Configuration sessions, dynamic configuration retrieval |
+| Service | How it works | Notable features |
+|---|---|---|
+| **SSM Parameter Store** | In-process | Version history, labels, SecureString, tagging |
+| **SQS** | In-process | Standard & FIFO, DLQ, visibility timeout, batch, tagging |
+| **SNS** | In-process | Topics, subscriptions, SQS / Lambda / HTTP delivery, tagging |
+| **S3** | In-process | Versioning, multipart upload, pre-signed URLs, Object Lock, event notifications |
+| **DynamoDB** | In-process | GSI / LSI, Query, Scan, TTL, transactions, batch operations |
+| **DynamoDB Streams** | In-process | Shard iterators, records, Lambda ESM trigger |
+| **Lambda** | **Real Docker containers** | Warm pool, aliases, Function URLs, SQS / Kinesis / DDB Streams ESM |
+| **API Gateway REST** | In-process | Resources, methods, stages, Lambda proxy, MOCK integrations, AWS integrations |
+| **API Gateway v2 (HTTP)** | In-process | Routes, integrations, JWT authorizers, stages |
+| **IAM** | In-process | Users, roles, groups, policies, instance profiles, access keys |
+| **STS** | In-process | AssumeRole, WebIdentity, SAML, GetFederationToken, GetSessionToken |
+| **Cognito** | In-process | User pools, app clients, auth flows, JWKS / OpenID well-known endpoints |
+| **KMS** | In-process | Encrypt / decrypt, sign / verify, data keys, aliases |
+| **Kinesis** | In-process | Streams, shards, enhanced fan-out, split / merge |
+| **Secrets Manager** | In-process | Versioning, resource policies, tagging |
+| **Step Functions** | In-process | ASL execution, task tokens, execution history |
+| **CloudFormation** | In-process | Stacks, change sets, resource provisioning |
+| **EventBridge** | In-process | Custom buses, rules, targets (SQS / SNS / Lambda) |
+| **EventBridge Scheduler** | In-process | Schedule groups, schedules, flexible time windows, retry policies, dead-letter queues |
+| **CloudWatch Logs** | In-process | Log groups, streams, ingestion, filtering |
+| **CloudWatch Metrics** | In-process | Custom metrics, statistics, alarms |
+| **ElastiCache** | **Real Docker containers** | Redis / Valkey, IAM auth, SigV4 validation |
+| **RDS** | **Real Docker containers** | PostgreSQL & MySQL, IAM auth, JDBC-compatible |
+| **ECS** | **Real Docker containers** | Clusters, task definitions, tasks, services, capacity providers, task sets |
+| **EC2** | In-process | VPCs, subnets, security groups, instances, AMIs, key pairs, internet gateways, route tables, Elastic IPs, tags |
+| **ACM** | In-process | Certificate issuance, validation lifecycle |
+| **SES** | In-process | Send email / raw email, identity verification, DKIM attributes |
+| **SES v2 (HTTP)** | In-process | REST JSON API, identities, DKIM, feedback attributes, account sending |
+| **OpenSearch** | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
+| **AppConfig** | In-process | Applications, environments, profiles, hosted configuration versions, deployments |
+| **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
 
-> **Lambda, ElastiCache, RDS, and ECS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS.
+> **Lambda, ElastiCache, RDS, and ECS** spin up real Docker containers and support IAM authentication and SigV4 request signing, the same auth flow as production AWS.
+>
+> For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
 ## Quick Start
 

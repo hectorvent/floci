@@ -38,7 +38,7 @@
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a role
 aws iam create-role \
@@ -51,20 +51,20 @@ aws iam create-role \
       "Action": "sts:AssumeRole"
     }]
   }' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Attach a managed policy
 aws iam attach-role-policy \
   --role-name lambda-execution-role \
   --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a user
-aws iam create-user --user-name alice --endpoint-url $AWS_ENDPOINT
+aws iam create-user --user-name alice --endpoint-url $AWS_ENDPOINT_URL
 
 # Create an access key
-aws iam create-access-key --user-name alice --endpoint-url $AWS_ENDPOINT
+aws iam create-access-key --user-name alice --endpoint-url $AWS_ENDPOINT_URL
 
 # List roles
-aws iam list-roles --endpoint-url $AWS_ENDPOINT
+aws iam list-roles --endpoint-url $AWS_ENDPOINT_URL
 ```

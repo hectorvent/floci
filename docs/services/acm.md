@@ -31,7 +31,7 @@
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Request a certificate
 CERT_ARN=$(aws acm request-certificate \
@@ -39,56 +39,56 @@ CERT_ARN=$(aws acm request-certificate \
   --subject-alternative-names "www.example.com" "*.example.com" \
   --validation-method DNS \
   --query CertificateArn --output text \
-  --endpoint-url $AWS_ENDPOINT)
+  --endpoint-url $AWS_ENDPOINT_URL)
 
 # Describe the certificate
 aws acm describe-certificate \
   --certificate-arn $CERT_ARN \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Get certificate in PEM format
 aws acm get-certificate \
   --certificate-arn $CERT_ARN \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # List all certificates
 aws acm list-certificates \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # List only issued certificates
 aws acm list-certificates \
   --certificate-statuses ISSUED \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Add tags
 aws acm add-tags-to-certificate \
   --certificate-arn $CERT_ARN \
   --tags Key=Environment,Value=Production Key=Project,Value=Demo \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # List tags
 aws acm list-tags-for-certificate \
   --certificate-arn $CERT_ARN \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Request a private certificate (exportable)
 PRIVATE_ARN=$(aws acm request-certificate \
   --domain-name "internal.example.com" \
   --certificate-authority-arn "arn:aws:acm-pca:us-east-1:123456789012:certificate-authority/12345678-1234-1234-1234-123456789012" \
   --query CertificateArn --output text \
-  --endpoint-url $AWS_ENDPOINT)
+  --endpoint-url $AWS_ENDPOINT_URL)
 
 # Export private certificate (passphrase must be base64-encoded, min 4 chars)
 PASSPHRASE=$(echo -n "mypassphrase123" | base64)
 aws acm export-certificate \
   --certificate-arn $PRIVATE_ARN \
   --passphrase $PASSPHRASE \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Delete a certificate
 aws acm delete-certificate \
   --certificate-arn $CERT_ARN \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ## SDK Example (Java)

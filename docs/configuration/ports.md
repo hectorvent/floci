@@ -5,8 +5,10 @@
 | Port / Range | Protocol | Purpose |
 |---|---|---|
 | `4566` | HTTP | All AWS API calls (every service) |
-| `6379–6399` | TCP | ElastiCache Redis proxy — one port per replication group |
-| `7001–7099` | TCP | RDS proxy — one port per DB instance |
+| `6379–6399` | TCP | ElastiCache Redis proxy, one port per replication group |
+| `7001–7099` | TCP | RDS proxy, one port per DB instance |
+| `9200–9299` | HTTP | Lambda Runtime API (internal: consumed by spawned Lambda containers, not host-mapped) |
+| `9400–9499` | HTTP | OpenSearch proxy, reserved for `opensearch.mode: real` (not yet available) |
 
 ## Port 4566 — AWS API
 
@@ -60,6 +62,17 @@ psql -h localhost -p 7001 -U admin
 
 !!! note
     Configure the range with `FLOCI_SERVICES_RDS_PROXY_BASE_PORT` and `FLOCI_SERVICES_RDS_PROXY_MAX_PORT`.
+
+## Ports 9200–9299, Lambda Runtime API (internal)
+
+Floci binds a Lambda Runtime API port in the `9200–9299` range for each warm Lambda container to poll. These ports are consumed by containers Floci spawns itself on the shared Docker network, so they do not need to be mapped to the host. Configure the range with `FLOCI_SERVICES_LAMBDA_RUNTIME_API_BASE_PORT` and `FLOCI_SERVICES_LAMBDA_RUNTIME_API_MAX_PORT`.
+
+## Ports 9400–9499, OpenSearch (reserved)
+
+This range is reserved for OpenSearch `mode: real`, which will spin up an OpenSearch Docker container per domain and proxy data-plane traffic on the next available port in `9400–9499`. Real mode is not yet implemented: the default `mock` mode exposes only the management API on port `4566` and uses no proxy port. See [OpenSearch](../services/opensearch.md) for current status.
+
+!!! note
+ When real mode lands, configure the range with `FLOCI_SERVICES_OPENSEARCH_PROXY_BASE_PORT` and `FLOCI_SERVICES_OPENSEARCH_PROXY_MAX_PORT`.
 
 ## Exposing Ports in Docker Compose
 

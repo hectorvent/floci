@@ -25,12 +25,12 @@
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a custom event bus
 aws events create-event-bus \
   --name my-bus \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a rule matching a pattern
 aws events put-rule \
@@ -38,7 +38,7 @@ aws events put-rule \
   --event-bus-name my-bus \
   --event-pattern '{"source":["com.myapp"],"detail-type":["OrderPlaced"]}' \
   --state ENABLED \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Add a Lambda target
 aws events put-targets \
@@ -48,7 +48,7 @@ aws events put-targets \
     "Id": "process-order",
     "Arn": "arn:aws:lambda:us-east-1:000000000000:function:process-order"
   }]' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Publish an event
 aws events put-events \
@@ -58,7 +58,7 @@ aws events put-events \
     "Detail": "{\"orderId\":\"123\",\"amount\":99.99}",
     "EventBusName": "my-bus"
   }]' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ## Default Event Bus
@@ -67,10 +67,10 @@ EventBridge includes a default event bus (`default`) that accepts events from AW
 
 ```bash
 # List rules on the default bus
-aws events list-rules --endpoint-url $AWS_ENDPOINT
+aws events list-rules --endpoint-url $AWS_ENDPOINT_URL
 
 # Send to default bus
 aws events put-events \
   --entries '[{"Source":"myapp","DetailType":"test","Detail":"{}"}]' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```

@@ -60,7 +60,7 @@ services:
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a PostgreSQL instance
 aws rds create-db-instance \
@@ -70,13 +70,13 @@ aws rds create-db-instance \
   --master-username admin \
   --master-user-password secret123 \
   --allocated-storage 20 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Get connection details
 aws rds describe-db-instances \
   --db-instance-identifier mypostgres \
   --query 'DBInstances[0].Endpoint' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Connect with psql (use the port returned above)
 psql -h localhost -p 7001 -U admin
@@ -89,7 +89,7 @@ aws rds create-db-instance \
   --master-username root \
   --master-user-password secret123 \
   --allocated-storage 20 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Connect with mysql client
 mysql -h 127.0.0.1 -P 7002 -u root -psecret123

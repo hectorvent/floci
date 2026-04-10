@@ -26,16 +26,16 @@
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a schedule group
 aws scheduler create-schedule-group \
   --name my-group \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # List schedule groups
 aws scheduler list-schedule-groups \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a schedule in the default group
 aws scheduler create-schedule \
@@ -46,7 +46,7 @@ aws scheduler create-schedule \
     "Arn": "arn:aws:lambda:us-east-1:000000000000:function:my-func",
     "RoleArn": "arn:aws:iam::000000000000:role/scheduler-role"
   }' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a schedule with retry policy and dead-letter queue
 aws scheduler create-schedule \
@@ -59,12 +59,12 @@ aws scheduler create-schedule \
     "RetryPolicy": {"MaximumEventAgeInSeconds":3600,"MaximumRetryAttempts":5},
     "DeadLetterConfig": {"Arn":"arn:aws:sqs:us-east-1:000000000000:my-dlq"}
   }' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Get a schedule
 aws scheduler get-schedule \
   --name my-schedule \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Update a schedule
 aws scheduler update-schedule \
@@ -76,17 +76,17 @@ aws scheduler update-schedule \
     "RoleArn": "arn:aws:iam::000000000000:role/scheduler-role"
   }' \
   --state DISABLED \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Delete a schedule
 aws scheduler delete-schedule \
   --name my-schedule \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Delete a schedule group (cascades to all schedules in the group)
 aws scheduler delete-schedule-group \
   --name my-group \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ## Default Schedule Group

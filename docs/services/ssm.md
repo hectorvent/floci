@@ -38,24 +38,24 @@ floci:
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Store parameters
-aws ssm put-parameter --endpoint-url $AWS_ENDPOINT \
+aws ssm put-parameter --endpoint-url $AWS_ENDPOINT_URL \
   --name /app/db/host --value "localhost" --type String
 
-aws ssm put-parameter --endpoint-url $AWS_ENDPOINT \
+aws ssm put-parameter --endpoint-url $AWS_ENDPOINT_URL \
   --name /app/db/password --value "secret" --type SecureString
 
 # Retrieve
-aws ssm get-parameter --endpoint-url $AWS_ENDPOINT \
+aws ssm get-parameter --endpoint-url $AWS_ENDPOINT_URL \
   --name /app/db/host
 
-aws ssm get-parameters-by-path --endpoint-url $AWS_ENDPOINT \
+aws ssm get-parameters-by-path --endpoint-url $AWS_ENDPOINT_URL \
   --path /app/ --recursive
 
 # Delete
-aws ssm delete-parameter --endpoint-url $AWS_ENDPOINT \
+aws ssm delete-parameter --endpoint-url $AWS_ENDPOINT_URL \
   --name /app/db/host
 ```
 

@@ -40,13 +40,13 @@ Floci serves pool-specific discovery and JWKS endpoints, plus a relaxed OAuth to
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a user pool
 POOL_ID=$(aws cognito-idp create-user-pool \
   --pool-name MyApp \
   --query UserPool.Id --output text \
-  --endpoint-url $AWS_ENDPOINT)
+  --endpoint-url $AWS_ENDPOINT_URL)
 
 # Create an app client
 CLIENT_ID=$(aws cognito-idp create-user-pool-client \
@@ -57,14 +57,14 @@ CLIENT_ID=$(aws cognito-idp create-user-pool-client \
   --allowed-o-auth-flows client_credentials \
   --allowed-o-auth-scopes notes/read notes/write \
   --query UserPoolClient.ClientId --output text \
-  --endpoint-url $AWS_ENDPOINT)
+  --endpoint-url $AWS_ENDPOINT_URL)
 
 # Retrieve the generated client secret
 CLIENT_SECRET=$(aws cognito-idp describe-user-pool-client \
   --user-pool-id $POOL_ID \
   --client-id $CLIENT_ID \
   --query UserPoolClient.ClientSecret --output text \
-  --endpoint-url $AWS_ENDPOINT)
+  --endpoint-url $AWS_ENDPOINT_URL)
 
 # Register a resource server and scopes
 aws cognito-idp create-resource-server \
@@ -72,14 +72,14 @@ aws cognito-idp create-resource-server \
   --identifier notes \
   --name "Notes API" \
   --scopes ScopeName=read,ScopeDescription="Read notes" ScopeName=write,ScopeDescription="Write notes" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a user
 aws cognito-idp admin-create-user \
   --user-pool-id $POOL_ID \
   --username alice@example.com \
   --temporary-password Temp1234! \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Set a permanent password
 aws cognito-idp admin-set-user-password \
@@ -87,41 +87,41 @@ aws cognito-idp admin-set-user-password \
   --username alice@example.com \
   --password Perm1234! \
   --permanent \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Authenticate
 aws cognito-idp initiate-auth \
   --auth-flow USER_PASSWORD_AUTH \
   --client-id $CLIENT_ID \
   --auth-parameters USERNAME=alice@example.com,PASSWORD=Perm1234! \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a group
 aws cognito-idp create-group \
   --user-pool-id $POOL_ID \
   --group-name admin \
   --description "Admin group" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Add user to group
 aws cognito-idp admin-add-user-to-group \
   --user-pool-id $POOL_ID \
   --group-name admin \
   --username alice@example.com \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # List groups for user
 aws cognito-idp admin-list-groups-for-user \
   --user-pool-id $POOL_ID \
   --username alice@example.com \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Fetch the pool discovery document
-curl -s "$AWS_ENDPOINT/$POOL_ID/.well-known/openid-configuration"
+curl -s "$AWS_ENDPOINT_URL/$POOL_ID/.well-known/openid-configuration"
 
 # Get a machine access token from the OAuth endpoint
 curl -s \
-  -X POST "$AWS_ENDPOINT/cognito-idp/oauth2/token" \
+  -X POST "$AWS_ENDPOINT_URL/cognito-idp/oauth2/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -u "$CLIENT_ID:$CLIENT_SECRET" \
   --data-urlencode "grant_type=client_credentials" \

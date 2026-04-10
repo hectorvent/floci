@@ -16,11 +16,14 @@ Floci supports four storage backends. You can set a global default and override 
 ```yaml title="application.yml"
 floci:
   storage:
-    mode: hybrid              # default for all services
+    mode: memory              # shipped default (application.yml)
     persistent-path: ./data   # base directory for all persistent data
     wal:
       compaction-interval-ms: 30000
 ```
+
+!!! note "Code default vs shipped default"
+    `EmulatorConfig.StorageConfig.mode` has a Java-level `@WithDefault("hybrid")`, but the shipped `src/main/resources/application.yml` overrides it to `memory`. Running the stock Docker image gives you `memory`; if you supply your own `application.yml` and omit `storage.mode`, you fall back to the code default `hybrid`.
 
 ## Per-Service Override
 

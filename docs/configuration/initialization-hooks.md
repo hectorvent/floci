@@ -18,7 +18,7 @@ If the hook path exists but is not a directory, it is ignored.
 Hooks run:
 
 - Inside the Floci runtime environment (same context as Floci services)
-- Using the configured shell (default: `/bin/bash`)
+- Using the configured shell (default: `/bin/sh`)
 - With access to configured services and their endpoints
 - With the same environment variables as Floci
 

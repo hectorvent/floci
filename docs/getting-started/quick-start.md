@@ -67,7 +67,7 @@ This guide gets Floci running and verifies that AWS CLI commands work against it
 Floci accepts any dummy credentials — no real AWS account needed.
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
@@ -81,16 +81,16 @@ Run a few quick smoke tests:
 
 ```bash
 # S3 — create a bucket and upload a file
-aws s3 mb s3://my-bucket --endpoint-url $AWS_ENDPOINT
-echo "hello floci" | aws s3 cp - s3://my-bucket/hello.txt --endpoint-url $AWS_ENDPOINT
-aws s3 ls s3://my-bucket --endpoint-url $AWS_ENDPOINT
+aws s3 mb s3://my-bucket --endpoint-url $AWS_ENDPOINT_URL
+echo "hello floci" | aws s3 cp - s3://my-bucket/hello.txt --endpoint-url $AWS_ENDPOINT_URL
+aws s3 ls s3://my-bucket --endpoint-url $AWS_ENDPOINT_URL
 
 # SQS — create a queue and send a message
-aws sqs create-queue --queue-name orders --endpoint-url $AWS_ENDPOINT
+aws sqs create-queue --queue-name orders --endpoint-url $AWS_ENDPOINT_URL
 aws sqs send-message \
-  --queue-url $AWS_ENDPOINT/000000000000/orders \
+  --queue-url $AWS_ENDPOINT_URL/000000000000/orders \
   --message-body '{"event":"order.placed"}' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # DynamoDB — create a table
 aws dynamodb create-table \
@@ -98,7 +98,7 @@ aws dynamodb create-table \
   --attribute-definitions AttributeName=id,AttributeType=S \
   --key-schema AttributeName=id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 You should see successful responses for all three commands.

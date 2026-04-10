@@ -30,7 +30,7 @@ sdk install java 25-open
 This project includes a Maven wrapper, so you don't need to install Maven separately:
 
 ```bash
-git clone https://github.com/hectorvent/floci.git
+git clone https://github.com/floci-io/floci.git
 cd floci
 ./mvnw quarkus:dev     # hot reload on port 4566
 ```

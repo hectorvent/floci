@@ -7,7 +7,7 @@ Floci accepts any non-empty credentials — no real AWS account is needed.
 The simplest approach for local development:
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
@@ -39,7 +39,7 @@ Or set it as the default for your shell session:
 
 ```bash
 export AWS_PROFILE=floci
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 ```
 
 ## SDK Configuration

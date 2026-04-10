@@ -57,13 +57,13 @@ Floci seeds the following resources on first use in each region so Terraform, th
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # List default subnets
-aws ec2 describe-subnets --endpoint-url $AWS_ENDPOINT
+aws ec2 describe-subnets --endpoint-url $AWS_ENDPOINT_URL
 
 # List default VPC
-aws ec2 describe-vpcs --endpoint-url $AWS_ENDPOINT
+aws ec2 describe-vpcs --endpoint-url $AWS_ENDPOINT_URL
 
 # Launch an instance
 aws ec2 run-instances \
@@ -71,37 +71,37 @@ aws ec2 run-instances \
   --instance-type t2.micro \
   --min-count 1 \
   --max-count 1 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Describe running instances
 aws ec2 describe-instances \
   --filters "Name=instance-state-name,Values=running" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a VPC and subnet
-aws ec2 create-vpc --cidr-block 10.0.0.0/16 --endpoint-url $AWS_ENDPOINT
-aws ec2 create-subnet --vpc-id vpc-XXXXX --cidr-block 10.0.1.0/24 --endpoint-url $AWS_ENDPOINT
+aws ec2 create-vpc --cidr-block 10.0.0.0/16 --endpoint-url $AWS_ENDPOINT_URL
+aws ec2 create-subnet --vpc-id vpc-XXXXX --cidr-block 10.0.1.0/24 --endpoint-url $AWS_ENDPOINT_URL
 
 # Create and configure a security group
 aws ec2 create-security-group \
   --group-name my-sg \
   --description "My security group" \
   --vpc-id vpc-XXXXX \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 aws ec2 authorize-security-group-ingress \
   --group-id sg-XXXXX \
   --protocol tcp \
   --port 22 \
   --cidr 0.0.0.0/0 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Allocate and associate an Elastic IP
-aws ec2 allocate-address --domain vpc --endpoint-url $AWS_ENDPOINT
+aws ec2 allocate-address --domain vpc --endpoint-url $AWS_ENDPOINT_URL
 aws ec2 associate-address \
   --allocation-id eipalloc-XXXXX \
   --instance-id i-XXXXX \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ## Notes

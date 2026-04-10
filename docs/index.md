@@ -10,14 +10,17 @@
 
 Floci is a fast, free, and open-source local AWS service emulator built for developers who need reliable AWS services in development and CI without cost, complexity, or vendor lock-in.
 
-## Supported Services 
+## Supported Services
+
+Floci emulates 31 AWS services. See the [Services Overview](services/index.md) for per-service operation counts, endpoints, and full protocol details.
 
 | Service | Protocol |
 |---|---|
 | SSM Parameter Store | JSON 1.1 |
 | SQS | Query / JSON |
 | SNS | Query / JSON |
-| SES | Query / REST JSON |
+| SES | Query |
+| SES v2 | REST JSON |
 | S3 | REST XML |
 | DynamoDB + Streams | JSON 1.1 |
 | Lambda | REST JSON |
@@ -30,11 +33,16 @@ Floci is a fast, free, and open-source local AWS service emulator built for deve
 | Step Functions | JSON 1.1 |
 | IAM | Query |
 | STS | Query |
-| ElastiCache (Redis) | Query + RESP proxy |
+| ElastiCache (Redis / Valkey) | Query + RESP proxy |
 | RDS (PostgreSQL / MySQL) | Query + wire proxy |
+| ECS | JSON 1.1 |
+| EC2 | EC2 Query |
+| ACM | JSON 1.1 |
+| OpenSearch | REST JSON |
 | EventBridge | JSON 1.1 |
 | EventBridge Scheduler | REST JSON |
 | CloudWatch Logs & Metrics | JSON 1.1 / Query |
+| AppConfig + AppConfigData | REST JSON |
 
 ## Why Floci?
 
@@ -70,7 +78,7 @@ docker compose up -d
 aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
 ```
 
-All 19+ AWS services are immediately available at `http://localhost:4566`.
+All 31 AWS services are immediately available at `http://localhost:4566`.
 
 [Get started →](getting-started/quick-start.md){ .md-button .md-button--primary }
 [View services →](services/index.md){ .md-button }

@@ -42,48 +42,48 @@ floci:
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a standard queue
-aws sqs create-queue --queue-name orders --endpoint-url $AWS_ENDPOINT
+aws sqs create-queue --queue-name orders --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a FIFO queue
 aws sqs create-queue \
   --queue-name orders.fifo \
   --attributes FifoQueue=true \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Send a message
-QUEUE_URL="$AWS_ENDPOINT/000000000000/orders"
+QUEUE_URL="$AWS_ENDPOINT_URL/000000000000/orders"
 aws sqs send-message \
   --queue-url $QUEUE_URL \
   --message-body '{"event":"order.placed","id":"abc123"}' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Receive messages
 aws sqs receive-message \
   --queue-url $QUEUE_URL \
   --max-number-of-messages 10 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Delete a message (replace RECEIPT_HANDLE with the value from ReceiveMessage)
 aws sqs delete-message \
   --queue-url $QUEUE_URL \
   --receipt-handle "RECEIPT_HANDLE" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Set up a dead-letter queue
 DLQ_ARN=$(aws sqs get-queue-attributes \
-  --queue-url $AWS_ENDPOINT/000000000000/orders-dlq \
+  --queue-url $AWS_ENDPOINT_URL/000000000000/orders-dlq \
   --attribute-names QueueArn \
   --query Attributes.QueueArn \
   --output text \
-  --endpoint-url $AWS_ENDPOINT)
+  --endpoint-url $AWS_ENDPOINT_URL)
 
 aws sqs set-queue-attributes \
   --queue-url $QUEUE_URL \
   --attributes "{\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"$DLQ_ARN\\\",\\\"maxReceiveCount\\\":3}\"}" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ## Queue URL Format

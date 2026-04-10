@@ -29,22 +29,15 @@ See [Docker Compose — Multi-container networking](./docker-compose.md#multi-co
 
 ## Full Reference
 
+The block below mirrors `src/main/resources/application.yml`, it's the effective set of keys Floci ships with. Any key not listed here (for example `floci.init-hooks.*` or some `ecs.*` knobs) is available only as a code-level override via environment variables.
+
 ```yaml
 floci:
-  base-url: "http://localhost:4566"  # Used to build callback URLs (e.g. SNS subscription endpoints)
-  hostname: ""                       # Override host in base-url for multi-container Docker setups (e.g. "floci")
+  max-request-size: 512              # Max HTTP request body size in MB
+  base-url: "http://localhost:4566"  # Used to build response URLs (SQS QueueUrl, SNS endpoints, etc.)
+  # hostname: ""                     # When set, overrides the host in base-url for multi-container Docker
   default-region: us-east-1
   default-account-id: "000000000000"
-  max-request-size: 512              # Max HTTP request body size in MB (default 512 MB)
-
-  auth:
-    validate-signatures: false        # Set to true to enforce AWS request signing
-    presign-secret: local-emulator-secret  # HMAC secret for S3 pre-signed URL verification
-
-  init-hooks:
-    shell-executable: /bin/sh
-    timeout-seconds: 30
-    shutdown-grace-period-seconds: 2
 
   storage:
     mode: memory                      # memory | persistent | hybrid | wal
@@ -66,18 +59,24 @@ floci:
         flush-interval-ms: 5000
       secretsmanager:
         flush-interval-ms: 5000
+      acm:
+        flush-interval-ms: 5000
       opensearch:
-        flush-interval-ms: 5000   # inherits global storage mode
+        flush-interval-ms: 5000
+
+  auth:
+    validate-signatures: false               # Set to true to enforce AWS SigV4 validation
+    presign-secret: local-emulator-secret    # HMAC secret for S3 pre-signed URL verification
 
   services:
     ssm:
       enabled: true
-      max-parameter-history: 5        # Max versions kept per parameter
+      max-parameter-history: 5               # Max versions kept per parameter
 
     sqs:
       enabled: true
-      default-visibility-timeout: 30  # Seconds
-      max-message-size: 262144        # Bytes (256 KB)
+      default-visibility-timeout: 30         # Seconds
+      max-message-size: 262144               # Bytes (256 KB)
 
     s3:
       enabled: true
@@ -91,15 +90,15 @@ floci:
 
     lambda:
       enabled: true
-      ephemeral: false                # true = remove container after each invocation
+      ephemeral: false                        # true = remove container after each invocation
       default-memory-mb: 128
       default-timeout-seconds: 3
       docker-host: unix:///var/run/docker.sock
-      runtime-api-base-port: 9200    # Port range for Lambda Runtime API
+      runtime-api-base-port: 9200             # Port range for Lambda Runtime API
       runtime-api-max-port: 9299
-      code-path: ./data/lambda-code  # Where ZIP archives are stored
+      code-path: ./data/lambda-code           # Where ZIP archives are stored
       poll-interval-ms: 1000
-      container-idle-timeout-seconds: 300  # Remove idle containers after this
+      container-idle-timeout-seconds: 300     # Remove idle containers after this
 
     apigateway:
       enabled: true
@@ -122,6 +121,9 @@ floci:
       default-mariadb-image: "mariadb:11"
 
     eventbridge:
+      enabled: true
+
+    scheduler:
       enabled: true
 
     cloudwatchlogs:
@@ -152,43 +154,54 @@ floci:
 
     acm:
       enabled: true
-      validation-wait-seconds: 0  # Seconds before transitioning PENDING_VALIDATION → ISSUED
+      validation-wait-seconds: 0              # Seconds before transitioning PENDING_VALIDATION → ISSUED
 
     ses:
       enabled: true
 
     opensearch:
       enabled: true
-      mode: mock                                    # mock | real
+      mode: mock                              # mock | real
       default-image: "opensearchproject/opensearch:2"
       proxy-base-port: 9400
       proxy-max-port: 9499
 
+    ec2:
+      enabled: true
+
     ecs:
       enabled: true
-      mock: false               # true = tasks go to RUNNING without Docker (useful for CI)
-      docker-network: ""        # Docker network for task containers
-      default-memory-mb: 512
-      default-cpu-units: 256
+      mock: false                             # true = tasks go to RUNNING without Docker (useful for CI)
 ```
+
+### Initialization hooks
+
+`floci.init-hooks.*` is accepted as an override but is not declared in the shipped `application.yml`. See [Initialization Hooks](./initialization-hooks.md) for the full list of keys (`shell-executable`, `timeout-seconds`, `shutdown-grace-period-seconds`) and their defaults.
 
 ## Service Limits
 
-| Variable                                           | Default  | Description                                                   |
-|----------------------------------------------------|----------|---------------------------------------------------------------|
-| `FLOCI_SERVICES_SSM_MAX_PARAMETER_HISTORY`         | `5`      | Max parameter versions kept                                   |
-| `FLOCI_SERVICES_SQS_DEFAULT_VISIBILITY_TIMEOUT`    | `30`     | Visibility timeout (seconds)                                  |
-| `FLOCI_SERVICES_SQS_MAX_MESSAGE_SIZE`              | `262144` | Max message size (bytes)                                      |
-| `FLOCI_SERVICES_SQS_MAX_RECEIVE_COUNT`             | `10`     | Max receive count                                             |
-| `FLOCI_MAX_REQUEST_SIZE`                           | `512`    | Max HTTP request body size in MB                              |
-| `FLOCI_SERVICES_S3_MAX_MULTIPART_PARTS`            | `10000`  | Max parts per upload                                          |
-| `FLOCI_SERVICES_S3_DEFAULT_PRESIGN_EXPIRY_SECONDS` | `3600`   | Pre-signed URL expiry                                         |
-| `FLOCI_SERVICES_DYNAMODB_MAX_ITEM_SIZE`            | `400000` | Max item size (bytes)                                         |
-| `FLOCI_SERVICES_DOCKER_NETWORK`                    |          | Shared Docker network for Lambda, RDS, ElastiCache containers |
-| `FLOCI_SERVICES_ECS_MOCK`                          | `false`  | Skip Docker; tasks go straight to RUNNING (useful for CI)     |
-| `FLOCI_SERVICES_ECS_DOCKER_NETWORK`                |          | Docker network for ECS task containers                        |
-| `FLOCI_SERVICES_ECS_DEFAULT_MEMORY_MB`             | `512`    | Default memory (MB) when task definition omits it             |
-| `FLOCI_SERVICES_ECS_DEFAULT_CPU_UNITS`             | `256`    | Default CPU units when task definition omits it               |
+All keys in this table are declared on `EmulatorConfig` and accept environment variable overrides via the `FLOCI_` prefix.
+
+| Variable                                           | Default          | Description                                                   |
+|----------------------------------------------------|------------------|---------------------------------------------------------------|
+| `FLOCI_MAX_REQUEST_SIZE`                           | `512`            | Max HTTP request body size in MB                              |
+| `FLOCI_DEFAULT_REGION`                             | `us-east-1`      | Default AWS region used in ARNs and response URLs             |
+| `FLOCI_DEFAULT_AVAILABILITY_ZONE`                  | `us-east-1a`     | Default AZ reported by EC2, RDS, and other AZ-aware services  |
+| `FLOCI_DEFAULT_ACCOUNT_ID`                         | `000000000000`   | Default AWS account ID used in ARNs                           |
+| `FLOCI_ECR_BASE_URI`                               | `public.ecr.aws` | Base URI used when pulling container images (e.g. Lambda)     |
+| `FLOCI_SERVICES_SSM_MAX_PARAMETER_HISTORY`         | `5`              | Max parameter versions kept                                   |
+| `FLOCI_SERVICES_SQS_DEFAULT_VISIBILITY_TIMEOUT`    | `30`             | Default visibility timeout (seconds)                          |
+| `FLOCI_SERVICES_SQS_MAX_MESSAGE_SIZE`              | `262144`         | Max message size (bytes)                                      |
+| `FLOCI_SERVICES_S3_DEFAULT_PRESIGN_EXPIRY_SECONDS` | `3600`           | Pre-signed URL expiry                                         |
+| `FLOCI_SERVICES_DOCKER_NETWORK`                    | *(unset)*        | Shared Docker network for Lambda, RDS, ElastiCache containers |
+| `FLOCI_SERVICES_ECS_MOCK`                          | `false`          | Skip Docker; tasks go straight to RUNNING (useful for CI)     |
+| `FLOCI_SERVICES_ECS_DOCKER_NETWORK`                | *(unset)*        | Docker network for ECS task containers                        |
+| `FLOCI_SERVICES_ECS_DEFAULT_MEMORY_MB`             | `512`            | Default memory (MB) when task definition omits it             |
+| `FLOCI_SERVICES_ECS_DEFAULT_CPU_UNITS`             | `256`            | Default CPU units when task definition omits it               |
+
+Per-queue SQS redrive policy (`maxReceiveCount`) is configured at queue creation time via `SetQueueAttributes` / `CreateQueue`, not as a global default.
+
+`FLOCI_DEFAULT_AVAILABILITY_ZONE` and `FLOCI_ECR_BASE_URI` are declared in `EmulatorConfig` but not in the shipped `application.yml`, so they fall through to the `@WithDefault` values above when unset.
 
 ## Disabling Services
 

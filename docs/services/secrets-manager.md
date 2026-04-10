@@ -35,43 +35,43 @@ floci:
 ## Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a string secret
 aws secretsmanager create-secret \
   --name /app/database-url \
   --secret-string "postgresql://admin:secret@localhost/mydb" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create a JSON secret
 aws secretsmanager create-secret \
   --name /app/api-keys \
   --secret-string '{"stripe":"sk_test_xxx","sendgrid":"SG.xxx"}' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Retrieve a secret
 aws secretsmanager get-secret-value \
   --secret-id /app/database-url \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Update a secret
 aws secretsmanager put-secret-value \
   --secret-id /app/database-url \
   --secret-string "postgresql://admin:new-password@localhost/mydb" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # List secrets
-aws secretsmanager list-secrets --endpoint-url $AWS_ENDPOINT
+aws secretsmanager list-secrets --endpoint-url $AWS_ENDPOINT_URL
 
 # Delete (with recovery window)
 aws secretsmanager delete-secret \
   --secret-id /app/database-url \
   --recovery-window-in-days 7 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Delete immediately (no recovery)
 aws secretsmanager delete-secret \
   --secret-id /app/database-url \
   --force-delete-without-recovery \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```

@@ -41,14 +41,14 @@ floci:
 ### Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Create a log group and stream
-aws logs create-log-group --log-group-name /app/backend --endpoint-url $AWS_ENDPOINT
+aws logs create-log-group --log-group-name /app/backend --endpoint-url $AWS_ENDPOINT_URL
 aws logs create-log-stream \
   --log-group-name /app/backend \
   --log-stream-name 2025/01/app-1 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Write log events
 TIMESTAMP=$(date +%s%3N)   # milliseconds
@@ -56,25 +56,25 @@ aws logs put-log-events \
   --log-group-name /app/backend \
   --log-stream-name 2025/01/app-1 \
   --log-events "[{\"timestamp\":$TIMESTAMP,\"message\":\"Service started\"}]" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Read log events
 aws logs get-log-events \
   --log-group-name /app/backend \
   --log-stream-name 2025/01/app-1 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Search logs
 aws logs filter-log-events \
   --log-group-name /app/backend \
   --filter-pattern "ERROR" \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Set retention
 aws logs put-retention-policy \
   --log-group-name /app/backend \
   --retention-in-days 30 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
 
 ---
@@ -100,7 +100,7 @@ aws logs put-retention-policy \
 ### Examples
 
 ```bash
-export AWS_ENDPOINT=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localhost:4566
 
 # Publish a custom metric
 aws cloudwatch put-metric-data \
@@ -111,12 +111,12 @@ aws cloudwatch put-metric-data \
     "Unit": "Count",
     "Dimensions": [{"Name":"Service","Value":"api"}]
   }]' \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # List metrics
 aws cloudwatch list-metrics \
   --namespace MyApp \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Get statistics
 aws cloudwatch get-metric-statistics \
@@ -127,7 +127,7 @@ aws cloudwatch get-metric-statistics \
   --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
   --period 300 \
   --statistics Sum \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 
 # Create an alarm
 aws cloudwatch put-metric-alarm \
@@ -139,5 +139,5 @@ aws cloudwatch put-metric-alarm \
   --threshold 10 \
   --comparison-operator GreaterThanThreshold \
   --evaluation-periods 1 \
-  --endpoint-url $AWS_ENDPOINT
+  --endpoint-url $AWS_ENDPOINT_URL
 ```
