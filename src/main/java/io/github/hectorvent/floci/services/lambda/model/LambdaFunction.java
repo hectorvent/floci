@@ -35,6 +35,7 @@ public class LambdaFunction {
     private String revisionId;
     private String version = "$LATEST";
     private LambdaUrlConfig urlConfig;
+    private Integer reservedConcurrentExecutions;
 
     @JsonIgnore
     private volatile ContainerState containerState = ContainerState.COLD;
@@ -107,6 +108,9 @@ public class LambdaFunction {
 
     public LambdaUrlConfig getUrlConfig() { return urlConfig; }
     public void setUrlConfig(LambdaUrlConfig urlConfig) { this.urlConfig = urlConfig; }
+
+    public Integer getReservedConcurrentExecutions() { return reservedConcurrentExecutions; }
+    public void setReservedConcurrentExecutions(Integer reservedConcurrentExecutions) { this.reservedConcurrentExecutions = reservedConcurrentExecutions; }
 
     @JsonIgnore
     public ContainerState getContainerState() { return containerState; }

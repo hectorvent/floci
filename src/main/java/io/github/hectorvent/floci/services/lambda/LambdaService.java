@@ -583,6 +583,28 @@ public class LambdaService {
         }
     }
 
+    public LambdaFunction putFunctionConcurrency(String region, String functionName, Integer reservedConcurrentExecutions) {
+        if (reservedConcurrentExecutions == null || reservedConcurrentExecutions < 0) {
+            throw new AwsException("InvalidParameterValueException",
+                    "ReservedConcurrentExecutions must be a non-negative integer", 400);
+        }
+        LambdaFunction fn = getFunction(region, functionName);
+        fn.setReservedConcurrentExecutions(reservedConcurrentExecutions);
+        functionStore.save(region, fn);
+        return fn;
+    }
+
+    public Integer getFunctionConcurrency(String region, String functionName) {
+        LambdaFunction fn = getFunction(region, functionName);
+        return fn.getReservedConcurrentExecutions();
+    }
+
+    public void deleteFunctionConcurrency(String region, String functionName) {
+        LambdaFunction fn = getFunction(region, functionName);
+        fn.setReservedConcurrentExecutions(null);
+        functionStore.save(region, fn);
+    }
+
     public LambdaFunction getFunctionByUrlId(String urlId) {
         return functionStore.getByUrlId(urlId)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException", "Function not found for URL ID: " + urlId, 404));

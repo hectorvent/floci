@@ -39,6 +39,14 @@ Lambda runs your function code inside real Docker containers — the same way re
 | `ListTags` | List tags on a function |
 | `TagResource` | Tag a function |
 | `UntagResource` | Untag a function |
+| `PutFunctionConcurrency` | Set reserved concurrent executions (stub — value stored but not enforced) |
+| `GetFunctionConcurrency` | Get reserved concurrent executions |
+| `DeleteFunctionConcurrency` | Clear reserved concurrent executions |
+
+!!! note "Concurrency is a stub"
+    `PutFunctionConcurrency` persists `ReservedConcurrentExecutions` on the function
+    and echoes it back, but Floci does not enforce the limit at invocation time and
+    does not validate against the account-level concurrent execution limit.
 
 Function URLs are also reachable directly on `/{proxy:.*}` under the Lambda URL controller, which routes the request into the normal `Invoke` path.
 
@@ -49,7 +57,7 @@ Function URLs are also reachable directly on `/{proxy:.*}` under the Lambda URL 
 These AWS Lambda operations have no handler in Floci. Calls will return `404` or an error:
 
 - Layers (`PublishLayerVersion`, `DeleteLayerVersion`, `GetLayerVersion`, `GetLayerVersionByArn`, `AddLayerVersionPermission`, `RemoveLayerVersionPermission`, `GetLayerVersionPolicy`)
-- Concurrency controls (`PutFunctionConcurrency`, `GetFunctionConcurrency`, `DeleteFunctionConcurrency`, `PutProvisionedConcurrencyConfig`, `GetProvisionedConcurrencyConfig`, `ListProvisionedConcurrencyConfigs`, `DeleteProvisionedConcurrencyConfig`)
+- Provisioned concurrency (`PutProvisionedConcurrencyConfig`, `GetProvisionedConcurrencyConfig`, `ListProvisionedConcurrencyConfigs`, `DeleteProvisionedConcurrencyConfig`)
 - `UpdateFunctionConfiguration` (use `UpdateFunctionCode` for code-only updates; configuration-only updates are not separately supported)
 - Dead-letter, async invoke config, and event invoke config operations
 - `InvokeWithResponseStream`
