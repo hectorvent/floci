@@ -19,6 +19,7 @@ class GuardedMessageQueue {
     private final List<Message> messages;
     private final StorageBackend<String, List<Message>> messageStore;
     private final String storageKey;
+    private volatile boolean closed;
 
     @FunctionalInterface
     private interface Guard extends AutoCloseable {
@@ -207,8 +208,12 @@ class GuardedMessageQueue {
         }
     }
 
+    void close() {
+        closed = true;
+    }
+
     private void persist() {
-        if (messageStore == null || storageKey == null) {
+        if (closed || messageStore == null || storageKey == null) {
             return;
         }
         messageStore.put(storageKey, new ArrayList<>(messages));

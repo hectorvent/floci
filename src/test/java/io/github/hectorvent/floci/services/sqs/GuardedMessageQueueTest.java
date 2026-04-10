@@ -4,11 +4,22 @@ import io.github.hectorvent.floci.services.sqs.model.Message;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GuardedMessageQueueTest {
 
@@ -213,43 +224,43 @@ class GuardedMessageQueueTest {
         }
 
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
-        CyclicBarrier barrier = new CyclicBarrier(threadCount);
-        ConcurrentLinkedDeque<Message> allClaimed = new ConcurrentLinkedDeque<>();
+        try {
+            CyclicBarrier barrier = new CyclicBarrier(threadCount);
+            ConcurrentLinkedDeque<Message> allClaimed = new ConcurrentLinkedDeque<>();
 
-        List<Future<?>> futures = new ArrayList<>();
-        for (int t = 0; t < threadCount; t++) {
-            futures.add(executor.submit(() -> {
-                try {
-                    barrier.await();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-                // Each thread claims as many as possible
-                var result = queue.claimVisibleMessages(messageCount, 30, false, -1, null);
-                allClaimed.addAll(result.claimed());
-            }));
-        }
+            List<Future<?>> futures = new ArrayList<>();
+            for (int t = 0; t < threadCount; t++) {
+                futures.add(executor.submit(() -> {
+                    try {
+                        barrier.await();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                    var result = queue.claimVisibleMessages(messageCount, 30, false, -1, null);
+                    allClaimed.addAll(result.claimed());
+                }));
+            }
 
-        for (var f : futures) {
-            f.get(10, TimeUnit.SECONDS);
-        }
-        executor.shutdown();
+            for (var f : futures) {
+                f.get(10, TimeUnit.SECONDS);
+            }
 
-        // Every message should be claimed exactly once
-        assertEquals(messageCount, allClaimed.size());
+            // Every message should be claimed exactly once
+            assertEquals(messageCount, allClaimed.size());
 
-        // No duplicate receipt handles
-        Set<String> handles = new HashSet<>();
-        for (Message m : allClaimed) {
-            assertTrue(handles.add(m.getReceiptHandle()),
-                    "Duplicate receipt handle: " + m.getReceiptHandle());
-        }
+            Set<String> handles = new HashSet<>();
+            for (Message m : allClaimed) {
+                assertTrue(handles.add(m.getReceiptHandle()),
+                        "Duplicate receipt handle: " + m.getReceiptHandle());
+            }
 
-        // No duplicate message IDs
-        Set<String> ids = new HashSet<>();
-        for (Message m : allClaimed) {
-            assertTrue(ids.add(m.getMessageId()),
-                    "Duplicate message ID (delivered twice): " + m.getMessageId());
+            Set<String> ids = new HashSet<>();
+            for (Message m : allClaimed) {
+                assertTrue(ids.add(m.getMessageId()),
+                        "Duplicate message ID (delivered twice): " + m.getMessageId());
+            }
+        } finally {
+            executor.shutdownNow();
         }
     }
 
@@ -263,41 +274,39 @@ class GuardedMessageQueueTest {
         }
 
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
-        CyclicBarrier barrier = new CyclicBarrier(threadCount);
-        AtomicInteger claimedCount = new AtomicInteger();
+        try {
+            CyclicBarrier barrier = new CyclicBarrier(threadCount);
+            AtomicInteger claimedCount = new AtomicInteger();
 
-        List<Future<?>> futures = new ArrayList<>();
-        // Half the threads receive, half delete
-        for (int t = 0; t < threadCount; t++) {
-            final int threadIdx = t;
-            futures.add(executor.submit(() -> {
-                try {
-                    barrier.await();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-                if (threadIdx % 2 == 0) {
-                    // Receiver
-                    var result = queue.claimVisibleMessages(messageCount, 30, false, -1, null);
-                    claimedCount.addAndGet(result.claimed().size());
-                    // Immediately delete claimed messages
-                    for (Message m : result.claimed()) {
-                        queue.removeByReceiptHandle(m.getReceiptHandle());
+            List<Future<?>> futures = new ArrayList<>();
+            for (int t = 0; t < threadCount; t++) {
+                final int threadIdx = t;
+                futures.add(executor.submit(() -> {
+                    try {
+                        barrier.await();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
                     }
-                } else {
-                    // Competitor — also tries to receive
-                    var result = queue.claimVisibleMessages(messageCount, 30, false, -1, null);
-                    claimedCount.addAndGet(result.claimed().size());
-                }
-            }));
-        }
+                    if (threadIdx % 2 == 0) {
+                        var result = queue.claimVisibleMessages(messageCount, 30, false, -1, null);
+                        claimedCount.addAndGet(result.claimed().size());
+                        for (Message m : result.claimed()) {
+                            queue.removeByReceiptHandle(m.getReceiptHandle());
+                        }
+                    } else {
+                        var result = queue.claimVisibleMessages(messageCount, 30, false, -1, null);
+                        claimedCount.addAndGet(result.claimed().size());
+                    }
+                }));
+            }
 
-        for (var f : futures) {
-            f.get(10, TimeUnit.SECONDS);
-        }
-        executor.shutdown();
+            for (var f : futures) {
+                f.get(10, TimeUnit.SECONDS);
+            }
 
-        // Total claimed should equal message count (each message claimed exactly once)
-        assertEquals(messageCount, claimedCount.get());
+            assertEquals(messageCount, claimedCount.get());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 }

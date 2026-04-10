@@ -207,7 +207,10 @@ public class SqsService {
                     "The specified queue does not exist.", 400);
         }
         queueStore.delete(storageKey);
-        messagesByQueue.remove(storageKey);
+        var removed = messagesByQueue.remove(storageKey);
+        if (removed != null) {
+            removed.close();
+        }
         deduplicationCache.remove(storageKey);
         if (messageStore != null) {
             messageStore.delete(storageKey);
