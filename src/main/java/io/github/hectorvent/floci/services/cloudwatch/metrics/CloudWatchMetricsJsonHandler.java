@@ -14,7 +14,9 @@ import jakarta.ws.rs.core.Response;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Handles CloudWatch Metrics requests via the JSON 1.0 protocol.
@@ -33,7 +35,8 @@ public class CloudWatchMetricsJsonHandler {
     }
 
     public Response handle(String action, JsonNode request, String region) {
-        return switch (action) {
+        String normalizedAction = action.substring(0, 1).toUpperCase() + action.substring(1);
+        return switch (normalizedAction) {
             case "PutMetricData" -> handlePutMetricData(request, region);
             case "ListMetrics" -> handleListMetrics(request, region);
             case "GetMetricStatistics" -> handleGetMetricStatistics(request, region);
@@ -41,9 +44,12 @@ public class CloudWatchMetricsJsonHandler {
             case "DescribeAlarms" -> handleDescribeAlarms(request, region);
             case "DeleteAlarms" -> handleDeleteAlarms(request, region);
             case "SetAlarmState" -> handleSetAlarmState(request, region);
+            case "ListTagsForResource" -> handleListTagsForResource(request, region);
+            case "TagResource" -> handleTagResource(request, region);
+            case "UntagResource" -> handleUntagResource(request, region);
             case "GetMetricData" -> Response.ok(objectMapper.createObjectNode().putArray("MetricDataResults")).build();
             default -> Response.status(400)
-                    .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
+                    .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported by CloudWatch JSON."))
                     .build();
         };
     }
@@ -139,6 +145,13 @@ public class CloudWatchMetricsJsonHandler {
             okActions.forEach(a -> alarm.getOkActions().add(a.asText()));
         }
 
+        JsonNode tagsNode = request.has("Tags") ? request.path("Tags") : request.path("tags");
+        if (tagsNode.isArray()) {
+            Map<String, String> tags = new LinkedHashMap<>();
+            tagsNode.forEach(t -> tags.put(t.path("Key").asText(), t.path("Value").asText()));
+            alarm.setTags(tags);
+        }
+
         metricsService.putMetricAlarm(alarm, region);
         return Response.ok(objectMapper.createObjectNode()).build();
     }
@@ -189,6 +202,42 @@ public class CloudWatchMetricsJsonHandler {
         String reason = request.path("StateReason").asText(null);
         String reasonData = request.path("StateReasonData").asText(null);
         metricsService.setAlarmState(name, state, reason, reasonData, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleListTagsForResource(JsonNode request, String region) {
+        String arn = request.has("ResourceARN") ? request.path("ResourceARN").asText() : request.path("ResourceArn").asText();
+        if (arn.isEmpty()) arn = request.path("resourceArn").asText();
+
+        Map<String, String> tags = metricsService.listTagsForResource(arn, region);
+        ArrayNode tagsArray = objectMapper.createArrayNode();
+        tags.forEach((k, v) -> tagsArray.addObject().put("Key", k).put("Value", v));
+        return Response.ok(objectMapper.createObjectNode().set("Tags", tagsArray)).build();
+    }
+
+    private Response handleTagResource(JsonNode request, String region) {
+        String arn = request.has("ResourceARN") ? request.path("ResourceARN").asText() : request.path("ResourceArn").asText();
+        if (arn.isEmpty()) arn = request.path("resourceArn").asText();
+
+        Map<String, String> tags = new LinkedHashMap<>();
+        JsonNode tagsNode = request.has("Tags") ? request.path("Tags") : request.path("tags");
+        if (tagsNode.isArray()) {
+            tagsNode.forEach(t -> tags.put(t.path("Key").asText(), t.path("Value").asText()));
+        }
+        metricsService.tagResource(arn, tags, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleUntagResource(JsonNode request, String region) {
+        String arn = request.has("ResourceARN") ? request.path("ResourceARN").asText() : request.path("ResourceArn").asText();
+        if (arn.isEmpty()) arn = request.path("resourceArn").asText();
+
+        List<String> keys = new ArrayList<>();
+        JsonNode keysNode = request.has("TagKeys") ? request.path("TagKeys") : request.path("tagKeys");
+        if (keysNode.isArray()) {
+            keysNode.forEach(k -> keys.add(k.asText()));
+        }
+        metricsService.untagResource(arn, keys, region);
         return Response.ok(objectMapper.createObjectNode()).build();
     }
 

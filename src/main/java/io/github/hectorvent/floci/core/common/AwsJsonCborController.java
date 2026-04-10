@@ -147,7 +147,10 @@ public class AwsJsonCborController {
                 return Response.status(404).build();
             }
 
-            byte[] cborBytes = nodeToSmithyCbor((JsonNode) delegated.getEntity());
+            JsonNode responseNode = delegated.getEntity() instanceof JsonNode
+                    ? (JsonNode) delegated.getEntity()
+                    : objectMapper.valueToTree(delegated.getEntity());
+            byte[] cborBytes = nodeToSmithyCbor(responseNode);
             return Response.status(delegated.getStatus())
                     .header("Smithy-Protocol", "rpc-v2-cbor")
                     .type("application/cbor")
@@ -224,7 +227,10 @@ public class AwsJsonCborController {
                 return null;
             }
 
-            byte[] cborBytes = nodeToSmithyCbor((JsonNode) delegated.getEntity());
+            JsonNode responseNode = delegated.getEntity() instanceof JsonNode
+                    ? (JsonNode) delegated.getEntity()
+                    : objectMapper.valueToTree(delegated.getEntity());
+            byte[] cborBytes = nodeToSmithyCbor(responseNode);
             return Response.status(delegated.getStatus())
                     .header("smithy-protocol", "rpc-v2-cbor")
                     .type("application/cbor")

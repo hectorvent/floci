@@ -5,7 +5,9 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @RegisterForReflection
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -34,6 +36,7 @@ public class MetricAlarm {
     private String comparisonOperator;
     private String treatMissingData = "missing";
     private String evaluateLowSampleCountPercentile;
+    private Map<String, String> tags = new HashMap<>();
 
     public MetricAlarm() {
         long now = Instant.now().getEpochSecond();
@@ -112,4 +115,7 @@ public class MetricAlarm {
 
     public String getEvaluateLowSampleCountPercentile() { return evaluateLowSampleCountPercentile; }
     public void setEvaluateLowSampleCountPercentile(String percentile) { this.evaluateLowSampleCountPercentile = percentile; }
+
+    public Map<String, String> getTags() { return tags; }
+    public void setTags(Map<String, String> tags) { this.tags = tags; }
 }

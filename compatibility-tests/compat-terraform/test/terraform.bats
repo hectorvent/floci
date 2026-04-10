@@ -95,3 +95,15 @@ setup() {
     assert_success
     assert_output --partial "floci-compat"
 }
+
+@test "Terraform: CloudWatch alarm created with tags" {
+    run aws_cmd cloudwatch describe-alarms --alarm-names floci-compat-cpu-alarm
+    assert_success
+    assert_output --partial "floci-compat-cpu-alarm"
+
+    ALARM_ARN=$(aws_cmd cloudwatch describe-alarms --alarm-names floci-compat-cpu-alarm \
+        --query 'MetricAlarms[0].AlarmArn' --output text)
+    run aws_cmd cloudwatch list-tags-for-resource --resource-arn "$ALARM_ARN"
+    assert_success
+    assert_output --partial "compat-test"
+}

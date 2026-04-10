@@ -202,6 +202,37 @@ public class CloudWatchMetricsService {
         LOG.infov("SetAlarmState: {0} -> {1}", alarmName, stateValue);
     }
 
+    public Map<String, String> listTagsForResource(String resourceArn, String region) {
+        return alarmStore.scan(k -> k.startsWith(region + "::"))
+                .stream()
+                .filter(a -> resourceArn.equals(a.getAlarmArn()))
+                .findFirst()
+                .map(MetricAlarm::getTags)
+                .orElse(Map.of());
+    }
+
+    public void tagResource(String resourceArn, Map<String, String> tags, String region) {
+        alarmStore.scan(k -> k.startsWith(region + "::"))
+                .stream()
+                .filter(a -> resourceArn.equals(a.getAlarmArn()))
+                .findFirst()
+                .ifPresent(alarm -> {
+                    alarm.getTags().putAll(tags);
+                    alarmStore.put(region + "::" + alarm.getAlarmName(), alarm);
+                });
+    }
+
+    public void untagResource(String resourceArn, List<String> tagKeys, String region) {
+        alarmStore.scan(k -> k.startsWith(region + "::"))
+                .stream()
+                .filter(a -> resourceArn.equals(a.getAlarmArn()))
+                .findFirst()
+                .ifPresent(alarm -> {
+                    tagKeys.forEach(alarm.getTags()::remove);
+                    alarmStore.put(region + "::" + alarm.getAlarmName(), alarm);
+                });
+    }
+
     // ──────────────────────────── Helpers ────────────────────────────
 
     static String buildDimKey(List<Dimension> dimensions) {

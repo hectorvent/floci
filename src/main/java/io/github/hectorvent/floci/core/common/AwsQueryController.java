@@ -227,7 +227,9 @@ public class AwsQueryController {
     );
 
     private static final Set<String> CLOUDWATCH_ACTIONS = Set.of(
-            "PutMetricData", "ListMetrics", "GetMetricStatistics", "GetMetricData"
+            "PutMetricData", "ListMetrics", "GetMetricStatistics", "GetMetricData",
+            "PutMetricAlarm", "DescribeAlarms", "DeleteAlarms", "SetAlarmState",
+            "ListTagsForResource", "TagResource", "UntagResource"
     );
 
     private static final Set<String> RDS_ACTIONS = Set.of(

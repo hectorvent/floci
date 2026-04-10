@@ -174,3 +174,24 @@ output "user_pool_id" {
 output "user_pool_arn" {
   value = aws_cognito_user_pool.pool.arn
 }
+
+# -- CloudWatch Alarms ---------------------------------------------------------
+resource "aws_cloudwatch_metric_alarm" "cpu" {
+  alarm_name          = "floci-compat-cpu-alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "CPU alarm for compat test"
+
+  tags = {
+    env = "compat-test"
+  }
+}
+
+output "alarm_arn" {
+  value = aws_cloudwatch_metric_alarm.cpu.arn
+}
