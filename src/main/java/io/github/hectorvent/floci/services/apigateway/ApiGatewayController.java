@@ -1020,20 +1020,6 @@ public class ApiGatewayController {
         return Response.noContent().build();
     }
 
-    // ──────────────────────────── Tags ────────────────────────────
-
-    @GET
-    @Path("/tags/{arn: .*}")
-    public Response getTags(@Context HttpHeaders headers, @PathParam("arn") String arn) {
-        String region = regionResolver.resolveRegion(headers);
-        String apiId = apiIdFromArn(arn);
-        Map<String, String> tags = service.getTags(region, apiId);
-        ObjectNode root = objectMapper.createObjectNode();
-        ObjectNode tagsNode = root.putObject("tags");
-        tags.forEach(tagsNode::put);
-        return Response.ok(root.toString()).type(MediaType.APPLICATION_JSON).build();
-    }
-
     // ──────────────────────────── Helpers ────────────────────────────
 
     private ObjectNode toApiNode(RestApi api) {
@@ -1259,9 +1245,4 @@ public class ApiGatewayController {
         return node;
     }
 
-    private String apiIdFromArn(String arn) {
-        String[] parts = arn.split("/restapis/");
-        if (parts.length < 2) return arn;
-        return parts[1].split("/")[0];
-    }
 }
