@@ -10,6 +10,7 @@ name: Semantic Release
 on:
   push:
     branches:
+      - 'main'
       - 'release/[0-9]+.x'
       - 'release/[0-9]+.[0-9]+.x'
     paths:
