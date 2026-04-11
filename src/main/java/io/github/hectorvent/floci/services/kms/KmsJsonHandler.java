@@ -63,7 +63,9 @@ public class KmsJsonHandler {
     private Response handleCreateKey(JsonNode request, String region) {
         String description = request.path("Description").asText(null);
         String keyUsage = request.path("KeyUsage").asText("ENCRYPT_DECRYPT");
-        String customerMasterKeySpec = request.path("CustomerMasterKeySpec").asText("SYMMETRIC_DEFAULT");
+        String customerMasterKeySpec = !request.path("KeySpec").isMissingNode()
+                ? request.path("KeySpec").asText("SYMMETRIC_DEFAULT")
+                : request.path("CustomerMasterKeySpec").asText("SYMMETRIC_DEFAULT");
         String policy = request.path("Policy").isMissingNode() ? null : request.path("Policy").asText(null);
         Map<String, String> tags = new HashMap<>();
         request.path("Tags").forEach(t -> tags.put(t.path("TagKey").asText(), t.path("TagValue").asText()));
@@ -347,6 +349,7 @@ public class KmsJsonHandler {
         node.put("Origin", "AWS_KMS");
         node.put("KeyManager", "CUSTOMER");
         node.put("CustomerMasterKeySpec", k.getCustomerMasterKeySpec());
+        node.put("KeySpec", k.getCustomerMasterKeySpec());
         if (k.getDeletionDate() > 0) {
             node.put("DeletionDate", k.getDeletionDate());
         }
