@@ -58,7 +58,7 @@ jobs:
           cache: maven
 
       - name: Run semantic-release
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@16ca923e6ccbb50770c415a0ccd43709a8c5f7a4 # v4.2.2
         with:
           extra_plugins: |
             @semantic-release/changelog
