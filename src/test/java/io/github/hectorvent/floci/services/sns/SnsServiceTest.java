@@ -74,7 +74,7 @@ class SnsServiceTest {
     @Test
     void deleteTopic_removesTopicAndSubscriptions() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
-        snsService.subscribe(topic.getTopicArn(), "sqs", "http://queue-url", REGION);
+        snsService.subscribe(topic.getTopicArn(), "sqs", "http://queue-url", REGION, Map.of());
         snsService.deleteTopic(topic.getTopicArn(), REGION);
 
         assertTrue(snsService.listTopics(REGION).isEmpty());
@@ -101,20 +101,22 @@ class SnsServiceTest {
     void subscribe_returnsSubscription() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
         Subscription sub = snsService.subscribe(topic.getTopicArn(), "sqs",
-                "http://localhost:4566/000000000000/my-queue", REGION);
+                "http://localhost:4566/000000000000/my-queue", REGION,
+                Map.of("attr1", "value1", "attr2", "value2"));
         assertNotNull(sub.getSubscriptionArn());
         assertEquals(topic.getTopicArn(), sub.getTopicArn());
         assertEquals("sqs", sub.getProtocol());
         assertEquals(ACCOUNT, sub.getOwner());
+        assertEquals(Map.of("attr1", "value1", "attr2", "value2"), sub.getAttributes());
     }
 
     @Test
     void subscribe_idempotent() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
         Subscription sub1 = snsService.subscribe(topic.getTopicArn(), "sqs",
-                "arn:aws:sqs:us-east-1:000000000000:my-queue", REGION);
+                "arn:aws:sqs:us-east-1:000000000000:my-queue", REGION, Map.of());
         Subscription sub2 = snsService.subscribe(topic.getTopicArn(), "sqs",
-                "arn:aws:sqs:us-east-1:000000000000:my-queue", REGION);
+                "arn:aws:sqs:us-east-1:000000000000:my-queue", REGION, Map.of());
         assertEquals(sub1.getSubscriptionArn(), sub2.getSubscriptionArn());
         assertEquals(1, snsService.listSubscriptions(REGION).size());
     }
@@ -123,9 +125,9 @@ class SnsServiceTest {
     void subscribe_differentEndpoints_createsSeparateSubscriptions() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
         snsService.subscribe(topic.getTopicArn(), "sqs",
-                "arn:aws:sqs:us-east-1:000000000000:queue-1", REGION);
+                "arn:aws:sqs:us-east-1:000000000000:queue-1", REGION, Map.of());
         snsService.subscribe(topic.getTopicArn(), "sqs",
-                "arn:aws:sqs:us-east-1:000000000000:queue-2", REGION);
+                "arn:aws:sqs:us-east-1:000000000000:queue-2", REGION, Map.of());
         assertEquals(2, snsService.listSubscriptions(REGION).size());
     }
 
@@ -133,21 +135,21 @@ class SnsServiceTest {
     void subscribe_throwsForMissingTopic() {
         assertThrows(AwsException.class,
             () -> snsService.subscribe("arn:aws:sns:us-east-1:000000000000:nonexistent",
-                    "sqs", "http://queue", REGION));
+                    "sqs", "http://queue", REGION, Map.of()));
     }
 
     @Test
     void subscribe_requiresProtocol() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
         assertThrows(AwsException.class,
-            () -> snsService.subscribe(topic.getTopicArn(), null, "http://queue", REGION));
+            () -> snsService.subscribe(topic.getTopicArn(), null, "http://queue", REGION, Map.of()));
     }
 
     @Test
     void unsubscribe_removesSubscription() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
         Subscription sub = snsService.subscribe(topic.getTopicArn(), "sqs",
-                "http://queue", REGION);
+                "http://queue", REGION, Map.of());
         snsService.unsubscribe(sub.getSubscriptionArn(), REGION);
         assertTrue(snsService.listSubscriptions(REGION).isEmpty());
     }
@@ -156,9 +158,9 @@ class SnsServiceTest {
     void listSubscriptionsByTopic_filtersCorrectly() {
         Topic topicA = snsService.createTopic("topic-a", null, null, REGION);
         Topic topicB = snsService.createTopic("topic-b", null, null, REGION);
-        snsService.subscribe(topicA.getTopicArn(), "sqs", "http://queue1", REGION);
-        snsService.subscribe(topicA.getTopicArn(), "sqs", "http://queue2", REGION);
-        snsService.subscribe(topicB.getTopicArn(), "sqs", "http://queue3", REGION);
+        snsService.subscribe(topicA.getTopicArn(), "sqs", "http://queue1", REGION, Map.of());
+        snsService.subscribe(topicA.getTopicArn(), "sqs", "http://queue2", REGION, Map.of());
+        snsService.subscribe(topicB.getTopicArn(), "sqs", "http://queue3", REGION, Map.of());
 
         assertEquals(2, snsService.listSubscriptionsByTopic(topicA.getTopicArn(), REGION).size());
         assertEquals(1, snsService.listSubscriptionsByTopic(topicB.getTopicArn(), REGION).size());
@@ -168,7 +170,7 @@ class SnsServiceTest {
     void publish_withSqsSubscriber_returnsMessageId() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
         snsService.subscribe(topic.getTopicArn(), "sqs",
-                BASE_URL + "/" + ACCOUNT + "/fanout-queue", REGION);
+                BASE_URL + "/" + ACCOUNT + "/fanout-queue", REGION, Map.of());
         // Fanout delivery is exercised — message ID returned confirms success
         String messageId = snsService.publish(topic.getTopicArn(), null, "Hello SNS!", null, REGION);
         assertNotNull(messageId);
@@ -221,8 +223,8 @@ class SnsServiceTest {
     @Test
     void subscriptionsConfirmed_countsCorrectly() {
         Topic topic = snsService.createTopic("my-topic", null, null, REGION);
-        snsService.subscribe(topic.getTopicArn(), "sqs", "http://queue1", REGION);
-        snsService.subscribe(topic.getTopicArn(), "sqs", "http://queue2", REGION);
+        snsService.subscribe(topic.getTopicArn(), "sqs", "http://queue1", REGION, Map.of());
+        snsService.subscribe(topic.getTopicArn(), "sqs", "http://queue2", REGION, Map.of());
         Map<String, String> attrs = snsService.getTopicAttributes(topic.getTopicArn(), REGION);
         assertEquals("2", attrs.get("SubscriptionsConfirmed"));
     }

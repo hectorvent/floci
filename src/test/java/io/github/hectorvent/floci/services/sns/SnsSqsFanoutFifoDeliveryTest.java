@@ -42,7 +42,7 @@ class SnsSqsFanoutFifoDeliveryTest {
 
         snsService.createTopic("fifo-topic.fifo", Map.of("FifoTopic", "true"), null, REGION);
         String topicArn = "arn:aws:sns:" + REGION + ":" + ACCOUNT + ":fifo-topic.fifo";
-        snsService.subscribe(topicArn, "sqs", queueArn, REGION);
+        snsService.subscribe(topicArn, "sqs", queueArn, REGION, Map.of());
 
         // Act
         String messageId = snsService.publish(topicArn, null, null, "hello fifo",
@@ -65,7 +65,7 @@ class SnsSqsFanoutFifoDeliveryTest {
         snsService.createTopic("fifo-cbd-topic.fifo",
                 Map.of("FifoTopic", "true", "ContentBasedDeduplication", "true"), null, REGION);
         String topicArn = "arn:aws:sns:" + REGION + ":" + ACCOUNT + ":fifo-cbd-topic.fifo";
-        snsService.subscribe(topicArn, "sqs", queueArn, REGION);
+        snsService.subscribe(topicArn, "sqs", queueArn, REGION, Map.of());
 
         // Act — no explicit dedup ID; topic derives one from message content
         String messageId = snsService.publish(topicArn, null, null, "cbd message",
@@ -87,7 +87,7 @@ class SnsSqsFanoutFifoDeliveryTest {
 
         snsService.createTopic("fifo-batch-topic.fifo", Map.of("FifoTopic", "true"), null, REGION);
         String topicArn = "arn:aws:sns:" + REGION + ":" + ACCOUNT + ":fifo-batch-topic.fifo";
-        snsService.subscribe(topicArn, "sqs", queueArn, REGION);
+        snsService.subscribe(topicArn, "sqs", queueArn, REGION, Map.of());
 
         // Act
         var entries = List.<Map<String, Object>>of(
@@ -120,7 +120,7 @@ class SnsSqsFanoutFifoDeliveryTest {
         snsService.createTopic("fifo-batch-cbd-topic.fifo",
                 Map.of("FifoTopic", "true", "ContentBasedDeduplication", "true"), null, REGION);
         String topicArn = "arn:aws:sns:" + REGION + ":" + ACCOUNT + ":fifo-batch-cbd-topic.fifo";
-        snsService.subscribe(topicArn, "sqs", queueArn, REGION);
+        snsService.subscribe(topicArn, "sqs", queueArn, REGION, Map.of());
 
         // Act — no explicit dedup IDs; topic derives them from message content
         var entries = List.<Map<String, Object>>of(
@@ -150,7 +150,7 @@ class SnsSqsFanoutFifoDeliveryTest {
 
         snsService.createTopic("fifo-dedup-topic.fifo", Map.of("FifoTopic", "true"), null, REGION);
         String topicArn = "arn:aws:sns:" + REGION + ":" + ACCOUNT + ":fifo-dedup-topic.fifo";
-        snsService.subscribe(topicArn, "sqs", queueArn, REGION);
+        snsService.subscribe(topicArn, "sqs", queueArn, REGION, Map.of());
 
         // Act — publish same dedup ID twice
         snsService.publish(topicArn, null, null, "first",
