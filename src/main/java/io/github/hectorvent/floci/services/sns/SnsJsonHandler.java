@@ -115,7 +115,8 @@ public class SnsJsonHandler {
         String topicArn = request.path("TopicArn").asText(null);
         String protocol = request.path("Protocol").asText(null);
         String endpoint = request.path("Endpoint").asText(null);
-        Subscription sub = snsService.subscribe(topicArn, protocol, endpoint, region);
+        Map<String, String> attributes = jsonNodeToMap(request.path("Attributes"));
+        Subscription sub = snsService.subscribe(topicArn, protocol, endpoint, region, attributes);
         ObjectNode response = objectMapper.createObjectNode();
         response.put("SubscriptionArn", sub.getSubscriptionArn());
         return Response.ok(response).build();

@@ -179,7 +179,7 @@ public class SnsService {
         topicStore.put(key, topic);
     }
 
-    public Subscription subscribe(String topicArn, String protocol, String endpoint, String region) {
+    public Subscription subscribe(String topicArn, String protocol, String endpoint, String region, Map<String, String> attributes) {
         String topicKey = topicKey(region, topicArn);
         if (topicStore.get(topicKey).isEmpty()) {
             throw new AwsException("NotFound", "Topic does not exist.", 404);
@@ -198,6 +198,7 @@ public class SnsService {
         String subscriptionArn = topicArn + ":" + UUID.randomUUID().toString();
         Subscription subscription = new Subscription(subscriptionArn, topicArn, protocol, endpoint,
                 regionResolver.getAccountId());
+        if (attributes != null) subscription.getAttributes().putAll(attributes);
 
         if (PENDING_CONFIRMATION_PROTOCOLS.contains(protocol)) {
             String token = UUID.randomUUID().toString().replace("-", "")
@@ -209,7 +210,11 @@ public class SnsService {
         }
 
         subscriptionStore.put(subKey(region, subscriptionArn), subscription);
-        LOG.infov("Subscribed {0} ({1}) to topic {2} in {3}", endpoint, protocol, topicArn, region);
+        if (attributes == null || attributes.isEmpty()) {
+            LOG.infov("Subscribed {0} ({1}) to topic {2} in {3}", endpoint, protocol, topicArn, region);
+        } else {
+            LOG.infov("Subscribed {0} ({1}) to topic {2} in {3} with attributes: {4}", endpoint, protocol, topicArn, region, attributes);
+        }
         return subscription;
     }
 

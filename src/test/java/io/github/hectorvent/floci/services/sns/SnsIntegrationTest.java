@@ -647,6 +647,8 @@ class SnsIntegrationTest {
             .formParam("TopicArn", topicArn)
             .formParam("Protocol", "sqs")
             .formParam("Endpoint", rawDeliveryQueueUrl)
+            .formParam("Attributes.entry.1.key", "RawMessageDelivery")
+            .formParam("Attributes.entry.1.value", "true")
         .when()
             .post("/")
         .then()
@@ -664,21 +666,6 @@ class SnsIntegrationTest {
         .then()
             .statusCode(200)
             .extract().xmlPath().getString("SubscribeResponse.SubscribeResult.SubscriptionArn");
-    }
-
-    @Test
-    @Order(51)
-    void rawDelivery_setSubscriptionAttribute() {
-        given()
-            .contentType("application/x-www-form-urlencoded")
-            .formParam("Action", "SetSubscriptionAttributes")
-            .formParam("SubscriptionArn", rawDeliverySubArn)
-            .formParam("AttributeName", "RawMessageDelivery")
-            .formParam("AttributeValue", "true")
-        .when()
-            .post("/")
-        .then()
-            .statusCode(200);
     }
 
     @Test

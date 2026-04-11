@@ -123,8 +123,9 @@ public class SnsQueryHandler {
         String topicArn = getParam(params, "TopicArn");
         String protocol = getParam(params, "Protocol");
         String endpoint = getParam(params, "Endpoint");
+        Map<String, String> attributes = extractSnsAttributes(params, "Attributes");
         try {
-            Subscription sub = snsService.subscribe(topicArn, protocol, endpoint, region);
+            Subscription sub = snsService.subscribe(topicArn, protocol, endpoint, region, attributes);
 
             String result = new XmlBuilder().elem("SubscriptionArn", sub.getSubscriptionArn()).build();
             return Response.ok(AwsQueryResponse.envelope("Subscribe", AwsNamespaces.SNS, result)).build();
