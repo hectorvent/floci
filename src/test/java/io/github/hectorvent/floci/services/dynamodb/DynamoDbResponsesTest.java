@@ -7,6 +7,7 @@ import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.zip.CRC32;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -50,7 +51,7 @@ class DynamoDbResponsesTest {
 
     @Test
     void withCrc32_byteArrayEntity_usedAsIs() {
-        byte[] rawBody = "{\"TableNames\":[]}".getBytes();
+        byte[] rawBody = "{\"TableNames\":[]}".getBytes(StandardCharsets.UTF_8);
         long expectedCrc = crc32Of(rawBody);
 
         Response input = Response.ok(rawBody).build();
