@@ -12,6 +12,8 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
+import java.security.*;
+import java.security.spec.*;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
@@ -48,10 +50,14 @@ public class KmsService {
             "\"Action\":\"kms:*\",\"Resource\":\"*\"}]}";
 
     public KmsKey createKey(String description, String region) {
-        return createKey(description, null, Map.of(), region);
+        return createKey(description, "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT", null, Map.of(), region);
     }
 
     public KmsKey createKey(String description, String policy, Map<String, String> tags, String region) {
+        return createKey(description, "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT", policy, tags, region);
+    }
+
+    public KmsKey createKey(String description, String keyUsage, String customerMasterKeySpec, String policy, Map<String, String> tags, String region) {
         String keyId = UUID.randomUUID().toString();
         String arn = regionResolver.buildArn("kms", region, "key/" + keyId);
 
@@ -59,13 +65,59 @@ public class KmsService {
         key.setKeyId(keyId);
         key.setArn(arn);
         key.setDescription(description);
+        key.setKeyUsage(keyUsage != null ? keyUsage : "ENCRYPT_DECRYPT");
+        key.setCustomerMasterKeySpec(customerMasterKeySpec != null ? customerMasterKeySpec : "SYMMETRIC_DEFAULT");
         key.setPolicy(policy != null ? policy : DEFAULT_KEY_POLICY);
         if (tags != null) {
             key.getTags().putAll(tags);
         }
 
+        generateKeyMaterial(key);
+
         keyStore.put(region + "::" + keyId, key);
-        LOG.infov("Created KMS key: {0} in {1}", keyId, region);
+        LOG.infov("Created KMS key: {0} ({1}/{2}) in {3}", keyId, key.getKeyUsage(), key.getCustomerMasterKeySpec(), region);
+        return key;
+    }
+
+    private void generateKeyMaterial(KmsKey key) {
+        String spec = key.getCustomerMasterKeySpec();
+        if ("SYMMETRIC_DEFAULT".equals(spec)) {
+            return; // Use existing mock behavior for symmetric keys
+        }
+
+        try {
+            KeyPairGenerator generator;
+            if (spec.startsWith("RSA_")) {
+                generator = KeyPairGenerator.getInstance("RSA");
+                int size = Integer.parseInt(spec.substring(4));
+                generator.initialize(size);
+            } else if (spec.startsWith("ECC_")) {
+                generator = KeyPairGenerator.getInstance("EC");
+                String curveName = switch (spec) {
+                    case "ECC_NIST_P256" -> "secp256r1";
+                    case "ECC_NIST_P384" -> "secp384r1";
+                    case "ECC_NIST_P521" -> "secp521r1";
+                    case "ECC_SECG_P256K1" -> "secp256k1";
+                    default -> throw new AwsException("InvalidCustomerMasterKeySpecException", "Unsupported curve: " + spec, 400);
+                };
+                generator.initialize(new ECGenParameterSpec(curveName));
+            } else {
+                throw new AwsException("InvalidCustomerMasterKeySpecException", "Unsupported key spec: " + spec, 400);
+            }
+
+            KeyPair pair = generator.generateKeyPair();
+            key.setPrivateKeyEncoded(Base64.getEncoder().encodeToString(pair.getPrivate().getEncoded()));
+            key.setPublicKeyEncoded(Base64.getEncoder().encodeToString(pair.getPublic().getEncoded()));
+        } catch (Exception e) {
+            throw new AwsException("InternalFailure", "Failed to generate key material: " + e.getMessage(), 500);
+        }
+    }
+
+    public KmsKey getPublicKey(String keyId, String region) {
+        KmsKey key = resolveKey(keyId, region);
+        if ("SYMMETRIC_DEFAULT".equals(key.getCustomerMasterKeySpec())) {
+            throw new AwsException("UnsupportedOperationException", "GetPublicKey is not supported for symmetric keys.", 400);
+        }
         return key;
     }
 
@@ -198,17 +250,86 @@ public class KmsService {
     }
 
     public byte[] sign(String keyId, byte[] message, String algorithm, String region) {
-        resolveKey(keyId, region);
-        // Local mock signature: "sig:keyId:algo:base64(message)"
-        String sig = "sig:" + keyId + ":" + algorithm + ":" + Base64.getEncoder().encodeToString(message);
-        return sig.getBytes(StandardCharsets.UTF_8);
+        return sign(keyId, message, algorithm, "RAW", region);
+    }
+
+    public byte[] sign(String keyId, byte[] message, String algorithm, String messageType, String region) {
+        KmsKey kmsKey = resolveKey(keyId, region);
+        if ("SYMMETRIC_DEFAULT".equals(kmsKey.getCustomerMasterKeySpec())) {
+            throw new AwsException("UnsupportedOperationException", "Unsupported key spec for signing.", 400);
+        }
+
+        try {
+            PrivateKey privateKey = loadPrivateKey(kmsKey.getPrivateKeyEncoded(), kmsKey.getCustomerMasterKeySpec());
+            String jcaAlgo = mapAlgorithm(algorithm);
+            
+            if ("DIGEST".equals(messageType)) {
+                // If message is already a digest, we need a "NONEwith..." algorithm
+                jcaAlgo = "NONEwith" + (kmsKey.getCustomerMasterKeySpec().startsWith("RSA") ? "RSA" : "ECDSA");
+            }
+            
+            Signature sig = Signature.getInstance(jcaAlgo);
+            sig.initSign(privateKey);
+            sig.update(message);
+            return sig.sign();
+        } catch (Exception e) {
+            throw new AwsException("InternalFailure", "Failed to sign message: " + e.getMessage(), 500);
+        }
     }
 
     public boolean verify(String keyId, byte[] message, byte[] signature, String algorithm, String region) {
-        resolveKey(keyId, region);
-        String actualSig = new String(signature, StandardCharsets.UTF_8);
-        String expectedSig = "sig:" + keyId + ":" + algorithm + ":" + Base64.getEncoder().encodeToString(message);
-        return actualSig.equals(expectedSig);
+        return verify(keyId, message, signature, algorithm, "RAW", region);
+    }
+
+    public boolean verify(String keyId, byte[] message, byte[] signature, String algorithm, String messageType, String region) {
+        KmsKey kmsKey = resolveKey(keyId, region);
+        if ("SYMMETRIC_DEFAULT".equals(kmsKey.getCustomerMasterKeySpec())) {
+            return false;
+        }
+
+        try {
+            PublicKey publicKey = loadPublicKey(kmsKey.getPublicKeyEncoded(), kmsKey.getCustomerMasterKeySpec());
+            String jcaAlgo = mapAlgorithm(algorithm);
+            
+            if ("DIGEST".equals(messageType)) {
+                jcaAlgo = "NONEwith" + (kmsKey.getCustomerMasterKeySpec().startsWith("RSA") ? "RSA" : "ECDSA");
+            }
+
+            Signature sig = Signature.getInstance(jcaAlgo);
+            sig.initVerify(publicKey);
+            sig.update(message);
+            return sig.verify(signature);
+        } catch (Exception e) {
+            LOG.warnv("Verification failed for key {0}: {1}", keyId, e.getMessage());
+            return false;
+        }
+    }
+
+    private PrivateKey loadPrivateKey(String encoded, String spec) throws Exception {
+        byte[] decoded = Base64.getDecoder().decode(encoded);
+        KeyFactory factory = KeyFactory.getInstance(spec.startsWith("RSA") ? "RSA" : "EC");
+        return factory.generatePrivate(new PKCS8EncodedKeySpec(decoded));
+    }
+
+    private PublicKey loadPublicKey(String encoded, String spec) throws Exception {
+        byte[] decoded = Base64.getDecoder().decode(encoded);
+        KeyFactory factory = KeyFactory.getInstance(spec.startsWith("RSA") ? "RSA" : "EC");
+        return factory.generatePublic(new X509EncodedKeySpec(decoded));
+    }
+
+    private String mapAlgorithm(String awsAlgo) {
+        return switch (awsAlgo) {
+            case "ECDSA_SHA_256" -> "SHA256withECDSA";
+            case "ECDSA_SHA_384" -> "SHA384withECDSA";
+            case "ECDSA_SHA_512" -> "SHA512withECDSA";
+            case "RSASSA_PSS_SHA_256" -> "SHA256withRSA/PSS";
+            case "RSASSA_PSS_SHA_384" -> "SHA384withRSA/PSS";
+            case "RSASSA_PSS_SHA_512" -> "SHA512withRSA/PSS";
+            case "RSASSA_PKCS1_V1_5_SHA_256" -> "SHA256withRSA";
+            case "RSASSA_PKCS1_V1_5_SHA_384" -> "SHA384withRSA";
+            case "RSASSA_PKCS1_V1_5_SHA_512" -> "SHA512withRSA";
+            default -> throw new AwsException("InvalidSigningAlgorithmException", "Unsupported algorithm: " + awsAlgo, 400);
+        };
     }
 
     public Map<String, Object> generateDataKey(String keyId, String keySpec, int numberOfBytes, String region) {

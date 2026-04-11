@@ -4,15 +4,19 @@ import org.junit.jupiter.api.*;
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.kms.KmsClient;
 import software.amazon.awssdk.services.kms.model.CreateKeyResponse;
+import software.amazon.awssdk.services.kms.model.CustomerMasterKeySpec;
 import software.amazon.awssdk.services.kms.model.DataKeySpec;
 import software.amazon.awssdk.services.kms.model.DecryptResponse;
 import software.amazon.awssdk.services.kms.model.DescribeKeyResponse;
 import software.amazon.awssdk.services.kms.model.EncryptResponse;
 import software.amazon.awssdk.services.kms.model.GenerateDataKeyResponse;
 import software.amazon.awssdk.services.kms.model.GenerateDataKeyWithoutPlaintextResponse;
+import software.amazon.awssdk.services.kms.model.GetPublicKeyResponse;
 import software.amazon.awssdk.services.kms.model.KeyState;
+import software.amazon.awssdk.services.kms.model.KeyUsageType;
 import software.amazon.awssdk.services.kms.model.ListAliasesResponse;
 import software.amazon.awssdk.services.kms.model.ListResourceTagsResponse;
+import software.amazon.awssdk.services.kms.model.MessageType;
 import software.amazon.awssdk.services.kms.model.ReEncryptResponse;
 import software.amazon.awssdk.services.kms.model.SignResponse;
 import software.amazon.awssdk.services.kms.model.SigningAlgorithmSpec;
@@ -165,26 +169,102 @@ class KmsTest {
     @Test
     @Order(12)
     void signAndVerify() {
+        CreateKeyResponse createResponse = kms.createKey(b -> b
+                .description("asymmetric-ecc-sign-key")
+                .keyUsage(KeyUsageType.SIGN_VERIFY)
+                .customerMasterKeySpec(CustomerMasterKeySpec.ECC_NIST_P256));
+        String asymmetricKeyId = createResponse.keyMetadata().keyId();
+
         SdkBytes msg = SdkBytes.fromString("message to sign", StandardCharsets.UTF_8);
 
         SignResponse signResponse = kms.sign(b -> b
-                .keyId(keyId)
+                .keyId(asymmetricKeyId)
                 .message(msg)
-                .signingAlgorithm(SigningAlgorithmSpec.RSASSA_PSS_SHA_256));
+                .signingAlgorithm(SigningAlgorithmSpec.ECDSA_SHA_256));
 
         assertThat(signResponse.signature()).isNotNull();
 
         VerifyResponse verifyResponse = kms.verify(b -> b
-                .keyId(keyId)
+                .keyId(asymmetricKeyId)
                 .message(msg)
                 .signature(signResponse.signature())
-                .signingAlgorithm(SigningAlgorithmSpec.RSASSA_PSS_SHA_256));
+                .signingAlgorithm(SigningAlgorithmSpec.ECDSA_SHA_256));
 
         assertThat(verifyResponse.signatureValid()).isTrue();
     }
 
     @Test
     @Order(13)
+    void signAndVerifyRSA() {
+        CreateKeyResponse createResponse = kms.createKey(b -> b
+                .description("asymmetric-rsa-sign-key")
+                .keyUsage(KeyUsageType.SIGN_VERIFY)
+                .customerMasterKeySpec(CustomerMasterKeySpec.RSA_2048));
+        String asymmetricKeyId = createResponse.keyMetadata().keyId();
+
+        SdkBytes msg = SdkBytes.fromString("message to sign", StandardCharsets.UTF_8);
+
+        SignResponse signResponse = kms.sign(b -> b
+                .keyId(asymmetricKeyId)
+                .message(msg)
+                .signingAlgorithm(SigningAlgorithmSpec.RSASSA_PKCS1_V1_5_SHA_256));
+
+        assertThat(signResponse.signature()).isNotNull();
+
+        VerifyResponse verifyResponse = kms.verify(b -> b
+                .keyId(asymmetricKeyId)
+                .message(msg)
+                .signature(signResponse.signature())
+                .signingAlgorithm(SigningAlgorithmSpec.RSASSA_PKCS1_V1_5_SHA_256));
+
+        assertThat(verifyResponse.signatureValid()).isTrue();
+    }
+
+    @Test
+    @Order(14)
+    void signWithDigest() throws Exception {
+        CreateKeyResponse createResponse = kms.createKey(b -> b
+                .keyUsage(KeyUsageType.SIGN_VERIFY)
+                .customerMasterKeySpec(CustomerMasterKeySpec.ECC_NIST_P256));
+        String asymmetricKeyId = createResponse.keyMetadata().keyId();
+
+        // SHA-256 hash of "hello"
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest("hello".getBytes(StandardCharsets.UTF_8));
+        SdkBytes msg = SdkBytes.fromByteArray(digest);
+
+        SignResponse signResponse = kms.sign(b -> b
+                .keyId(asymmetricKeyId)
+                .message(msg)
+                .messageType(MessageType.DIGEST)
+                .signingAlgorithm(SigningAlgorithmSpec.ECDSA_SHA_256));
+
+        VerifyResponse verifyResponse = kms.verify(b -> b
+                .keyId(asymmetricKeyId)
+                .message(msg)
+                .messageType(MessageType.DIGEST)
+                .signature(signResponse.signature())
+                .signingAlgorithm(SigningAlgorithmSpec.ECDSA_SHA_256));
+
+        assertThat(verifyResponse.signatureValid()).isTrue();
+    }
+
+    @Test
+    @Order(15)
+    void getPublicKey() {
+        CreateKeyResponse createResponse = kms.createKey(b -> b
+                .keyUsage(KeyUsageType.SIGN_VERIFY)
+                .customerMasterKeySpec(CustomerMasterKeySpec.ECC_NIST_P256));
+        String asymmetricKeyId = createResponse.keyMetadata().keyId();
+
+        GetPublicKeyResponse pubResponse = kms.getPublicKey(b -> b.keyId(asymmetricKeyId));
+        assertThat(pubResponse.publicKey()).isNotNull();
+        assertThat(pubResponse.keyUsage()).isEqualTo(KeyUsageType.SIGN_VERIFY);
+        assertThat(pubResponse.customerMasterKeySpec()).isEqualTo(CustomerMasterKeySpec.ECC_NIST_P256);
+    }
+
+    @Test
+    @Order(16)
     void scheduleKeyDeletion() {
         kms.scheduleKeyDeletion(b -> b.keyId(keyId).pendingWindowInDays(7));
 
@@ -194,7 +274,7 @@ class KmsTest {
     }
 
     @Test
-    @Order(14)
+    @Order(17)
     void deleteAlias() {
         kms.deleteAlias(b -> b.aliasName(aliasName));
         // No exception means success

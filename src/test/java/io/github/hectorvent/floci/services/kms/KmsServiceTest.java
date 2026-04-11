@@ -9,6 +9,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -182,21 +186,45 @@ class KmsServiceTest {
 
     @Test
     void signAndVerify() {
-        KmsKey key = kmsService.createKey(null, REGION);
+        KmsKey key = kmsService.createKey("ecdsa key", "SIGN_VERIFY", "ECC_NIST_P256", null, Map.of(), REGION);
         byte[] message = "sign me".getBytes(StandardCharsets.UTF_8);
 
-        byte[] sig = kmsService.sign(key.getKeyId(), message, "RSASSA_PSS_SHA_256", REGION);
-        assertTrue(kmsService.verify(key.getKeyId(), message, sig, "RSASSA_PSS_SHA_256", REGION));
+        byte[] sig = kmsService.sign(key.getKeyId(), message, "ECDSA_SHA_256", REGION);
+        assertNotNull(sig);
+        assertTrue(kmsService.verify(key.getKeyId(), message, sig, "ECDSA_SHA_256", REGION));
+    }
+
+    @Test
+    void signAndVerifyWithRsa() {
+        KmsKey key = kmsService.createKey("rsa key", "SIGN_VERIFY", "RSA_2048", null, Map.of(), REGION);
+        byte[] message = "sign me".getBytes(StandardCharsets.UTF_8);
+
+        byte[] sig = kmsService.sign(key.getKeyId(), message, "RSASSA_PKCS1_V1_5_SHA_256", REGION);
+        assertNotNull(sig);
+        assertTrue(kmsService.verify(key.getKeyId(), message, sig, "RSASSA_PKCS1_V1_5_SHA_256", REGION));
     }
 
     @Test
     void verifyWithWrongSignatureReturnsFalse() {
-        KmsKey key = kmsService.createKey(null, REGION);
+        KmsKey key = kmsService.createKey("ecdsa key", "SIGN_VERIFY", "ECC_NIST_P256", null, Map.of(), REGION);
         byte[] message = "sign me".getBytes(StandardCharsets.UTF_8);
 
-        kmsService.sign(key.getKeyId(), message, "RSASSA_PSS_SHA_256", REGION);
         assertFalse(kmsService.verify(key.getKeyId(), message,
-                "wrong-sig".getBytes(StandardCharsets.UTF_8), "RSASSA_PSS_SHA_256", REGION));
+                "not-a-valid-sig".getBytes(StandardCharsets.UTF_8), "ECDSA_SHA_256", REGION));
+    }
+
+    @Test
+    void getPublicKeyReturnsValidDerBytes() throws Exception {
+        KmsKey key = kmsService.createKey("ecdsa key", "SIGN_VERIFY", "ECC_NIST_P256", null, Map.of(), REGION);
+        KmsKey publicKeyInfo = kmsService.getPublicKey(key.getKeyId(), REGION);
+
+        assertNotNull(publicKeyInfo.getPublicKeyEncoded());
+        byte[] derBytes = Base64.getDecoder().decode(publicKeyInfo.getPublicKeyEncoded());
+        
+        // Verify it can be parsed as a standard Java PublicKey
+        KeyFactory factory = KeyFactory.getInstance("EC");
+        PublicKey pub = factory.generatePublic(new X509EncodedKeySpec(derBytes));
+        assertNotNull(pub);
     }
 
     @Test

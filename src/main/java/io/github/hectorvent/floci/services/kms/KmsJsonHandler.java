@@ -31,6 +31,7 @@ public class KmsJsonHandler {
     public Response handle(String action, JsonNode request, String region) {
         return switch (action) {
             case "CreateKey" -> handleCreateKey(request, region);
+            case "GetPublicKey" -> handleGetPublicKey(request, region);
             case "DescribeKey" -> handleDescribeKey(request, region);
             case "ListKeys" -> handleListKeys(request, region);
             case "Encrypt" -> handleEncrypt(request, region);
@@ -61,12 +62,50 @@ public class KmsJsonHandler {
 
     private Response handleCreateKey(JsonNode request, String region) {
         String description = request.path("Description").asText(null);
+        String keyUsage = request.path("KeyUsage").asText("ENCRYPT_DECRYPT");
+        String customerMasterKeySpec = request.path("CustomerMasterKeySpec").asText("SYMMETRIC_DEFAULT");
         String policy = request.path("Policy").isMissingNode() ? null : request.path("Policy").asText(null);
         Map<String, String> tags = new HashMap<>();
         request.path("Tags").forEach(t -> tags.put(t.path("TagKey").asText(), t.path("TagValue").asText()));
-        KmsKey key = service.createKey(description, policy, tags, region);
+        
+        KmsKey key = service.createKey(description, keyUsage, customerMasterKeySpec, policy, tags, region);
         ObjectNode response = objectMapper.createObjectNode();
         response.set("KeyMetadata", keyToNode(key));
+        return Response.ok(response).build();
+    }
+
+    private Response handleGetPublicKey(JsonNode request, String region) {
+        String keyId = request.path("KeyId").asText();
+        KmsKey key = service.getPublicKey(keyId, region);
+        
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("KeyId", key.getArn());
+        response.put("PublicKey", key.getPublicKeyEncoded());
+        response.put("CustomerMasterKeySpec", key.getCustomerMasterKeySpec());
+        response.put("KeyUsage", key.getKeyUsage());
+        
+        if ("SIGN_VERIFY".equals(key.getKeyUsage())) {
+            ArrayNode algs = response.putArray("SigningAlgorithms");
+            if (key.getCustomerMasterKeySpec().startsWith("RSA")) {
+                algs.add("RSASSA_PSS_SHA_256");
+                algs.add("RSASSA_PSS_SHA_384");
+                algs.add("RSASSA_PSS_SHA_512");
+                algs.add("RSASSA_PKCS1_V1_5_SHA_256");
+                algs.add("RSASSA_PKCS1_V1_5_SHA_384");
+                algs.add("RSASSA_PKCS1_V1_5_SHA_512");
+            } else {
+                algs.add("ECDSA_SHA_256");
+                algs.add("ECDSA_SHA_384");
+                algs.add("ECDSA_SHA_512");
+            }
+        } else {
+            ArrayNode algs = response.putArray("EncryptionAlgorithms");
+            if (key.getCustomerMasterKeySpec().startsWith("RSA")) {
+                algs.add("RSAES_OAEP_SHA_1");
+                algs.add("RSAES_OAEP_SHA_256");
+            }
+        }
+        
         return Response.ok(response).build();
     }
 
@@ -163,8 +202,9 @@ public class KmsJsonHandler {
         String keyId = request.path("KeyId").asText();
         byte[] message = Base64.getDecoder().decode(request.path("Message").asText());
         String algorithm = request.path("SigningAlgorithm").asText("RSASSA_PSS_SHA_256");
+        String messageType = request.path("MessageType").asText("RAW");
 
-        byte[] signature = service.sign(keyId, message, algorithm, region);
+        byte[] signature = service.sign(keyId, message, algorithm, messageType, region);
 
         ObjectNode response = objectMapper.createObjectNode();
         response.put("KeyId", service.describeKey(keyId, region).getArn());
@@ -178,8 +218,9 @@ public class KmsJsonHandler {
         byte[] message = Base64.getDecoder().decode(request.path("Message").asText());
         byte[] signature = Base64.getDecoder().decode(request.path("Signature").asText());
         String algorithm = request.path("SigningAlgorithm").asText("RSASSA_PSS_SHA_256");
+        String messageType = request.path("MessageType").asText("RAW");
 
-        boolean valid = service.verify(keyId, message, signature, algorithm, region);
+        boolean valid = service.verify(keyId, message, signature, algorithm, messageType, region);
 
         ObjectNode response = objectMapper.createObjectNode();
         response.put("KeyId", service.describeKey(keyId, region).getArn());
