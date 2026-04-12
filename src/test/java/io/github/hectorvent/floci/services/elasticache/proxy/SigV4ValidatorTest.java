@@ -117,6 +117,25 @@ class SigV4ValidatorTest {
     }
 
     @Test
+    void validateAcceptsTokenWithUrlEncodedUser() throws Exception {
+        IamService iamService = IamServiceTestHelper.iamServiceWithAccessKey("AKIDCACHE", "secret-cache");
+
+        SigV4Validator validator = new SigV4Validator(iamService);
+        // Username with characters that require URL encoding exercises the
+        // encoding path independently of the validator's decode logic
+        String token = SigV4TokenTestHelper.createElastiCacheToken(
+                "cache-cluster-01",
+                "user+name@domain.com",
+                "AKIDCACHE",
+                "secret-cache",
+                Instant.now().minusSeconds(60),
+                900
+        );
+
+        assertTrue(validator.validate(token, "cache-cluster-01"));
+    }
+
+    @Test
     void validateRejectsTokenMissingActionParameter() throws Exception {
         IamService iamService = IamServiceTestHelper.iamServiceWithAccessKey("AKIDCACHE", "secret-cache");
 
