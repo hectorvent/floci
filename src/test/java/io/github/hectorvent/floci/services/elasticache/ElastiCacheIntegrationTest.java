@@ -33,8 +33,11 @@ class ElastiCacheIntegrationTest {
     private static final String INITIAL_PASSWORD = "test-password-1";
     private static final String UPDATED_PASSWORD = "test-password-2";
     private static final String GROUP_AUTH_TOKEN = "group-auth-token";
+    private static final String CROSS_GROUP_ID = "it-ec-group-cross";
+    private static final String CROSS_GROUP_AUTH_TOKEN = "cross-group-token";
 
     private static int firstProxyPort;
+    private static int crossGroupPort;
 
     @BeforeAll
     static void requireDocker() {
@@ -132,6 +135,29 @@ class ElastiCacheIntegrationTest {
 
     @Test
     @Order(7)
+    void unassociatedUserIsRejected() throws Exception {
+        // Before associating the user with the group, auth should fail
+        String reply = sendCommand(firstProxyPort, respArray("AUTH", USER_NAME, INITIAL_PASSWORD));
+        assertEquals("-ERR invalid username-password pair or user is disabled.\r\n", reply);
+    }
+
+    @Test
+    @Order(8)
+    void associateUserWithGroup() {
+        given()
+            .formParam("Action", "ModifyReplicationGroup")
+            .formParam("ReplicationGroupId", GROUP_ID)
+            .formParam("UserGroupIdsToAdd.member.1", USER_ID)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("ModifyReplicationGroupResponse.ModifyReplicationGroupResult.ReplicationGroup.ReplicationGroupId", equalTo(GROUP_ID));
+    }
+
+    @Test
+    @Order(9)
     void describeUsersIncludesCreatedUser() {
         given()
             .formParam("Action", "DescribeUsers")
@@ -145,7 +171,40 @@ class ElastiCacheIntegrationTest {
     }
 
     @Test
-    @Order(8)
+    @Order(10)
+    void crossGroupAuthIsRejected() throws Exception {
+        // Create a second group and verify the user (associated with GROUP_ID only) cannot auth
+        crossGroupPort = given()
+                .formParam("Action", "CreateReplicationGroup")
+                .formParam("ReplicationGroupId", CROSS_GROUP_ID)
+                .formParam("ReplicationGroupDescription", "Cross-group isolation test")
+                .formParam("AuthToken", CROSS_GROUP_AUTH_TOKEN)
+                .header("Authorization", AUTH_HEADER)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+            .extract()
+                .xmlPath()
+                .getInt("CreateReplicationGroupResponse.CreateReplicationGroupResult.ReplicationGroup.ConfigurationEndpoint.Port");
+
+        // User associated with GROUP_ID should be rejected on CROSS_GROUP_ID
+        String reply = sendCommand(crossGroupPort, respArray("AUTH", USER_NAME, INITIAL_PASSWORD));
+        assertEquals("-ERR invalid username-password pair or user is disabled.\r\n", reply);
+
+        // Clean up the cross-group
+        given()
+            .formParam("Action", "DeleteReplicationGroup")
+            .formParam("ReplicationGroupId", CROSS_GROUP_ID)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(11)
     void userPasswordAuthWorks() throws Exception {
         try (Socket socket = openSocket(firstProxyPort)) {
             write(socket, respArray("AUTH", USER_NAME, INITIAL_PASSWORD));
@@ -157,7 +216,7 @@ class ElastiCacheIntegrationTest {
     }
 
     @Test
-    @Order(9)
+    @Order(12)
     void modifyUserPasswordInvalidatesOldPasswordAndAcceptsNewPassword() throws Exception {
         given()
             .formParam("Action", "ModifyUser")
@@ -184,7 +243,7 @@ class ElastiCacheIntegrationTest {
     }
 
     @Test
-    @Order(10)
+    @Order(13)
     void deleteUserRemovesUserFromDescribeUsers() {
         given()
             .formParam("Action", "DeleteUser")
@@ -207,7 +266,7 @@ class ElastiCacheIntegrationTest {
     }
 
     @Test
-    @Order(11)
+    @Order(14)
     void deleteReplicationGroupReleasesProxyPortForReuse() {
         given()
             .formParam("Action", "DeleteReplicationGroup")
