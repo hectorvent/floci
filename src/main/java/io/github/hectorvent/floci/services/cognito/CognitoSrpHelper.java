@@ -154,7 +154,8 @@ final class CognitoSrpHelper {
      * Computes the expected PASSWORD_CLAIM_SIGNATURE.
      *
      * @param sessionKey   derived session key bytes
-     * @param userPoolId   full user pool ID (e.g., "us-east-1_ABC123")
+     * @param userPoolId   full user pool ID (e.g., "us-east-1_ABC123") or short name ("ABC123");
+     *                     only the part after the underscore is used in the HMAC message.
      * @param username     Cognito username
      * @param secretBlock  raw bytes of the SECRET_BLOCK
      * @param timestamp    formatted timestamp string sent by the client
@@ -165,7 +166,7 @@ final class CognitoSrpHelper {
             byte[] hkdfKey = hkdf(sessionKey, INFO_BITS);
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(hkdfKey, "HmacSHA256"));
-            mac.update(userPoolId.getBytes(StandardCharsets.UTF_8));
+            mac.update(extractPoolName(userPoolId).getBytes(StandardCharsets.UTF_8));
             mac.update(username.getBytes(StandardCharsets.UTF_8));
             mac.update(secretBlock);
             mac.update(timestamp.getBytes(StandardCharsets.UTF_8));
@@ -177,6 +178,9 @@ final class CognitoSrpHelper {
 
     /**
      * Verifies the client's PASSWORD_CLAIM_SIGNATURE.
+     *
+     * @param userPoolId full user pool ID (e.g., "us-east-1_ABC123") or short name ("ABC123");
+     *                   only the part after the underscore is used in the HMAC message.
      */
     static boolean verifySignature(byte[] sessionKey, String userPoolId, String username,
                                    byte[] secretBlock, String timestamp, String claimSignatureBase64) {
