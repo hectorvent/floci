@@ -200,7 +200,10 @@ class ElastiCacheTest {
         String rejectReply = sendCommand(firstProxyPort, respArray("AUTH", userName, "user-password-1"));
         assertThat(rejectReply).isEqualTo("-ERR invalid username-password pair or user is disabled.\r\n");
 
-        // Associate user with group via ModifyReplicationGroup
+        // Associate user with group via ModifyReplicationGroup.
+        // Known deviation: Floci treats userGroupIdsToAdd as raw user IDs because
+        // UserGroup resources are not yet implemented. In real AWS, this parameter
+        // accepts UserGroupIds (which are separate resources containing users).
         var response = elasticache.modifyReplicationGroup(ModifyReplicationGroupRequest.builder()
                 .replicationGroupId(groupId)
                 .userGroupIdsToAdd(userId)
