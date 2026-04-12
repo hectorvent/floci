@@ -311,15 +311,33 @@ public class SecretsManagerService {
 
     private Secret resolveSecret(String secretId, String region) {
         if (secretId.startsWith("arn:")) {
+            // 1. Exact full-ARN match
             List<Secret> found = store.scan(key -> {
                 Secret s = store.get(key).orElse(null);
                 return s != null && secretId.equals(s.getArn());
             });
-            if (found.isEmpty()) {
-                throw new AwsException("ResourceNotFoundException",
-                        "Secrets Manager can't find the specified secret.", 400);
+            if (!found.isEmpty()) {
+                return found.getFirst();
             }
-            return found.getFirst();
+
+            // 2. Partial-ARN fallback: extract region + name and do a name-based lookup.
+            //    AWS supports ARNs without the trailing "-XXXXXX" random suffix.
+            //    ARN format: arn:aws:secretsmanager:<region>:<account>:secret:<name>
+            String smPrefix = "arn:aws:secretsmanager:";
+            if (secretId.startsWith(smPrefix)) {
+                String[] parts = secretId.substring(smPrefix.length()).split(":", 4);
+                if (parts.length == 4 && "secret".equals(parts[2])) {
+                    String arnRegion = parts[0];
+                    String nameFromArn = parts[3];
+                    Secret byName = store.get(regionKey(arnRegion, nameFromArn)).orElse(null);
+                    if (byName != null) {
+                        return byName;
+                    }
+                }
+            }
+
+            throw new AwsException("ResourceNotFoundException",
+                    "Secrets Manager can't find the specified secret.", 400);
         }
 
         String storageKey = regionKey(region, secretId);

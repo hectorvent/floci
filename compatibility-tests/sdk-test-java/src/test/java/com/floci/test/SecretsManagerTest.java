@@ -307,8 +307,60 @@ class SecretsManagerTest {
                 .isEqualTo(400);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #340 — GetSecretValue must resolve partial ARNs (no random suffix)
+    // ─────────────────────────────────────────────────────────────────────────
+
     @Test
     @Order(17)
+    @DisplayName("#340 getSecretValue resolves partial ARN (without random suffix)")
+    void getSecretValueByPartialArn() {
+        Assumptions.assumeTrue(secretArn != null, "CreateSecret must succeed first");
+
+        // Full ARN: arn:aws:secretsmanager:...:secret:<name>-XXXXXX  (7 chars: hyphen + 6)
+        // Partial:  arn:aws:secretsmanager:...:secret:<name>
+        String partialArn = secretArn.substring(0, secretArn.length() - 7);
+
+        GetSecretValueResponse response = sm.getSecretValue(GetSecretValueRequest.builder()
+                .secretId(partialArn)
+                .build());
+
+        assertThat(response.secretString()).isEqualTo(UPDATED_VALUE);
+        assertThat(response.name()).isEqualTo(secretName);
+    }
+
+    @Test
+    @Order(18)
+    @DisplayName("#340 getSecretValue resolves partial ARN for secret with slashes in name")
+    void getSecretValueByPartialArnWithSlashesInName() {
+        String slashName = "compat-340/dev/database-" + System.currentTimeMillis();
+
+        try {
+            CreateSecretResponse created = sm.createSecret(CreateSecretRequest.builder()
+                    .name(slashName)
+                    .secretString("db-pass")
+                    .build());
+
+            String partialArn = created.arn().substring(0, created.arn().length() - 7);
+
+            GetSecretValueResponse response = sm.getSecretValue(GetSecretValueRequest.builder()
+                    .secretId(partialArn)
+                    .build());
+
+            assertThat(response.secretString()).isEqualTo("db-pass");
+            assertThat(response.name()).isEqualTo(slashName);
+        } finally {
+            try {
+                sm.deleteSecret(DeleteSecretRequest.builder()
+                        .secretId(slashName)
+                        .forceDeleteWithoutRecovery(true)
+                        .build());
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    @Order(19)
     void batchGetSecretValue() {
         String s1 = "batch-secret-1-" + System.currentTimeMillis();
         String s2 = "batch-secret-2-" + System.currentTimeMillis();

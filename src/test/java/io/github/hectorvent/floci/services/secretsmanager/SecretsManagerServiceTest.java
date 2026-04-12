@@ -235,6 +235,41 @@ class SecretsManagerServiceTest {
     }
 
     @Test
+    void getSecretValueByPartialArnSucceeds() {
+        Secret secret = service.createSecret("my-secret", "value", null, null, null, null, REGION);
+        // Full ARN: arn:aws:secretsmanager:us-east-1:000000000000:secret:my-secret-XXXXXX
+        // Partial:  arn:aws:secretsmanager:us-east-1:000000000000:secret:my-secret
+        String partialArn = secret.getArn().substring(0, secret.getArn().length() - 7);
+
+        SecretVersion version = service.getSecretValue(partialArn, null, null, REGION);
+        assertEquals("value", version.getSecretString());
+    }
+
+    @Test
+    void getSecretValueByPartialArnWithSlashesInNameSucceeds() {
+        Secret secret = service.createSecret("my-app/dev/database", "db-pass", null, null, null, null, REGION);
+        String partialArn = secret.getArn().substring(0, secret.getArn().length() - 7);
+
+        SecretVersion version = service.getSecretValue(partialArn, null, null, REGION);
+        assertEquals("db-pass", version.getSecretString());
+    }
+
+    @Test
+    void getSecretValueByFullArnStillWorks() {
+        Secret secret = service.createSecret("my-secret", "value", null, null, null, null, REGION);
+
+        SecretVersion version = service.getSecretValue(secret.getArn(), null, null, REGION);
+        assertEquals("value", version.getSecretString());
+    }
+
+    @Test
+    void getSecretValueByNonExistentPartialArnThrows() {
+        String nonExistent = "arn:aws:secretsmanager:us-east-1:000000000000:secret:does-not-exist";
+        assertThrows(AwsException.class, () ->
+                service.getSecretValue(nonExistent, null, null, REGION));
+    }
+
+    @Test
     void kmsKeyIdIsPreserved() {
         String kmsKeyId = "arn:aws:kms:us-east-1:000000000000:key/my-key";
         // Signature: name, secretString, secretBinary, description, kmsKeyId, tags, region
