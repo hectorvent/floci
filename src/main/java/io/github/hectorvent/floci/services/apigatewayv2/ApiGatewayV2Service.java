@@ -185,12 +185,19 @@ public class ApiGatewayV2Service {
         String pattern = routeKey.substring(space + 1);
         if (!method.equalsIgnoreCase(httpMethod)) return false;
 
-        // Convert path template to regex: {param} → [^/]+, {proxy+} → .+
-        String regex = "^" + Pattern.quote(pattern)
-                .replace("\\{proxy+\\}", "\\E.+\\Q")
-                .replace("\\{", "\\E[^/]+\\Q")
-                .replaceAll("\\\\Q\\\\E", "") + "$";
-        return path.matches(regex);
+        // Build regex from path template: {proxy+} -> .+, {param} -> [^/]+
+        // Quote literal segments to avoid regex injection from path patterns
+        StringBuilder regex = new StringBuilder("^");
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\{([^}]*)}").matcher(pattern);
+        int last = 0;
+        while (m.find()) {
+            regex.append(Pattern.quote(pattern.substring(last, m.start())));
+            regex.append(m.group(1).endsWith("+") ? ".+" : "[^/]+");
+            last = m.end();
+        }
+        regex.append(Pattern.quote(pattern.substring(last)));
+        regex.append("$");
+        return path.matches(regex.toString());
     }
 
     // ──────────────────────────── Integration CRUD ────────────────────────────
