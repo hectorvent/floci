@@ -274,7 +274,7 @@ class ApiGatewayV2ManagementTest {
         deploymentId = response.deploymentId();
 
         assertThat(deploymentId).isNotBlank();
-        assertThat(response.deploymentStatus()).isEqualTo("DEPLOYED");
+        assertThat(response.deploymentStatusAsString()).isEqualTo("DEPLOYED");
         assertThat(response.description()).isEqualTo("phase2 deployment");
         assertThat(response.createdDate()).isNotNull();
     }
