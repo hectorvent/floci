@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -181,6 +182,7 @@ class AppConfigIntegrationTest {
     }
 
     @Test @Order(12)
+    @DisplayName("Poll interval: requested 60s but emulator returns 15s (known deviation from AWS)")
     void requiredMinimumPollIntervalIsStoredButNotEnforced() {
         intervalToken = given()
                 .contentType(ContentType.JSON)
@@ -248,6 +250,8 @@ class AppConfigIntegrationTest {
                 .then()
                 .statusCode(200)
                 .header("Content-Type", equalTo("application/octet-stream"))
+                // HTTP transport returns "" for empty Version-Label.
+                // SDK deserializes this as null (see AppConfigTest).
                 .header("Version-Label", equalTo(""))
                 .body(equalTo(""));
     }

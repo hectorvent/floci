@@ -204,6 +204,7 @@ class AppConfigTest {
 
     @Test
     @Order(12)
+    @DisplayName("Poll interval: requested 60s but emulator returns 15s (known deviation from AWS)")
     void requiredMinimumPollIntervalIsAcceptedButNotEnforced() {
         var sessionResponse = appConfigData.startConfigurationSession(StartConfigurationSessionRequest.builder()
                 .applicationIdentifier(applicationId)
@@ -216,11 +217,17 @@ class AppConfigTest {
         GetLatestConfigurationResponse firstResponse = appConfigData.getLatestConfiguration(GetLatestConfigurationRequest.builder()
                 .configurationToken(intervalSessionToken)
                 .build());
+
+        // Emulator always returns 15s regardless of the requested interval.
+        // AWS would return the requested 60s. Pinning current emulator behavior.
+        assertThat(firstResponse.nextPollIntervalInSeconds()).isEqualTo(15);
+        assertThat(firstResponse.nextPollConfigurationToken()).isNotNull();
+
         GetLatestConfigurationResponse secondResponse = appConfigData.getLatestConfiguration(GetLatestConfigurationRequest.builder()
                 .configurationToken(firstResponse.nextPollConfigurationToken())
                 .build());
 
-        assertThat(firstResponse.nextPollConfigurationToken()).isNotNull();
+        assertThat(secondResponse.nextPollIntervalInSeconds()).isEqualTo(15);
         assertThat(secondResponse.nextPollConfigurationToken()).isNotNull();
     }
 
@@ -255,6 +262,8 @@ class AppConfigTest {
 
         assertThat(response.configuration().asByteArray()).isEmpty();
         assertThat(response.contentType()).isEqualTo("application/octet-stream");
+        // SDK deserializes the empty Version-Label header as null.
+        // The RestAssured internal test sees "" (raw HTTP header value).
         assertThat(response.versionLabel()).isNull();
     }
 }
