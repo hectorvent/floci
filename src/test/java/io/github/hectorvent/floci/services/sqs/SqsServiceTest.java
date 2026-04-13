@@ -288,4 +288,27 @@ class SqsServiceTest {
         assertThrows(AwsException.class, () ->
                 sqsService.sendMessage(queue.getQueueUrl(), "msg", 0, "group1", null));
     }
+
+    @Test
+    void receiveMessageUsesQueueVisibilityTimeoutWhenNotSpecified() {
+        // Create queue with a short visibility timeout (1 second)
+        Queue queue = sqsService.createQueue("short-vt-queue",
+                Map.of("VisibilityTimeout", "1"));
+        sqsService.sendMessage(queue.getQueueUrl(), "test-msg", 0);
+
+        // Receive without specifying visibility timeout (-1 means "use queue default")
+        List<Message> first = sqsService.receiveMessage(queue.getQueueUrl(), 1, -1, 0);
+        assertEquals(1, first.size());
+
+        // Message should be invisible immediately after receive
+        List<Message> second = sqsService.receiveMessage(queue.getQueueUrl(), 1, -1, 0);
+        assertTrue(second.isEmpty());
+
+        // Wait for the queue's visibility timeout (1s) to expire, not the global default (30s)
+        try { Thread.sleep(1100); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+
+        // Message should now be visible again
+        List<Message> third = sqsService.receiveMessage(queue.getQueueUrl(), 1, -1, 0);
+        assertEquals(1, third.size(), "Message should become visible after queue's VisibilityTimeout (1s), not global default (30s)");
+    }
 }

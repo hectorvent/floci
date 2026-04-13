@@ -479,7 +479,13 @@ public class SqsService {
             return Collections.emptyList();
         }
 
-        int effectiveTimeout = visibilityTimeout >= 0 ? visibilityTimeout : defaultVisibilityTimeout;
+        int effectiveTimeout;
+        if (visibilityTimeout >= 0) {
+            effectiveTimeout = visibilityTimeout;
+        } else {
+            String queueVt = queue.getAttributes().get("VisibilityTimeout");
+            effectiveTimeout = queueVt != null ? Integer.parseInt(queueVt) : defaultVisibilityTimeout;
+        }
 
         RedrivePolicy rp = getOrParseRedrivePolicy(queue, storageKey);
         int maxReceiveCount = rp != null ? rp.maxReceiveCount() : -1;
