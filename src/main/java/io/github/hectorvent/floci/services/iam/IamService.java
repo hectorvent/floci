@@ -12,6 +12,7 @@ import io.github.hectorvent.floci.services.iam.model.IamUser;
 import io.github.hectorvent.floci.services.iam.model.InstanceProfile;
 import io.github.hectorvent.floci.services.iam.model.PolicyVersion;
 import com.fasterxml.jackson.core.type.TypeReference;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -67,6 +68,25 @@ public class IamService {
         this.accessKeys = accessKeys;
         this.instanceProfiles = instanceProfiles;
         this.accountId = accountId;
+    }
+
+    @PostConstruct
+    void seedAwsManagedPolicies() {
+        int seeded = 0;
+        for (AwsManagedPolicies.ManagedPolicyDef def : AwsManagedPolicies.POLICIES) {
+            String arn = def.arn();
+            if (policies.get(arn).isPresent()) {
+                continue;
+            }
+            String policyId = "ANPA" + randomId(16);
+            IamPolicy policy = new IamPolicy(policyId, def.name(), def.path(), arn,
+                    def.description(), AwsManagedPolicies.PERMISSIVE_DOCUMENT);
+            policies.put(arn, policy);
+            seeded++;
+        }
+        if (seeded > 0) {
+            LOG.infov("Seeded {0} AWS managed policies", seeded);
+        }
     }
 
     // =========================================================================
@@ -339,6 +359,14 @@ public class IamService {
         String prefix = pathPrefix != null ? pathPrefix : "/";
         return policies.scan(k -> true).stream()
                 .filter(p -> p.getPath().startsWith(prefix))
+                .filter(p -> {
+                    if ("AWS".equalsIgnoreCase(scope)) {
+                        return p.getArn().startsWith(AwsManagedPolicies.ARN_PREFIX);
+                    } else if ("Local".equalsIgnoreCase(scope)) {
+                        return !p.getArn().startsWith(AwsManagedPolicies.ARN_PREFIX);
+                    }
+                    return true;
+                })
                 .toList();
     }
 

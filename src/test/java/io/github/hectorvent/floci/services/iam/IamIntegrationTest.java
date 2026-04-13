@@ -74,6 +74,55 @@ class IamIntegrationTest {
     }
 
     // =========================================================================
+    // AWS Managed Policies (seeded at startup)
+    // =========================================================================
+
+    @Test
+    @Order(5)
+    void getManagedPolicy() {
+        given()
+            .formParam("Action", "GetPolicy")
+            .formParam("PolicyArn", "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=test/20260227/us-east-1/iam/aws4_request")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("GetPolicyResponse.GetPolicyResult.Policy.PolicyName",
+                    equalTo("AWSLambdaBasicExecutionRole"))
+            .body("GetPolicyResponse.GetPolicyResult.Policy.Arn",
+                    equalTo("arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"));
+    }
+
+    @Test
+    @Order(35)
+    void attachManagedPolicyToRole() {
+        given()
+            .formParam("Action", "CreateRole")
+            .formParam("RoleName", "ManagedPolicyTestRole")
+            .formParam("Path", "/")
+            .formParam("AssumeRolePolicyDocument", TRUST_POLICY)
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=test/20260227/us-east-1/iam/aws4_request")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .formParam("Action", "AttachRolePolicy")
+            .formParam("RoleName", "ManagedPolicyTestRole")
+            .formParam("PolicyArn", "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=test/20260227/us-east-1/iam/aws4_request")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    // =========================================================================
     // Users
     // =========================================================================
 
