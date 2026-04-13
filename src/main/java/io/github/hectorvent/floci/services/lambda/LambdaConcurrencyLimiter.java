@@ -6,6 +6,7 @@ import io.github.hectorvent.floci.services.lambda.model.LambdaFunction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -35,9 +36,15 @@ public class LambdaConcurrencyLimiter {
     /** Reserved values partitioned by region. */
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, Integer>> reservedByRegion
             = new ConcurrentHashMap<>();
+    /**
+     * Running sum of {@link #reservedByRegion} values per region. Maintained
+     * under {@link #reservedLock} on every mutation so that unreserved
+     * acquisition can read a consistent cap in O(1).
+     */
+    private final ConcurrentHashMap<String, AtomicInteger> regionReservedTotal = new ConcurrentHashMap<>();
     /** Unreserved inflight counters partitioned by region. */
     private final ConcurrentHashMap<String, AtomicInteger> unreservedByRegion = new ConcurrentHashMap<>();
-    /** Guards atomic validate-then-set operations on the reserved maps. */
+    /** Guards atomic validate-then-set and rollback operations on the reserved state. */
     private final Object reservedLock = new Object();
     private final int regionLimit;
     private final int unreservedMin;
@@ -83,11 +90,13 @@ public class LambdaConcurrencyLimiter {
 
     private Permit acquireUnreserved(String region) {
         AtomicInteger counter = unreservedByRegion.computeIfAbsent(region, k -> new AtomicInteger());
+        AtomicInteger reservedTotal = regionTotal(region);
         while (true) {
             int current = counter.get();
-            // Recompute cap each spin so a concurrent setReserved is observed
-            // promptly and we do not grant permits above the live pool.
-            int cap = Math.max(0, regionLimit - totalReserved(region));
+            // reservedTotal is an AtomicInteger updated under reservedLock on
+            // each reserved change, so the cap is consistent and computed in
+            // O(1) regardless of the number of reserved functions.
+            int cap = Math.max(0, regionLimit - reservedTotal.get());
             if (current >= cap) {
                 throw throttle();
             }
@@ -105,7 +114,7 @@ public class LambdaConcurrencyLimiter {
      */
     public Integer setReserved(String functionArn, int value) {
         synchronized (reservedLock) {
-            return reservedOf(regionOf(functionArn)).put(functionArn, value);
+            return writeReserved(functionArn, value);
         }
     }
 
@@ -114,7 +123,7 @@ public class LambdaConcurrencyLimiter {
      */
     public Integer clearReserved(String functionArn) {
         synchronized (reservedLock) {
-            return reservedOf(regionOf(functionArn)).remove(functionArn);
+            return writeReserved(functionArn, null);
         }
     }
 
@@ -125,7 +134,8 @@ public class LambdaConcurrencyLimiter {
      * unreserved capacity below the minimum.
      *
      * @return the previous reserved value for this ARN, or {@code null} if none;
-     *         callers may use it to roll back on a subsequent persistence failure.
+     *         callers may use it with {@link #rollbackReservedIfExpected} on a
+     *         subsequent persistence failure.
      * @throws AwsException {@code LimitExceededException} if the value would
      *         drop unreserved below the minimum.
      */
@@ -133,7 +143,8 @@ public class LambdaConcurrencyLimiter {
         String region = regionOf(functionArn);
         synchronized (reservedLock) {
             ConcurrentHashMap<String, Integer> regionReserved = reservedOf(region);
-            int otherReserved = sum(regionReserved) - regionReserved.getOrDefault(functionArn, 0);
+            int otherReserved = regionTotal(region).get()
+                    - regionReserved.getOrDefault(functionArn, 0);
             int maxAllowed = regionLimit - unreservedMin - otherReserved;
             if (target > maxAllowed) {
                 throw new AwsException("LimitExceededException",
@@ -141,7 +152,26 @@ public class LambdaConcurrencyLimiter {
                         + "UnreservedConcurrentExecution below its minimum value of ["
                         + unreservedMin + "].", 400);
             }
-            return regionReserved.put(functionArn, target);
+            return writeReserved(functionArn, target);
+        }
+    }
+
+    /**
+     * Conditionally restores a prior reserved value if the current value still
+     * matches {@code expectedCurrent}. Used by callers that updated the limiter
+     * before a persistence step and need to undo the change on failure without
+     * clobbering a concurrent successful write.
+     */
+    public void rollbackReservedIfExpected(String functionArn,
+                                           Integer expectedCurrent,
+                                           Integer rollbackTo) {
+        synchronized (reservedLock) {
+            Integer actual = reservedOf(regionOf(functionArn)).get(functionArn);
+            if (!Objects.equals(actual, expectedCurrent)) {
+                // A newer update has superseded ours; leave it alone.
+                return;
+            }
+            writeReserved(functionArn, rollbackTo);
         }
     }
 
@@ -149,12 +179,12 @@ public class LambdaConcurrencyLimiter {
     public void reset(String functionArn) {
         inflight.remove(functionArn);
         synchronized (reservedLock) {
-            reservedOf(regionOf(functionArn)).remove(functionArn);
+            writeReserved(functionArn, null);
         }
     }
 
     public int totalReserved(String region) {
-        return sum(reservedOf(region));
+        return regionTotal(region).get();
     }
 
     public int availableUnreserved(String region) {
@@ -173,16 +203,30 @@ public class LambdaConcurrencyLimiter {
         return counter == null ? 0 : counter.get();
     }
 
+    /**
+     * Must be called with {@link #reservedLock} held. Updates the per-function
+     * reserved entry and the region's running total in one atomic step from the
+     * perspective of any code that also holds the lock.
+     */
+    private Integer writeReserved(String functionArn, Integer newValue) {
+        String region = regionOf(functionArn);
+        ConcurrentHashMap<String, Integer> regionReserved = reservedOf(region);
+        Integer previous = newValue == null
+                ? regionReserved.remove(functionArn)
+                : regionReserved.put(functionArn, newValue);
+        int delta = (newValue == null ? 0 : newValue) - (previous == null ? 0 : previous);
+        if (delta != 0) {
+            regionTotal(region).addAndGet(delta);
+        }
+        return previous;
+    }
+
     private ConcurrentHashMap<String, Integer> reservedOf(String region) {
         return reservedByRegion.computeIfAbsent(region, k -> new ConcurrentHashMap<>());
     }
 
-    private static int sum(ConcurrentHashMap<String, Integer> map) {
-        int s = 0;
-        for (Integer v : map.values()) {
-            s += v;
-        }
-        return s;
+    private AtomicInteger regionTotal(String region) {
+        return regionReservedTotal.computeIfAbsent(region, k -> new AtomicInteger());
     }
 
     /**

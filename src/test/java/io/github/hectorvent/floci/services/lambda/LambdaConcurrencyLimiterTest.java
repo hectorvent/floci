@@ -133,6 +133,38 @@ class LambdaConcurrencyLimiterTest {
     }
 
     @Test
+    void rollbackReservedIfExpected_restoresWhenUnchanged() {
+        LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter();
+        limiter.setReserved(ARN, 5);
+        limiter.setReserved(ARN, 10); // now at 10
+        limiter.rollbackReservedIfExpected(ARN, 10, 5);
+        assertEquals(5, limiter.totalReserved(REGION));
+    }
+
+    @Test
+    void rollbackReservedIfExpected_skipsWhenConcurrentlyChanged() {
+        LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter();
+        // Request A wrote 10 (previous null), then another request superseded to 20
+        limiter.setReserved(ARN, 10);
+        limiter.setReserved(ARN, 20);
+        // A's rollback expects 10 still present — must not clobber 20
+        limiter.rollbackReservedIfExpected(ARN, 10, null);
+        assertEquals(20, limiter.totalReserved(REGION));
+    }
+
+    @Test
+    void totalReserved_tracksOverlappingUpdates() {
+        LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter();
+        limiter.setReserved(ARN, 50);
+        limiter.setReserved(ARN2, 30);
+        assertEquals(80, limiter.totalReserved(REGION));
+        limiter.setReserved(ARN, 100); // +50
+        assertEquals(130, limiter.totalReserved(REGION));
+        limiter.clearReserved(ARN2); // -30
+        assertEquals(100, limiter.totalReserved(REGION));
+    }
+
+    @Test
     void regions_areIndependent() {
         LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter(1000, 100);
         // Fill one region's reserved pool near the limit

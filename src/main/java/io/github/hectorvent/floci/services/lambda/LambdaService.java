@@ -648,7 +648,13 @@ public class LambdaService {
             functionStore.save(region, fn);
         } catch (RuntimeException e) {
             if (limiterUpdated) {
-                rollbackReserved(fn.getFunctionArn(), previousReserved);
+                // Only roll back if the limiter still reflects the value we wrote.
+                // A concurrent successful Put for the same function must not be
+                // clobbered by our rollback.
+                concurrencyLimiter.rollbackReservedIfExpected(
+                        fn.getFunctionArn(),
+                        reservedConcurrentExecutions,
+                        previousReserved);
             }
             throw e;
         }
@@ -673,17 +679,14 @@ public class LambdaService {
             functionStore.save(region, fn);
         } catch (RuntimeException e) {
             if (limiterCleared && previousReserved != null) {
-                concurrencyLimiter.setReserved(fn.getFunctionArn(), previousReserved);
+                // Only restore if the limiter is still in the cleared state we
+                // left it in; a concurrent successful Put must not be clobbered.
+                concurrencyLimiter.rollbackReservedIfExpected(
+                        fn.getFunctionArn(),
+                        null,
+                        previousReserved);
             }
             throw e;
-        }
-    }
-
-    private void rollbackReserved(String functionArn, Integer previousReserved) {
-        if (previousReserved == null) {
-            concurrencyLimiter.clearReserved(functionArn);
-        } else {
-            concurrencyLimiter.setReserved(functionArn, previousReserved);
         }
     }
 
