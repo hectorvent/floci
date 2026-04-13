@@ -124,7 +124,7 @@
         <dependency>
             <groupId>com.networknt</groupId>
             <artifactId>json-schema-validator</artifactId>
-            <version>1.5.8</version>
+            <version>3.0.1</version>
         </dependency>
 
         <!-- OpenAPI/Swagger parser (API Gateway ImportRestApi) -->
