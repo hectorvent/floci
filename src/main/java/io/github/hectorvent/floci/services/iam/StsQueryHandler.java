@@ -69,6 +69,9 @@ public class StsQueryHandler {
         String assumedRoleArn = "arn:aws:sts::" + accountId + ":assumed-role/" + roleName + "/" + sessionName;
         String assumedRoleId = "AROA" + randomId(16) + ":" + sessionName;
 
+        // Register session so IAM enforcement can resolve the role's policies
+        iamService.registerSession(accessKeyId, roleArn, expiration);
+
         String result = new XmlBuilder()
                 .raw(credentialsXml(accessKeyId, secretKey, sessionToken, expiration))
                 .start("AssumedRoleUser")
