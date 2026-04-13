@@ -152,7 +152,7 @@ public class CognitoJsonHandler {
         List<UserPoolClient> clients = service.listUserPoolClients(request.path("UserPoolId").asText());
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode items = response.putArray("UserPoolClients");
-        clients.forEach(c -> items.add(clientToNode(c)));
+        clients.forEach(c -> items.add(clientToDescriptionNode(c)));
         return Response.ok(response).build();
     }
 
@@ -462,6 +462,14 @@ public class CognitoJsonHandler {
         node.set("AccountRecoverySetting", objectMapper.valueToTree(p.getAccountRecoverySetting() != null ? p.getAccountRecoverySetting() : new HashMap<>()));
         node.put("UserPoolTier", p.getUserPoolTier() != null ? p.getUserPoolTier() : "ESSENTIALS");
 
+        return node;
+    }
+
+    private ObjectNode clientToDescriptionNode(UserPoolClient c) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("ClientId", c.getClientId());
+        node.put("ClientName", c.getClientName());
+        node.put("UserPoolId", c.getUserPoolId());
         return node;
     }
 

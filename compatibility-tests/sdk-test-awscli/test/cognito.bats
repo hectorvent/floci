@@ -32,6 +32,33 @@ teardown() {
     [ -n "$CLIENT_ID" ]
 }
 
+@test "Cognito: list user pool clients returns only description fields" {
+    out=$(aws_cmd cognito-idp create-user-pool --pool-name "bats-test-pool-$(unique_name)")
+    POOL_ID=$(json_get "$out" '.UserPool.Id')
+
+    aws_cmd cognito-idp create-user-pool-client \
+        --user-pool-id "$POOL_ID" \
+        --client-name "bats-list-client" \
+        --generate-secret >/dev/null
+
+    run aws_cmd cognito-idp list-user-pool-clients --user-pool-id "$POOL_ID"
+    assert_success
+
+    # Should have the required fields
+    client_id=$(echo "$output" | jq -r '.UserPoolClients[0].ClientId')
+    [ -n "$client_id" ]
+    client_name=$(echo "$output" | jq -r '.UserPoolClients[0].ClientName')
+    [ "$client_name" = "bats-list-client" ]
+
+    # Must NOT have fields that belong to the full UserPoolClient type
+    has_secret=$(echo "$output" | jq 'any(.UserPoolClients[]; has("ClientSecret"))')
+    [ "$has_secret" = "false" ]
+    has_generate=$(echo "$output" | jq 'any(.UserPoolClients[]; has("GenerateSecret"))')
+    [ "$has_generate" = "false" ]
+    has_flows=$(echo "$output" | jq 'any(.UserPoolClients[]; has("AllowedOAuthFlows"))')
+    [ "$has_flows" = "false" ]
+}
+
 @test "Cognito: admin create user" {
     out=$(aws_cmd cognito-idp create-user-pool --pool-name "bats-test-pool-$(unique_name)")
     POOL_ID=$(json_get "$out" '.UserPool.Id')

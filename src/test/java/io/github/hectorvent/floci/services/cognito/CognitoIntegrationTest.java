@@ -358,6 +358,70 @@ class CognitoIntegrationTest {
                 "IdToken should not contain client_id");
     }
 
+    // ── Issue #416: ListUserPoolClients response matches spec ──────────
+
+    @Test
+    @Order(35)
+    void listUserPoolClientsReturnsOnlyDescriptionFields() throws Exception {
+        // Create a client with a secret to ensure extra fields exist
+        JsonNode secretClient = cognitoJson("CreateUserPoolClient", """
+                {
+                  "UserPoolId": "%s",
+                  "ClientName": "secret-client",
+                  "GenerateSecret": true,
+                  "AllowedOAuthFlows": ["code"],
+                  "AllowedOAuthScopes": ["openid"]
+                }
+                """.formatted(poolId));
+        String secretClientId = secretClient.path("UserPoolClient").path("ClientId").asText();
+        assertNotNull(secretClient.path("UserPoolClient").path("ClientSecret").asText(null),
+                "Created client should have a ClientSecret");
+
+        // List clients and verify only description fields are returned
+        JsonNode listResp = cognitoJson("ListUserPoolClients", """
+                { "UserPoolId": "%s" }
+                """.formatted(poolId));
+
+        assertTrue(listResp.path("UserPoolClients").size() >= 2,
+                "Should list at least 2 clients");
+
+        for (JsonNode client : listResp.path("UserPoolClients")) {
+            // Required fields
+            assertTrue(client.has("ClientId"), "Must have ClientId");
+            assertTrue(client.has("ClientName"), "Must have ClientName");
+            assertTrue(client.has("UserPoolId"), "Must have UserPoolId");
+
+            // Fields that must NOT appear per AWS spec (UserPoolClientDescription)
+            assertTrue(client.path("ClientSecret").isMissingNode(),
+                    "ListUserPoolClients must not include ClientSecret");
+            assertTrue(client.path("GenerateSecret").isMissingNode(),
+                    "ListUserPoolClients must not include GenerateSecret");
+            assertTrue(client.path("AllowedOAuthFlows").isMissingNode(),
+                    "ListUserPoolClients must not include AllowedOAuthFlows");
+            assertTrue(client.path("AllowedOAuthScopes").isMissingNode(),
+                    "ListUserPoolClients must not include AllowedOAuthScopes");
+            assertTrue(client.path("AllowedOAuthFlowsUserPoolClient").isMissingNode(),
+                    "ListUserPoolClients must not include AllowedOAuthFlowsUserPoolClient");
+            assertTrue(client.path("CreationDate").isMissingNode(),
+                    "ListUserPoolClients must not include CreationDate");
+            assertTrue(client.path("LastModifiedDate").isMissingNode(),
+                    "ListUserPoolClients must not include LastModifiedDate");
+        }
+
+        // Verify DescribeUserPoolClient still returns full details
+        JsonNode describeResp = cognitoJson("DescribeUserPoolClient", """
+                {
+                  "UserPoolId": "%s",
+                  "ClientId": "%s"
+                }
+                """.formatted(poolId, secretClientId));
+        JsonNode fullClient = describeResp.path("UserPoolClient");
+        assertNotNull(fullClient.path("ClientSecret").asText(null),
+                "DescribeUserPoolClient must include ClientSecret");
+        assertTrue(fullClient.has("GenerateSecret"),
+                "DescribeUserPoolClient must include GenerateSecret");
+    }
+
     // ── Issue #229: Password verification ──────────────────────────────
 
     @Test
