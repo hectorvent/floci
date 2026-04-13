@@ -729,7 +729,9 @@ public class S3Controller {
 
             if (hasQueryParam(uriInfo, "uploads")) {
                 MultipartUpload upload = s3Service.initiateMultipartUpload(bucket, key, contentType,
-                        extractUserMetadata(httpHeaders), httpHeaders.getHeaderString("x-amz-storage-class"));
+                        extractUserMetadata(httpHeaders),
+                        httpHeaders.getHeaderString("x-amz-storage-class"),
+                        httpHeaders.getHeaderString("Content-Disposition"));
                 String xml = new XmlBuilder()
                         .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                         .start("InitiateMultipartUploadResult", AwsNamespaces.S3)

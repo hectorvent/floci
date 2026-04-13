@@ -913,17 +913,24 @@ public class S3Service {
     // --- Multipart Upload Operations ---
 
     public MultipartUpload initiateMultipartUpload(String bucket, String key, String contentType) {
-        return initiateMultipartUpload(bucket, key, contentType, null, null);
+        return initiateMultipartUpload(bucket, key, contentType, null, null, null);
     }
 
     public MultipartUpload initiateMultipartUpload(String bucket, String key, String contentType,
                                                    Map<String, String> metadata, String storageClass) {
+        return initiateMultipartUpload(bucket, key, contentType, metadata, storageClass, null);
+    }
+
+    public MultipartUpload initiateMultipartUpload(String bucket, String key, String contentType,
+                                                   Map<String, String> metadata, String storageClass,
+                                                   String contentDisposition) {
         ensureBucketExists(bucket);
         MultipartUpload upload = new MultipartUpload(bucket, key, contentType);
         if (metadata != null) {
             upload.getMetadata().putAll(metadata);
         }
         upload.setStorageClass(ObjectAttributeName.normalizeStorageClass(storageClass));
+        upload.setContentDisposition(contentDisposition);
 
         if (inMemory) {
             memoryMultipartStore.put(upload.getUploadId(), new ConcurrentHashMap<>());
@@ -1029,7 +1036,8 @@ public class S3Service {
                     .toList();
             S3Checksum checksum = buildChecksum(allData, completedParts, true);
             S3Object object = storeObject(bucket, key, allData, upload.getContentType(), upload.getMetadata(),
-                    upload.getStorageClass(), checksum, completedParts, null, null, null);
+                    upload.getStorageClass(), checksum, completedParts, null, null, null,
+                    null, upload.getContentDisposition(), null);
             // Override the ETag with the composite multipart ETag
             object.setETag(compositeETag);
             objectStore.put(objectKey(bucket, key), object);

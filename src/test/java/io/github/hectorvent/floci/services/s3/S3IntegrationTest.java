@@ -1025,7 +1025,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(94)
+    @Order(95)
     void headObjectReturnsContentDisposition() {
         given()
         .when()
@@ -1036,7 +1036,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(95)
+    @Order(96)
     void copyObjectPreservesContentDisposition() {
         given()
             .header("x-amz-copy-source", "/content-disposition-bucket/disposition.txt")
@@ -1055,7 +1055,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(95)
+    @Order(97)
     void copyObjectReplaceContentDisposition() {
         given()
             .header("x-amz-copy-source", "/content-disposition-bucket/disposition.txt")
@@ -1076,7 +1076,7 @@ class S3IntegrationTest {
     }
 
     @Test
-    @Order(96)
+    @Order(98)
     void cleanupContentDispositionBucket() {
         given().delete("/content-disposition-bucket/disposition.txt");
         given().delete("/content-disposition-bucket/disposition-copy.txt");
