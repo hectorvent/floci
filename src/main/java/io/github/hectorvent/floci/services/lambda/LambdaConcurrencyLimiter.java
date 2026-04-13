@@ -143,14 +143,21 @@ public class LambdaConcurrencyLimiter {
         String region = regionOf(functionArn);
         synchronized (reservedLock) {
             ConcurrentHashMap<String, Integer> regionReserved = reservedOf(region);
-            int otherReserved = regionTotal(region).get()
-                    - regionReserved.getOrDefault(functionArn, 0);
-            int maxAllowed = regionLimit - unreservedMin - otherReserved;
-            if (target > maxAllowed) {
-                throw new AwsException("LimitExceededException",
-                        "Specified ReservedConcurrentExecutions for function decreases account's "
-                        + "UnreservedConcurrentExecution below its minimum value of ["
-                        + unreservedMin + "].", 400);
+            int currentForThis = regionReserved.getOrDefault(functionArn, 0);
+            // A reduction (or no-op) cannot decrease unreserved capacity any
+            // further than it already is, so always allow it. This lets
+            // operators recover from an over-committed state — e.g. after
+            // lowering region-concurrency-limit at runtime — without first
+            // having to delete every reservation.
+            if (target > currentForThis) {
+                int otherReserved = regionTotal(region).get() - currentForThis;
+                int maxAllowed = regionLimit - unreservedMin - otherReserved;
+                if (target > maxAllowed) {
+                    throw new AwsException("LimitExceededException",
+                            "Specified ReservedConcurrentExecutions for function decreases account's "
+                            + "UnreservedConcurrentExecution below its minimum value of ["
+                            + unreservedMin + "].", 400);
+                }
             }
             return writeReserved(functionArn, target);
         }
@@ -177,20 +184,20 @@ public class LambdaConcurrencyLimiter {
 
     /**
      * Clears the reserved entry for a deleted function. The inflight counter
-     * is intentionally retained: permits held by still-running invocations
-     * captured a reference to the existing counter and must decrement into it
-     * on close. If the same ARN is later recreated, the counter is reused so
-     * new invocations see any remaining inflight rather than starting from
-     * zero and allowing transient over-subscription.
+     * is intentionally retained — permits held by still-running invocations
+     * decrement into it on close, and an ARN recreated later reuses the same
+     * counter so new invocations correctly see any remaining inflight.
      *
-     * <p>Idle counters (value 0) are dropped so long-lived emulator runs do
-     * not accumulate stale entries.
+     * <p>The counter is also retained even when it momentarily reads zero:
+     * conditionally removing it would race with a concurrent
+     * {@code acquireReserved} that has already obtained the {@code AtomicInteger}
+     * reference and is about to increment it. After such a race the next
+     * acquire would allocate a fresh counter and undercount the inflight
+     * permit, allowing reserved over-subscription. The trade-off is one
+     * {@code AtomicInteger} per historical function, which is bounded for an
+     * emulator workload.
      */
     public void reset(String functionArn) {
-        AtomicInteger counter = inflight.get(functionArn);
-        if (counter != null && counter.get() == 0) {
-            inflight.remove(functionArn);
-        }
         synchronized (reservedLock) {
             writeReserved(functionArn, null);
         }

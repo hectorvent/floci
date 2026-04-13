@@ -102,15 +102,38 @@ class LambdaConcurrencyLimiterTest {
     }
 
     @Test
-    void reset_dropsIdleInflightCounter() {
+    void reset_keepsIdleInflightCounterToAvoidUndercount() {
+        // The counter is intentionally retained across reset to close the
+        // window where a concurrent acquire could otherwise allocate a fresh
+        // counter and undercount inflight permits already in flight.
         LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter();
         try (LambdaConcurrencyLimiter.Permit p = limiter.acquire(fn(1))) {
             assertEquals(1, limiter.inflightCount(ARN));
         }
         assertEquals(0, limiter.inflightCount(ARN));
         limiter.reset(ARN);
-        // No permits open, so reset should drop the entry entirely.
+        // Counter still present at zero; new acquires share it.
         assertEquals(0, limiter.inflightCount(ARN));
+        try (LambdaConcurrencyLimiter.Permit p = limiter.acquire(fn(1))) {
+            assertEquals(1, limiter.inflightCount(ARN));
+        }
+    }
+
+    @Test
+    void validateAndSetReserved_allowsReductionEvenWhenOverCommitted() {
+        // Simulate an over-committed state: total reserved exceeds the
+        // unreserved minimum's ceiling. (e.g. region-concurrency-limit was
+        // lowered at runtime, or state was migrated from earlier behavior.)
+        LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter(1000, 100);
+        // Bypass validation by using setReserved directly so we can engineer
+        // the broken state that validateAndSetReserved should still let us recover from.
+        limiter.setReserved(ARN, 950);
+        // Now totalReserved=950, unreserved capacity = 50 < min(100). Any
+        // increase should still be blocked.
+        assertThrows(AwsException.class, () -> limiter.validateAndSetReserved(ARN, 951));
+        // But a reduction must succeed so the operator can recover.
+        assertDoesNotThrow(() -> limiter.validateAndSetReserved(ARN, 500));
+        assertEquals(500, limiter.totalReserved(REGION));
     }
 
     @Test
