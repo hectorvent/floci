@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.ecr.registry;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
 import io.github.hectorvent.floci.services.lambda.launcher.ImageCacheService;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
@@ -14,6 +15,8 @@ import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.HostConfig;
+import com.github.dockerjava.api.model.Mount;
+import com.github.dockerjava.api.model.MountType;
 import com.github.dockerjava.api.model.Ports;
 import com.github.dockerjava.api.model.Volume;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -44,9 +47,12 @@ public class EcrRegistryManager {
     private static final Logger LOG = Logger.getLogger(EcrRegistryManager.class);
     private static final int CONTAINER_INTERNAL_PORT = 5000;
 
+    private static final String NAMED_VOLUME = "floci-ecr-registry-data";
+
     private final DockerClient dockerClient;
     private final EmulatorConfig config;
     private final ImageCacheService imageCacheService;
+    private final ContainerDetector containerDetector;
 
     private volatile boolean started;
     private volatile boolean reconciled;
@@ -57,10 +63,12 @@ public class EcrRegistryManager {
     @Inject
     public EcrRegistryManager(DockerClient dockerClient,
                               EmulatorConfig config,
-                              ImageCacheService imageCacheService) {
+                              ImageCacheService imageCacheService,
+                              ContainerDetector containerDetector) {
         this.dockerClient = dockerClient;
         this.config = config;
         this.imageCacheService = imageCacheService;
+        this.containerDetector = containerDetector;
         this.hostPort = config.services().ecr().registryBasePort();
     }
 
@@ -122,7 +130,6 @@ public class EcrRegistryManager {
         }
 
         int chosenPort = allocatePort();
-        ensureDataDir();
         String image = config.services().ecr().registryImage();
 
         // Pull the registry image on demand. CI runners and fresh dev machines
@@ -135,7 +142,10 @@ public class EcrRegistryManager {
         portBindings.bind(exposed, Ports.Binding.bindPort(chosenPort));
 
         String hostPersistentPath = config.storage().hostPersistentPath();
-        boolean isVolume = !hostPersistentPath.startsWith("/") && !hostPersistentPath.startsWith(".");
+        boolean inContainer = containerDetector.isRunningInContainer();
+        boolean isExplicitVolumeName = !hostPersistentPath.startsWith("/")
+                && !hostPersistentPath.startsWith(".");
+        boolean isRelativeDefault = hostPersistentPath.startsWith(".");
 
         HostConfig hostConfig = HostConfig.newHostConfig()
                 .withPortBindings(portBindings);
@@ -145,13 +155,36 @@ public class EcrRegistryManager {
                 "REGISTRY_HTTP_ADDR=0.0.0.0:" + CONTAINER_INTERNAL_PORT
         ));
 
-        if (isVolume) {
+        if (inContainer && isRelativeDefault) {
+            // Zero-config fallback for in-container Floci. A relative host path can't
+            // be bind-mounted into a sibling container (Docker Desktop rejects it).
+            // Use a dedicated named volume so `docker compose up` works without any
+            // FLOCI_STORAGE_HOST_PERSISTENT_PATH configuration.
+            hostConfig.withMounts(List.of(new Mount()
+                    .withType(MountType.VOLUME)
+                    .withSource(NAMED_VOLUME)
+                    .withTarget("/var/lib/registry")));
+            LOG.infov("Floci in container with relative host-persistent-path ({0}); "
+                    + "using named volume {1} for ECR registry data",
+                    hostPersistentPath, NAMED_VOLUME);
+        } else if (isExplicitVolumeName) {
+            // User set hostPersistentPath to a Docker named-volume name — share the
+            // volume with the rest of Floci's persistent data and tell the registry
+            // to write inside it.
             String internalMountPath = "/app/data";
             hostConfig.withBinds(new Bind(hostPersistentPath, new Volume(internalMountPath)));
             env.add("REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=" + internalMountPath + "/ecr/registry");
         } else {
-            String dataPath = Paths.get(config.services().ecr().dataPath(), "registry").toAbsolutePath().toString();
+            // Host path bind-mount. On host dev, hostPersistentPath matches
+            // persistentPath so the replace is a no-op and we bind the absolute
+            // container data path. In a container with an absolute host path set,
+            // replace rewrites the container-internal path to the host-side path.
+            String dataPath = Paths.get(config.services().ecr().dataPath(), "registry")
+                    .toAbsolutePath().toString();
             String hostDataPath = dataPath.replace(config.storage().persistentPath(), hostPersistentPath);
+            if (!inContainer) {
+                ensureDataDir();
+            }
             hostConfig.withBinds(new Bind(hostDataPath, new Volume("/var/lib/registry")));
         }
 
