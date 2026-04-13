@@ -44,6 +44,7 @@ public class ElastiCacheQueryHandler {
             case "ValidateIamAuthToken"       -> handleValidateIamAuthToken(params);
             case "CreateReplicationGroup"     -> handleCreateReplicationGroup(params);
             case "DescribeReplicationGroups"  -> handleDescribeReplicationGroups(params);
+            case "ModifyReplicationGroup"     -> handleModifyReplicationGroup(params);
             case "DeleteReplicationGroup"     -> handleDeleteReplicationGroup(params);
             case "CreateUser"                 -> handleCreateUser(params);
             case "DescribeUsers"              -> handleDescribeUsers(params);
@@ -117,6 +118,25 @@ public class ElastiCacheQueryHandler {
         }
     }
 
+    private Response handleModifyReplicationGroup(MultivaluedMap<String, String> params) {
+        String groupId = params.getFirst("ReplicationGroupId");
+        if (groupId == null || groupId.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue",
+                    "ReplicationGroupId is required.", AwsNamespaces.EC, 400);
+        }
+        List<String> userIdsToAdd = extractMemberList(params, "UserGroupIdsToAdd.member.");
+        List<String> userIdsToRemove = extractMemberList(params, "UserGroupIdsToRemove.member.");
+        try {
+            ReplicationGroup group = service.modifyReplicationGroup(groupId,
+                    userIdsToAdd.isEmpty() ? null : userIdsToAdd,
+                    userIdsToRemove.isEmpty() ? null : userIdsToRemove);
+            String result = replicationGroupXml(group);
+            return Response.ok(AwsQueryResponse.envelope("ModifyReplicationGroup", AwsNamespaces.EC, result)).build();
+        } catch (AwsException e) {
+            return AwsQueryResponse.error(e.getErrorCode(), e.getMessage(), AwsNamespaces.EC, e.getHttpStatus());
+        }
+    }
+
     // ── Users ─────────────────────────────────────────────────────────────────
 
     private Response handleCreateUser(MultivaluedMap<String, String> params) {
@@ -138,7 +158,7 @@ public class ElastiCacheQueryHandler {
             authMode = AuthMode.IAM;
         } else if ("password".equalsIgnoreCase(authModeType)) {
             authMode = AuthMode.PASSWORD;
-            passwords = extractPasswordList(params, "AuthenticationMode.Passwords.member.");
+            passwords = extractMemberList(params, "AuthenticationMode.Passwords.member.");
         } else {
             authMode = AuthMode.NO_AUTH;
         }
@@ -171,7 +191,7 @@ public class ElastiCacheQueryHandler {
         if (userId == null || userId.isBlank()) {
             return AwsQueryResponse.error("InvalidParameterValue", "UserId is required.", AwsNamespaces.EC, 400);
         }
-        List<String> passwords = extractPasswordList(params, "AuthenticationMode.Passwords.member.");
+        List<String> passwords = extractMemberList(params, "AuthenticationMode.Passwords.member.");
         try {
             ElastiCacheUser user = service.modifyUser(userId, passwords.isEmpty() ? null : passwords);
             return Response.ok(AwsQueryResponse.envelope("ModifyUser", AwsNamespaces.EC, userXml(user))).build();
@@ -272,16 +292,16 @@ public class ElastiCacheQueryHandler {
                 .build();
     }
 
-    private static List<String> extractPasswordList(MultivaluedMap<String, String> params, String prefix) {
-        List<String> passwords = new ArrayList<>();
+    private static List<String> extractMemberList(MultivaluedMap<String, String> params, String prefix) {
+        List<String> values = new ArrayList<>();
         for (int i = 1; ; i++) {
-            String pw = params.getFirst(prefix + i);
-            if (pw == null) {
+            String value = params.getFirst(prefix + i);
+            if (value == null) {
                 break;
             }
-            passwords.add(pw);
+            values.add(value);
         }
-        return passwords;
+        return values;
     }
 
     private static String extractUriHost(String token) {

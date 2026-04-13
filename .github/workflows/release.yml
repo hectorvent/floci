@@ -17,11 +17,20 @@ on:
 permissions:
   contents: read
 
+# Per-tag concurrency. Back-to-back tag pushes (e.g. 1.5.3 and 1.6.0 landing
+# minutes apart) resolve to different ${{ github.ref }} values, so they run
+# in parallel rather than cancelling each other. Re-runs of the same tag
+# supersede in-flight builds of that tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Build JVM artifact ────────────────────────────────────────────────────
   build-jvm:
     name: Build JVM artifact
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -45,11 +54,12 @@ jobs:
   build-native-amd64:
     name: Build native artifact (amd64)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: graalvm/setup-graalvm@v1
+      - uses: graalvm/setup-graalvm@60c26726de13f8b90771df4bc1641a52a3159994 # v1
         with:
           java-version: '24'
           distribution: 'mandrel'
@@ -73,11 +83,12 @@ jobs:
   build-native-arm64:
     name: Build native artifact (arm64)
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: graalvm/setup-graalvm@v1
+      - uses: graalvm/setup-graalvm@60c26726de13f8b90771df4bc1641a52a3159994 # v1
         with:
           java-version: '24'
           distribution: 'mandrel'
@@ -102,6 +113,7 @@ jobs:
     name: Push JVM Docker image
     needs: build-jvm
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -110,9 +122,9 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -123,7 +135,7 @@ jobs:
           path: target/quarkus-app/
 
       - name: Build and push JVM image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.jvm-package
@@ -138,7 +150,7 @@ jobs:
             VERSION=${{ steps.version.outputs.version }}
 
       - name: Build and push JVM image (With AWS CLI)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.jvm-package
@@ -156,6 +168,7 @@ jobs:
     name: Push native Docker images
     needs: [build-native-amd64, build-native-arm64]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -164,9 +177,9 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -188,7 +201,7 @@ jobs:
           chmod +x target/*-runner
 
       - name: Build and push amd64 native image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.native-package
@@ -206,7 +219,7 @@ jobs:
           chmod +x target/*-runner
 
       - name: Build and push arm64 native image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile.native-package

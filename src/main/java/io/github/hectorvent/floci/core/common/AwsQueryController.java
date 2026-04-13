@@ -225,7 +225,7 @@ public class AwsQueryController {
      */
     private static final Set<String> ELASTICACHE_ACTIONS = Set.of(
             "ValidateIamAuthToken",
-            "CreateReplicationGroup", "DescribeReplicationGroups", "DeleteReplicationGroup",
+            "CreateReplicationGroup", "DescribeReplicationGroups", "ModifyReplicationGroup", "DeleteReplicationGroup",
             "CreateUser", "DescribeUsers", "ModifyUser", "DeleteUser"
     );
 

@@ -1,9 +1,10 @@
 package io.github.hectorvent.floci.services.elasticache;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
-import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
+import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerHandle;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerManager;
 import io.github.hectorvent.floci.services.elasticache.model.AuthMode;
@@ -19,6 +20,7 @@ import org.jboss.logging.Logger;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -41,12 +43,15 @@ public class ElastiCacheService {
     @Inject
     public ElastiCacheService(ElastiCacheContainerManager containerManager,
                               ElastiCacheProxyManager proxyManager,
+                              StorageFactory storageFactory,
                               EmulatorConfig config) {
         this.containerManager = containerManager;
         this.proxyManager = proxyManager;
         this.config = config;
-        this.groups = new InMemoryStorage<>();
-        this.users = new InMemoryStorage<>();
+        this.groups = storageFactory.create("elasticache", "elasticache-groups.json",
+                new TypeReference<Map<String, ReplicationGroup>>() {});
+        this.users = storageFactory.create("elasticache", "elasticache-users.json",
+                new TypeReference<Map<String, ElastiCacheUser>>() {});
     }
 
     public ReplicationGroup createReplicationGroup(String groupId, String description,
@@ -64,7 +69,8 @@ public class ElastiCacheService {
 
         ElastiCacheContainerHandle handle = containerManager.start(groupId, image);
 
-        Endpoint endpoint = new Endpoint("localhost", proxyPort);
+        String endpointHost = resolveEndpointHost();
+        Endpoint endpoint = new Endpoint(endpointHost, proxyPort);
         ReplicationGroup group = new ReplicationGroup(
                 groupId, description, ReplicationGroupStatus.AVAILABLE,
                 authMode, endpoint, Instant.now(), proxyPort);
@@ -78,7 +84,7 @@ public class ElastiCacheService {
                 (username, password) -> validatePassword(groupId, username, password));
 
         groups.put(groupId, group);
-        LOG.infov("Replication group {0} created, endpoint=localhost:{1}", groupId, proxyPort);
+        LOG.infov("Replication group {0} created, endpoint={1}:{2}", groupId, endpointHost, proxyPort);
         return group;
     }
 
@@ -92,7 +98,8 @@ public class ElastiCacheService {
         if (filterGroupId != null && !filterGroupId.isBlank()) {
             return groups.get(filterGroupId)
                     .map(List::of)
-                    .orElse(List.of());
+                    .orElseThrow(() -> new AwsException("ReplicationGroupNotFoundFault",
+                            "Replication group " + filterGroupId + " not found.", 404));
         }
         return groups.scan(k -> true);
     }
@@ -115,6 +122,24 @@ public class ElastiCacheService {
         releaseProxyPort(group.getProxyPort());
         groups.delete(groupId);
         LOG.infov("Replication group {0} deleted", groupId);
+    }
+
+    public ReplicationGroup modifyReplicationGroup(String groupId, List<String> userIdsToAdd,
+                                                    List<String> userIdsToRemove) {
+        ReplicationGroup group = getReplicationGroup(groupId);
+
+        if (userIdsToAdd != null) {
+            for (String userId : userIdsToAdd) {
+                getUser(userId); // validate user exists
+                group.getAssociatedUserIds().add(userId);
+            }
+        }
+        if (userIdsToRemove != null) {
+            group.getAssociatedUserIds().removeAll(userIdsToRemove);
+        }
+
+        groups.put(groupId, group);
+        return group;
     }
 
     public ElastiCacheUser createUser(String userId, String userName, AuthMode authMode,
@@ -144,7 +169,8 @@ public class ElastiCacheService {
         if (filterUserId != null && !filterUserId.isBlank()) {
             return users.get(filterUserId)
                     .map(List::of)
-                    .orElse(List.of());
+                    .orElseThrow(() -> new AwsException("UserNotFoundFault",
+                            "User " + filterUserId + " not found.", 404));
         }
         return users.scan(k -> true);
     }
@@ -168,26 +194,38 @@ public class ElastiCacheService {
 
     /**
      * Validates a Redis AUTH password for the given group.
-     * Checks the group-level authToken first, then falls back to per-user passwords.
-     * Called by the TCP auth proxy for PASSWORD-mode groups.
+     * Checks the group-level authToken first, then falls back to users associated
+     * with the group. Only users explicitly added via ModifyReplicationGroup are
+     * checked, preventing cross-group credential leakage.
      */
     public boolean validatePassword(String groupId, String username, String password) {
+        ReplicationGroup group = groups.get(groupId).orElse(null);
+        if (group == null) {
+            return false;
+        }
+
         if (username == null || username.isEmpty()) {
             // AUTH password form: check group-level authToken first
-            ReplicationGroup group = groups.get(groupId).orElse(null);
-            if (group != null && group.getAuthToken() != null
-                    && password.equals(group.getAuthToken())) {
+            if (group.getAuthToken() != null && password.equals(group.getAuthToken())) {
                 return true;
             }
-            // Fall back to any PASSWORD user matching this password
-            return users.scan(k -> true).stream()
-                    .filter(u -> u.getAuthMode() == AuthMode.PASSWORD)
+            // Fall back to PASSWORD users associated with this group
+            Set<String> groupUserIds = group.getAssociatedUserIds();
+            return groupUserIds.stream()
+                    .map(id -> users.get(id).orElse(null))
+                    .filter(u -> u != null && u.getAuthMode() == AuthMode.PASSWORD)
                     .anyMatch(u -> u.getPasswords() != null && u.getPasswords().contains(password));
         }
-        // AUTH username password form: find user by userName
-        return users.scan(k -> true).stream()
-                .filter(u -> username.equals(u.getUserName()) && u.getAuthMode() == AuthMode.PASSWORD)
+        // AUTH username password form: find user by userName, scoped to group
+        Set<String> groupUserIds = group.getAssociatedUserIds();
+        return groupUserIds.stream()
+                .map(id -> users.get(id).orElse(null))
+                .filter(u -> u != null && username.equals(u.getUserName()) && u.getAuthMode() == AuthMode.PASSWORD)
                 .anyMatch(u -> u.getPasswords() != null && u.getPasswords().contains(password));
+    }
+
+    private String resolveEndpointHost() {
+        return config.hostname().orElse("localhost");
     }
 
     private int allocateProxyPort() {

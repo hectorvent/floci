@@ -81,6 +81,7 @@ public interface EmulatorConfig {
         OpenSearchStorageConfig opensearch();
         AppConfigStorageConfig appconfig();
         AppConfigDataStorageConfig appconfigdata();
+        ElastiCacheStorageConfig elasticache();
     }
 
     interface SsmStorageConfig {
@@ -162,6 +163,13 @@ public interface EmulatorConfig {
     }
 
     interface AppConfigDataStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface ElastiCacheStorageConfig {
         Optional<String> mode();
 
         @WithDefault("5000")

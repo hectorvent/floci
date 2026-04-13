@@ -3,6 +3,8 @@ package io.github.hectorvent.floci.services.elasticache.model;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.Set;
 
 @RegisterForReflection
 public class ReplicationGroup {
@@ -15,6 +17,7 @@ public class ReplicationGroup {
     private Instant createdAt;
     private int proxyPort;
     private String authToken; // stored plain-text for PASSWORD auth validation in the proxy
+    private Set<String> associatedUserIds = new HashSet<>();
 
     // Transient fields — not persisted, restored on container restart
     private transient String containerId;
@@ -58,6 +61,11 @@ public class ReplicationGroup {
 
     public String getAuthToken() { return authToken; }
     public void setAuthToken(String authToken) { this.authToken = authToken; }
+
+    public Set<String> getAssociatedUserIds() { return associatedUserIds; }
+    public void setAssociatedUserIds(Set<String> associatedUserIds) {
+        this.associatedUserIds = associatedUserIds != null ? associatedUserIds : new HashSet<>();
+    }
 
     public String getContainerId() { return containerId; }
     public void setContainerId(String containerId) { this.containerId = containerId; }

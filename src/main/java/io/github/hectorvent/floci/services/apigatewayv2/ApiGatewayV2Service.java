@@ -183,9 +183,9 @@ public class ApiGatewayV2Service {
         if (space < 0) return false;
         String method = routeKey.substring(0, space);
         String pattern = routeKey.substring(space + 1);
-        if (!method.equalsIgnoreCase("ANY") && !method.equalsIgnoreCase(httpMethod)) return false;
+        if (!method.equalsIgnoreCase(httpMethod)) return false;
 
-        // Build regex from path template: {proxy+} -> .*, {param} -> [^/]+
+        // Build regex from path template: {proxy+} -> .+, {param} -> [^/]+
         // Quote literal segments to avoid regex injection from path patterns
         StringBuilder regex = new StringBuilder("^");
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\{([^}]*)}").matcher(pattern);
@@ -235,6 +235,7 @@ public class ApiGatewayV2Service {
         getApi(region, apiId);
         Stage stage = new Stage();
         stage.setStageName((String) request.getOrDefault("stageName", "$default"));
+        stage.setDeploymentId((String) request.get("deploymentId"));
         stage.setAutoDeploy(Boolean.parseBoolean(String.valueOf(request.getOrDefault("autoDeploy", "false"))));
         stage.setCreatedDate(System.currentTimeMillis());
         stage.setLastUpdatedDate(System.currentTimeMillis());
