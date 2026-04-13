@@ -47,12 +47,15 @@ import software.amazon.awssdk.services.lambda.model.InvocationType;
 import software.amazon.awssdk.services.lambda.model.Runtime;
 
 import java.io.ByteArrayOutputStream;
+import java.net.ConnectException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+
+import software.amazon.awssdk.core.exception.SdkClientException;
 
 /**
  * Shared test utilities and AWS client factories.
@@ -125,9 +128,9 @@ public final class TestFixtures {
      * Thread-safe: uses double-checked locking so parallel test classes don't
      * race the probe.
      *
-     * Returns false on any transport-level failure (timeout, connection refused,
-     * SDK timeout) so that tests can skip cleanly when Docker-in-Docker is
-     * unavailable in CI.
+     * Returns false on transport-level failures (timeout, connection refused,
+     * SDK client timeout) so tests skip cleanly when Docker-in-Docker is
+     * unavailable in CI. Unexpected service errors propagate as test failures.
      */
     public static boolean isLambdaDispatchAvailable() {
         if (lambdaDispatchAvailable != null) {
@@ -156,7 +159,11 @@ public final class TestFixtures {
                         .overrideConfiguration(c -> c.apiCallTimeout(Duration.ofSeconds(30)))
                         .build());
                 lambdaDispatchAvailable = response.statusCode() == 200;
-            } catch (Exception e) {
+            } catch (SdkClientException e) {
+                // SDK-level timeout or connection failure (wraps ConnectException,
+                // ApiCallTimeoutException, etc.)
+                lambdaDispatchAvailable = false;
+            } catch (ConnectException e) {
                 lambdaDispatchAvailable = false;
             } finally {
                 try {

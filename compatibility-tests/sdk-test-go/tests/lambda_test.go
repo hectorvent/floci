@@ -3,6 +3,8 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"testing"
 
 	"floci-sdk-test-go/internal/testutil"
@@ -54,9 +56,13 @@ func TestLambda(t *testing.T) {
 			Payload:      payload,
 		})
 		if err != nil {
-			// In CI without Docker-in-Docker, Lambda container dispatch is unavailable.
-			// Skip instead of failing so non-Docker tests still run.
-			t.Skipf("Lambda REQUEST_RESPONSE dispatch unavailable in this environment: %v", err)
+			// Only skip on transport-level failures (timeout, connection refused).
+			// Let unexpected service errors fail the test.
+			var netErr net.Error
+			if errors.As(err, &netErr) {
+				t.Skipf("Lambda REQUEST_RESPONSE dispatch unavailable (transport error): %v", err)
+			}
+			require.NoError(t, err)
 		}
 		assert.Equal(t, int32(200), r.StatusCode)
 		assert.Nil(t, r.FunctionError)

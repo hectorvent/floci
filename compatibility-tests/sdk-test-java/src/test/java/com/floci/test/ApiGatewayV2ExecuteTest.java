@@ -172,7 +172,8 @@ class ApiGatewayV2ExecuteTest {
             JsonNode warmupBody = JSON.readTree(warmup.body());
             lambdaDispatchAvailable = warmup.statusCode() == 200
                     && warmupBody.path("statusCode").asInt() == 200;
-        } catch (Exception e) {
+        } catch (java.net.http.HttpTimeoutException | ConnectException e) {
+            // Transport-level failure: endpoint unreachable or timed out
             lambdaDispatchAvailable = false;
         }
     }
