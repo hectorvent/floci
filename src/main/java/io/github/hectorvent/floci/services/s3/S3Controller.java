@@ -399,12 +399,14 @@ public class S3Controller {
             String persistedEncoding = toPersistedContentEncoding(contentEncoding);
             String contentDisposition = httpHeaders.getHeaderString("Content-Disposition");
             String cacheControl = httpHeaders.getHeaderString("Cache-Control");
+            String cannedAcl = httpHeaders.getHeaderString("x-amz-acl");
             S3Object obj = s3Service.putObject(bucket, key, data, contentType, extractUserMetadata(httpHeaders),
                     httpHeaders.getHeaderString("x-amz-storage-class"),
                     persistedEncoding,
                     lockMode, retainUntil, legalHold,
                     contentDisposition,
-                    cacheControl);
+                    cacheControl,
+                    cannedAcl);
             var resp = Response.ok().header("ETag", obj.getETag());
             if (obj.getVersionId() != null) {
                 resp.header("x-amz-version-id", obj.getVersionId());
@@ -731,7 +733,8 @@ public class S3Controller {
                 MultipartUpload upload = s3Service.initiateMultipartUpload(bucket, key, contentType,
                         extractUserMetadata(httpHeaders),
                         httpHeaders.getHeaderString("x-amz-storage-class"),
-                        httpHeaders.getHeaderString("Content-Disposition"));
+                        httpHeaders.getHeaderString("Content-Disposition"),
+                        httpHeaders.getHeaderString("x-amz-acl"));
                 String xml = new XmlBuilder()
                         .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                         .start("InitiateMultipartUploadResult", AwsNamespaces.S3)
@@ -1359,6 +1362,7 @@ public class S3Controller {
         String copyContentEncoding = toPersistedContentEncoding(httpHeaders.getHeaderString("Content-Encoding"));
         String copyContentDisposition = httpHeaders.getHeaderString("Content-Disposition");
         String copyCacheControl = httpHeaders.getHeaderString("Cache-Control");
+        String cannedAcl = httpHeaders.getHeaderString("x-amz-acl");
         S3Object copy = s3Service.copyObject(sourceBucket, sourceKey, destBucket, destKey,
                 httpHeaders.getHeaderString("x-amz-metadata-directive"),
                 extractUserMetadata(httpHeaders),
@@ -1366,7 +1370,8 @@ public class S3Controller {
                 contentType,
                 copyContentEncoding,
                 copyContentDisposition,
-                copyCacheControl);
+                copyCacheControl,
+                cannedAcl);
         String xml = new XmlBuilder()
                 .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .start("CopyObjectResult", AwsNamespaces.S3)

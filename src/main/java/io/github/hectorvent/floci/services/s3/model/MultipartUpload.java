@@ -17,6 +17,7 @@ public class MultipartUpload {
     private String contentType;
     private String storageClass;
     private String contentDisposition;
+    private String acl;
     private Map<String, String> metadata;
     private Instant initiated;
     private final Map<Integer, Part> parts = new ConcurrentHashMap<>();
@@ -53,6 +54,9 @@ public class MultipartUpload {
 
     public String getContentDisposition() { return contentDisposition; }
     public void setContentDisposition(String contentDisposition) { this.contentDisposition = contentDisposition; }
+
+    public String getAcl() { return acl; }
+    public void setAcl(String acl) { this.acl = acl; }
 
     public Map<String, String> getMetadata() { return metadata; }
     public void setMetadata(Map<String, String> metadata) { this.metadata = metadata; }
