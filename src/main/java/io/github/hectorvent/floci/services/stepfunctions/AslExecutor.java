@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.lambda.LambdaFunctionStore;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
 import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
 import io.github.hectorvent.floci.services.lambda.model.LambdaFunction;
+import io.github.hectorvent.floci.services.sqs.SqsJsonHandler;
 import io.github.hectorvent.floci.services.stepfunctions.model.Execution;
 import io.github.hectorvent.floci.services.stepfunctions.model.HistoryEvent;
 import io.github.hectorvent.floci.services.stepfunctions.model.StateMachine;
@@ -48,6 +49,7 @@ public class AslExecutor {
     private final LambdaFunctionStore functionStore;
     private final DynamoDbService dynamoDbService;
     private final DynamoDbJsonHandler dynamoDbJsonHandler;
+    private final SqsJsonHandler sqsJsonHandler;
     private final ObjectMapper objectMapper;
     private final JsonataEvaluator jsonataEvaluator;
     private final Instance<StepFunctionsService> sfnService;
@@ -60,12 +62,14 @@ public class AslExecutor {
     @Inject
     public AslExecutor(LambdaExecutorService lambdaExecutor, LambdaFunctionStore functionStore,
                        DynamoDbService dynamoDbService, DynamoDbJsonHandler dynamoDbJsonHandler,
+                       SqsJsonHandler sqsJsonHandler,
                        ObjectMapper objectMapper, JsonataEvaluator jsonataEvaluator,
                        Instance<StepFunctionsService> sfnService) {
         this.lambdaExecutor = lambdaExecutor;
         this.functionStore = functionStore;
         this.dynamoDbService = dynamoDbService;
         this.dynamoDbJsonHandler = dynamoDbJsonHandler;
+        this.sqsJsonHandler = sqsJsonHandler;
         this.objectMapper = objectMapper;
         this.jsonataEvaluator = jsonataEvaluator;
         this.sfnService = sfnService;
@@ -341,6 +345,19 @@ public class AslExecutor {
             return invokeAwsSdkDynamoDb(camelCaseAction, input, region);
         }
 
+        // SQS optimized integration
+        if (resource.equals("arn:aws:states:::sqs:sendMessage")) {
+            String region = extractRegionFromArn(sm.getStateMachineArn());
+            return invokeOptimizedSqsSendMessage(input, region);
+        }
+
+        // AWS SDK service integrations: SQS
+        if (resource.startsWith("arn:aws:states:::aws-sdk:sqs:")) {
+            String camelCaseAction = resource.substring("arn:aws:states:::aws-sdk:sqs:".length());
+            String region = extractRegionFromArn(sm.getStateMachineArn());
+            return invokeAwsSdkSqs(camelCaseAction, input, region);
+        }
+
         // Nested state machine integration
         if (resource.startsWith("arn:aws:states:::states:startExecution")) {
             String mode = resource.substring("arn:aws:states:::states:startExecution".length());
@@ -550,6 +567,57 @@ public class AslExecutor {
                 throw new FailStateException("DynamoDb." + errorName, errorMessage);
             }
             throw new FailStateException("DynamoDb.ServiceException", "DynamoDB operation failed");
+        }
+
+        if (entity instanceof JsonNode jsonNode) {
+            return jsonNode;
+        }
+        return objectMapper.createObjectNode();
+    }
+
+    private JsonNode invokeOptimizedSqsSendMessage(JsonNode input, String region) {
+        ObjectNode request = input != null && input.isObject()
+                ? ((ObjectNode) input.deepCopy())
+                : objectMapper.createObjectNode();
+
+        JsonNode messageBody = request.get("MessageBody");
+        if (messageBody != null && !messageBody.isTextual() && !messageBody.isNull()) {
+            request.put("MessageBody", messageBody.toString());
+        }
+
+        return invokeSqsAction("SendMessage", request, region, "SQS.");
+    }
+
+    private JsonNode invokeAwsSdkSqs(String camelCaseAction, JsonNode input, String region) {
+        String pascalAction = Character.toUpperCase(camelCaseAction.charAt(0)) + camelCaseAction.substring(1);
+        return invokeSqsAction(pascalAction, input, region, "Sqs.");
+    }
+
+    private JsonNode invokeSqsAction(String action, JsonNode input, String region, String errorPrefix) {
+        jakarta.ws.rs.core.Response response;
+        try {
+            response = sqsJsonHandler.handle(action, input, region);
+        } catch (AwsException e) {
+            throw new FailStateException(errorPrefix + e.getErrorCode(), e.getMessage());
+        } catch (Exception e) {
+            throw new FailStateException(errorPrefix + "InternalServerError",
+                    e.getMessage() != null ? e.getMessage() : "SQS error");
+        }
+
+        Object entity = response.getEntity();
+        int status = response.getStatus();
+
+        if (status >= 400) {
+            if (entity instanceof AwsErrorResponse err) {
+                throw new FailStateException(errorPrefix + err.type(), err.message());
+            }
+            if (entity instanceof JsonNode errorNode) {
+                String errorName = errorNode.path("__type").asText("UnknownError");
+                String errorMessage = errorNode.path("message").asText(
+                        errorNode.path("Message").asText("SQS operation failed"));
+                throw new FailStateException(errorPrefix + errorName, errorMessage);
+            }
+            throw new FailStateException(errorPrefix + "ServiceException", "SQS operation failed");
         }
 
         if (entity instanceof JsonNode jsonNode) {
