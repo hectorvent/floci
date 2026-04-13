@@ -24,13 +24,11 @@ class MskTest {
     @AfterAll
     static void cleanup() {
         if (kafka != null) {
-            /* 
             if (clusterArn != null) {
                 try {
                     kafka.deleteCluster(DeleteClusterRequest.builder().clusterArn(clusterArn).build());
                 } catch (Exception ignored) {}
             }
-            */
             kafka.close();
         }
     }
@@ -86,7 +84,6 @@ class MskTest {
         assertThat(response.bootstrapBrokerString()).isNotNull();
     }
 
-    /* 
     @Test
     @Order(5)
     void deleteCluster() {
@@ -97,5 +94,4 @@ class MskTest {
         assertThat(response.clusterArn()).isEqualTo(clusterArn);
         assertThat(response.state()).isEqualTo(ClusterState.DELETING);
     }
-    */
 }

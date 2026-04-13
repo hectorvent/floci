@@ -1,7 +1,9 @@
 package io.github.hectorvent.floci.services.msk.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 
+@RegisterForReflection
 public enum ClusterState {
     @JsonProperty("ACTIVE")
     ACTIVE,

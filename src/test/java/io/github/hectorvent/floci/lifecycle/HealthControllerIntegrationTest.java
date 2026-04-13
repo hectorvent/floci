@@ -23,6 +23,7 @@ class HealthControllerIntegrationTest {
                 "lambda": "running",
                 "apigateway": "running",
                 "iam": "running",
+                "kafka": "running",
                 "elasticache": "running",
                 "rds": "running",
                 "events": "running",
