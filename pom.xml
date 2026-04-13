@@ -86,12 +86,12 @@
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-core</artifactId>
-            <version>3.4.0</version>
+            <version>3.7.1</version>
         </dependency>
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-transport-httpclient5</artifactId>
-            <version>3.4.0</version>
+            <version>3.7.1</version>
         </dependency>
 
         <!-- BouncyCastle for X.509 certificate generation and PEM handling (ACM service) -->
@@ -124,7 +124,7 @@
         <dependency>
             <groupId>com.networknt</groupId>
             <artifactId>json-schema-validator</artifactId>
-            <version>1.5.8</version>
+            <version>1.5.9</version>
         </dependency>
 
         <!-- OpenAPI/Swagger parser (API Gateway ImportRestApi) -->
