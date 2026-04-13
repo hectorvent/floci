@@ -271,6 +271,17 @@ public class ApiGatewayV2Service {
         deployment.setCreatedDate(System.currentTimeMillis());
 
         deploymentStore.put(deploymentKey(region, apiId, deployment.getDeploymentId()), deployment);
+
+        String stageName = (String) request.get("stageName");
+        if (stageName != null && !stageName.isBlank()) {
+            Stage stage = stageStore.get(stageKey(region, apiId, stageName))
+                    .orElseThrow(() -> new AwsException("NotFoundException",
+                            "Stage " + stageName + " not found", 404));
+            stage.setDeploymentId(deployment.getDeploymentId());
+            stage.setLastUpdatedDate(System.currentTimeMillis());
+            stageStore.put(stageKey(region, apiId, stageName), stage);
+        }
+
         return deployment;
     }
 

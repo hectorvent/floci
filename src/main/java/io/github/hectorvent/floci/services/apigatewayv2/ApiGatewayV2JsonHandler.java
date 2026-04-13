@@ -11,6 +11,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -49,7 +50,10 @@ public class ApiGatewayV2JsonHandler {
                 case "GetStages" -> handleGetStages(request, region);
                 case "DeleteStage" -> handleDeleteStage(request, region);
                 case "CreateDeployment" -> handleCreateDeployment(request, region);
+                case "GetDeployment" -> handleGetDeployment(request, region);
                 case "GetDeployments" -> handleGetDeployments(request, region);
+                case "DeleteDeployment" -> handleDeleteDeployment(request, region);
+                case "DeleteIntegration" -> handleDeleteIntegration(request, region);
                 default -> JsonErrorResponseUtils.createUnknownOperationErrorResponse(action);
             };
         } catch (AwsException e) {
@@ -61,7 +65,7 @@ public class ApiGatewayV2JsonHandler {
 
     private Response handleCreateApi(JsonNode request, String region) {
         @SuppressWarnings("unchecked")
-        Map<String, Object> map = objectMapper.convertValue(request, Map.class);
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
         Api api = service.createApi(region, map);
         return Response.status(201).entity(toApiNode(api).toString()).build();
     }
@@ -90,7 +94,7 @@ public class ApiGatewayV2JsonHandler {
     private Response handleCreateAuthorizer(JsonNode request, String region) {
         String apiId = request.path("ApiId").asText();
         @SuppressWarnings("unchecked")
-        Map<String, Object> map = objectMapper.convertValue(request, Map.class);
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
         Authorizer auth = service.createAuthorizer(region, apiId, map);
         return Response.status(201).entity(toAuthorizerNode(auth).toString()).build();
     }
@@ -122,7 +126,7 @@ public class ApiGatewayV2JsonHandler {
     private Response handleCreateRoute(JsonNode request, String region) {
         String apiId = request.path("ApiId").asText();
         @SuppressWarnings("unchecked")
-        Map<String, Object> map = objectMapper.convertValue(request, Map.class);
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
         Route route = service.createRoute(region, apiId, map);
         return Response.status(201).entity(toRouteNode(route).toString()).build();
     }
@@ -154,7 +158,7 @@ public class ApiGatewayV2JsonHandler {
     private Response handleCreateIntegration(JsonNode request, String region) {
         String apiId = request.path("ApiId").asText();
         @SuppressWarnings("unchecked")
-        Map<String, Object> map = objectMapper.convertValue(request, Map.class);
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
         Integration integration = service.createIntegration(region, apiId, map);
         return Response.status(201).entity(toIntegrationNode(integration).toString()).build();
     }
@@ -179,7 +183,7 @@ public class ApiGatewayV2JsonHandler {
     private Response handleCreateStage(JsonNode request, String region) {
         String apiId = request.path("ApiId").asText();
         @SuppressWarnings("unchecked")
-        Map<String, Object> map = objectMapper.convertValue(request, Map.class);
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
         Stage stage = service.createStage(region, apiId, map);
         return Response.status(201).entity(toStageNode(stage).toString()).build();
     }
@@ -211,9 +215,15 @@ public class ApiGatewayV2JsonHandler {
     private Response handleCreateDeployment(JsonNode request, String region) {
         String apiId = request.path("ApiId").asText();
         @SuppressWarnings("unchecked")
-        Map<String, Object> map = objectMapper.convertValue(request, Map.class);
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
         Deployment deployment = service.createDeployment(region, apiId, map);
         return Response.status(201).entity(toDeploymentNode(deployment).toString()).build();
+    }
+
+    private Response handleGetDeployment(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String deploymentId = request.path("DeploymentId").asText();
+        return Response.ok(toDeploymentNode(service.getDeployment(region, apiId, deploymentId)).toString()).build();
     }
 
     private Response handleGetDeployments(JsonNode request, String region) {
@@ -223,6 +233,20 @@ public class ApiGatewayV2JsonHandler {
         ArrayNode items = root.putArray("Items");
         deployments.forEach(d -> items.add(toDeploymentNode(d)));
         return Response.ok(root.toString()).build();
+    }
+
+    private Response handleDeleteDeployment(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String deploymentId = request.path("DeploymentId").asText();
+        service.deleteDeployment(region, apiId, deploymentId);
+        return Response.noContent().build();
+    }
+
+    private Response handleDeleteIntegration(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String integrationId = request.path("IntegrationId").asText();
+        service.deleteIntegration(region, apiId, integrationId);
+        return Response.noContent().build();
     }
 
     // ──────────────────────────── Serializers ────────────────────────────
@@ -295,6 +319,28 @@ public class ApiGatewayV2JsonHandler {
         node.put("CreatedDate", d.getCreatedDate() / 1000.0);
         if (d.getDescription() != null) node.put("Description", d.getDescription());
         return node;
+    }
+
+    /**
+     * Converts PascalCase map keys to lowerCamelCase so the service layer's
+     * field lookups work regardless of whether the request arrived via the
+     * REST path (lowerCamelCase body) or JSON 1.1 path (PascalCase body).
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> toLowerCamelCase(Map<String, Object> map) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+            String key = entry.getKey();
+            if (!key.isEmpty() && Character.isUpperCase(key.charAt(0))) {
+                key = Character.toLowerCase(key.charAt(0)) + key.substring(1);
+            }
+            Object value = entry.getValue();
+            if (value instanceof Map) {
+                value = toLowerCamelCase((Map<String, Object>) value);
+            }
+            result.put(key, value);
+        }
+        return result;
     }
 
 }
