@@ -15,6 +15,7 @@ import io.github.hectorvent.floci.services.lambda.zip.ZipExtractor;
 import io.github.hectorvent.floci.services.s3.S3Service;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.sqs.SqsService;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -112,6 +113,29 @@ public class LambdaService {
         this.poller = poller;
         this.kinesisPoller = kinesisPoller;
         this.dynamodbStreamsPoller = dynamodbStreamsPoller;
+    }
+
+    /**
+     * Rehydrates reserved concurrency into the limiter from persisted function state.
+     * Without this, restarts leave {@code totalReserved()=0} and allow validatePut /
+     * unreserved-pool sizing to drift until each function is re-Put.
+     */
+    @PostConstruct
+    void rehydrateConcurrency() {
+        if (concurrencyLimiter == null) {
+            return;
+        }
+        int count = 0;
+        for (LambdaFunction fn : functionStore.listAll()) {
+            Integer reserved = fn.getReservedConcurrentExecutions();
+            if (reserved != null) {
+                concurrencyLimiter.setReserved(fn.getFunctionArn(), reserved);
+                count++;
+            }
+        }
+        if (count > 0) {
+            LOG.infov("Restored reserved concurrency for {0} function(s)", count);
+        }
     }
 
     public LambdaFunction createFunction(String region, Map<String, Object> request) {

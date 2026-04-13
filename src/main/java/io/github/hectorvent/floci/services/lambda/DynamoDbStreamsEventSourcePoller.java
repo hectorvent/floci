@@ -129,7 +129,17 @@ public class DynamoDbStreamsEventSourcePoller {
                         esm.getUuid(), records.size(), esm.getFunctionName());
 
                 String eventJson = buildDynamoDbEvent(records, esm);
-                var invokeResult = executorService.invoke(fn, eventJson.getBytes(), InvocationType.RequestResponse);
+                var invokeResult = (io.github.hectorvent.floci.services.lambda.model.InvokeResult) null;
+                try {
+                    invokeResult = executorService.invoke(fn, eventJson.getBytes(), InvocationType.RequestResponse);
+                } catch (io.github.hectorvent.floci.core.common.AwsException e) {
+                    if ("TooManyRequestsException".equals(e.getErrorCode())) {
+                        LOG.infov("DynamoDB Streams ESM {0}: function {1} throttled, shard iterator not advanced",
+                                esm.getUuid(), fn.getFunctionName());
+                        return;
+                    }
+                    throw e;
+                }
 
                 if (invokeResult.getFunctionError() == null) {
                     String newestSeq = records.get(records.size() - 1).getSequenceNumber();
