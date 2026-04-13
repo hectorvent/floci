@@ -16,9 +16,9 @@ import software.amazon.awssdk.services.lambda.LambdaClient;
 import software.amazon.awssdk.services.opensearch.OpenSearchClient;
 import software.amazon.awssdk.services.rds.RdsClient;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.endpoints.Endpoint;
 import software.amazon.awssdk.services.s3control.S3ControlClient;
-import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
-import software.amazon.awssdk.core.client.config.SdkAdvancedClientOption;
+import software.amazon.awssdk.services.s3control.endpoints.S3ControlEndpointProvider;
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
 import software.amazon.awssdk.services.ses.SesClient;
 import software.amazon.awssdk.services.sfn.SfnClient;
@@ -140,13 +140,13 @@ public final class TestFixtures {
      * go to the configured endpoint directly rather than 000000000000.localhost:4566.
      */
     public static S3ControlClient s3ControlClient() {
+        URI endpoint = ENDPOINT;
         return S3ControlClient.builder()
-                .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)
-                .overrideConfiguration(ClientOverrideConfiguration.builder()
-                        .putAdvancedOption(SdkAdvancedClientOption.DISABLE_HOST_PREFIX_INJECTION, true)
-                        .build())
+                .endpointProvider((S3ControlEndpointProvider) params ->
+                        java.util.concurrent.CompletableFuture.completedFuture(
+                                Endpoint.builder().url(endpoint).build()))
                 .build();
     }
 
