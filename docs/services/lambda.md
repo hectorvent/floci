@@ -39,14 +39,19 @@ Lambda runs your function code inside real Docker containers — the same way re
 | `ListTags` | List tags on a function |
 | `TagResource` | Tag a function |
 | `UntagResource` | Untag a function |
-| `PutFunctionConcurrency` | Set reserved concurrent executions (stub — value stored but not enforced) |
+| `PutFunctionConcurrency` | Set reserved concurrent executions (enforced at invocation) |
 | `GetFunctionConcurrency` | Get reserved concurrent executions |
 | `DeleteFunctionConcurrency` | Clear reserved concurrent executions |
 
-!!! note "Concurrency is a stub"
-    `PutFunctionConcurrency` persists `ReservedConcurrentExecutions` on the function
-    and echoes it back, but Floci does not enforce the limit at invocation time and
-    does not validate against the account-level concurrent execution limit.
+!!! note "Concurrency enforcement"
+    Reserved concurrency is enforced: invocations beyond the reserved value
+    return `TooManyRequestsException` (HTTP 429). Functions without a reserved
+    value share an account-wide pool (default 1000, configurable via
+    `floci.services.lambda.account-concurrency-limit`). `PutFunctionConcurrency`
+    validates that the requested value leaves at least
+    `floci.services.lambda.unreserved-concurrency-min` (default 100) available
+    for unreserved functions. `PutProvisionedConcurrencyConfig` and related
+    provisioned-concurrency operations remain unimplemented.
 
 Function URLs are also reachable directly on `/{proxy:.*}` under the Lambda URL controller, which routes the request into the normal `Invoke` path.
 

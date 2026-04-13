@@ -30,8 +30,9 @@ import java.util.Map;
  * The class-level {@code @Path("/")} lets each method declare its own absolute
  * version prefix rather than inheriting a single one.
  *
- * The stored value is not enforced at invocation time — this is a stub so that
- * tools and SDKs expecting the endpoint to exist can proceed.
+ * The stored value is enforced at invocation time by
+ * {@link LambdaConcurrencyLimiter}; Put also validates against the account-wide
+ * unreserved-minimum.
  */
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)

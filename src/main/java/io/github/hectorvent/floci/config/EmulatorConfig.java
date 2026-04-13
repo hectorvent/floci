@@ -509,6 +509,17 @@ public interface EmulatorConfig {
 
         /** Docker network to attach Lambda containers to. Empty = default bridge. */
         Optional<String> dockerNetwork();
+
+        /** Account-wide concurrent executions ceiling (AWS default: 1000). */
+        @WithDefault("1000")
+        int accountConcurrencyLimit();
+
+        /**
+         * Minimum unreserved concurrency that must remain after PutFunctionConcurrency,
+         * matching AWS (100). Puts that would leave less than this are rejected.
+         */
+        @WithDefault("100")
+        int unreservedConcurrencyMin();
     }
 
     interface Ec2ServiceConfig {

@@ -604,6 +604,10 @@ public class LambdaService {
                     "ReservedConcurrentExecutions must be a non-negative integer", 400);
         }
         LambdaFunction fn = getFunction(region, functionName);
+        if (concurrencyLimiter != null) {
+            concurrencyLimiter.validatePut(fn.getFunctionArn(), reservedConcurrentExecutions);
+            concurrencyLimiter.setReserved(fn.getFunctionArn(), reservedConcurrentExecutions);
+        }
         fn.setReservedConcurrentExecutions(reservedConcurrentExecutions);
         functionStore.save(region, fn);
         return fn;
@@ -616,6 +620,9 @@ public class LambdaService {
 
     public void deleteFunctionConcurrency(String region, String functionName) {
         LambdaFunction fn = getFunction(region, functionName);
+        if (concurrencyLimiter != null) {
+            concurrencyLimiter.clearReserved(fn.getFunctionArn());
+        }
         fn.setReservedConcurrentExecutions(null);
         functionStore.save(region, fn);
     }
