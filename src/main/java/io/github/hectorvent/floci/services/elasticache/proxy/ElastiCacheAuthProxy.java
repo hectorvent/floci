@@ -153,7 +153,7 @@ public class ElastiCacheAuthProxy {
 
     private boolean validate(String username, String password) {
         return switch (authMode) {
-            case IAM -> sigV4Validator.validate(password, groupId);
+            case IAM -> sigV4Validator.validate(password, groupId, username);
             case PASSWORD -> passwordValidator.validatePassword(username, password);
             case NO_AUTH -> true;
         };

@@ -71,7 +71,7 @@ public class PostgresProtocolHandler {
         // Phase 4: Validate credentials
         boolean valid;
         if (iamEnabled && clientPassword.contains("X-Amz-Signature")) {
-            valid = sigV4.validate(clientPassword);
+            valid = sigV4.validate(clientPassword, clientUsername);
         } else {
             valid = passwordValidator.validate(clientUsername, clientPassword);
         }

@@ -26,8 +26,8 @@ class SigV4ValidatorTest {
                 900
         );
 
-        assertTrue(validator.validate(token, "cache-cluster-01"));
-        assertTrue(validator.validate(token, "CACHE-CLUSTER-01"));
+        assertTrue(validator.validate(token, "cache-cluster-01", "default"));
+        assertTrue(validator.validate(token, "CACHE-CLUSTER-01", "default"));
     }
 
     @Test
@@ -44,7 +44,7 @@ class SigV4ValidatorTest {
                 900
         );
 
-        assertFalse(validator.validate(token, "other-cluster"));
+        assertFalse(validator.validate(token, "other-cluster", "default"));
     }
 
     @Test
@@ -62,7 +62,7 @@ class SigV4ValidatorTest {
         );
         String tamperedToken = validToken.replace("User=default", "User=other");
 
-        assertFalse(validator.validate(tamperedToken, "cache-cluster-01"));
+        assertFalse(validator.validate(tamperedToken, "cache-cluster-01", "default"));
     }
 
     @Test
@@ -79,7 +79,7 @@ class SigV4ValidatorTest {
                 900
         );
 
-        assertTrue(validator.validate(token, null));
+        assertTrue(validator.validate(token, null, "default"));
     }
 
     @Test
@@ -96,7 +96,7 @@ class SigV4ValidatorTest {
                 900
         );
 
-        assertFalse(validator.validate(token, "cache-cluster-01"));
+        assertFalse(validator.validate(token, "cache-cluster-01", "default"));
     }
 
     @Test
@@ -113,7 +113,43 @@ class SigV4ValidatorTest {
                 900
         );
 
-        assertFalse(validator.validate(token, "cache-cluster-01"));
+        assertFalse(validator.validate(token, "cache-cluster-01", "default"));
+    }
+
+    @Test
+    void validateRejectsTokenForWrongUser() throws Exception {
+        IamService iamService = IamServiceTestHelper.iamServiceWithAccessKey("AKIDCACHE", "secret-cache");
+
+        SigV4Validator validator = new SigV4Validator(iamService);
+        String token = SigV4TokenTestHelper.createElastiCacheToken(
+                "cache-cluster-01",
+                "default",
+                "AKIDCACHE",
+                "secret-cache",
+                Instant.now().minusSeconds(60),
+                900
+        );
+
+        assertFalse(validator.validate(token, "cache-cluster-01", "attacker"),
+                "Token signed for 'default' must be rejected when client authenticates as 'attacker'");
+    }
+
+    @Test
+    void validateAcceptsTokenWhenExpectedUsernameIsNull() throws Exception {
+        IamService iamService = IamServiceTestHelper.iamServiceWithAccessKey("AKIDCACHE", "secret-cache");
+
+        SigV4Validator validator = new SigV4Validator(iamService);
+        String token = SigV4TokenTestHelper.createElastiCacheToken(
+                "cache-cluster-01",
+                "default",
+                "AKIDCACHE",
+                "secret-cache",
+                Instant.now().minusSeconds(60),
+                900
+        );
+
+        assertTrue(validator.validate(token, "cache-cluster-01", null),
+                "Null expectedUsername should skip the user identity check");
     }
 
     @Test
@@ -132,7 +168,7 @@ class SigV4ValidatorTest {
                 900
         );
 
-        assertTrue(validator.validate(token, "cache-cluster-01"));
+        assertTrue(validator.validate(token, "cache-cluster-01", "user+name@domain.com"));
     }
 
     @Test
@@ -150,7 +186,7 @@ class SigV4ValidatorTest {
         );
         String withoutAction = validToken.replaceFirst("Action=connect&", "");
 
-        assertFalse(validator.validate(withoutAction, "cache-cluster-01"));
+        assertFalse(validator.validate(withoutAction, "cache-cluster-01", "default"));
     }
 
     @Test
@@ -168,6 +204,6 @@ class SigV4ValidatorTest {
         );
         String withoutSignature = validToken.replaceFirst("&X-Amz-Signature=[0-9a-f]+", "");
 
-        assertFalse(validator.validate(withoutSignature, "cache-cluster-01"));
+        assertFalse(validator.validate(withoutSignature, "cache-cluster-01", "default"));
     }
 }

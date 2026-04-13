@@ -36,13 +36,17 @@ public class SigV4Validator {
     }
 
     /**
-     * Validates the given IAM auth token against the expected cluster ID.
+     * Validates the given IAM auth token against the expected cluster ID and username.
      * The token is a presigned URL without the scheme, e.g.:
      * {@code clusterId/?Action=connect&User=...&X-Amz-Signature=...}
      *
-     * @return true if the token is valid and not expired
+     * @param token the presigned URL token
+     * @param expectedGroupId the replication group ID to match against the token's host
+     * @param expectedUsername the Redis username from the AUTH command;
+     *                         must match the {@code User} in the token. May be null to skip.
+     * @return true if the token is valid, identities match, and the token is not expired
      */
-    public boolean validate(String token, String expectedGroupId) {
+    public boolean validate(String token, String expectedGroupId, String expectedUsername) {
         try {
             URI uri = URI.create("http://" + token);
             String clusterId = uri.getHost();
@@ -60,6 +64,7 @@ public class SigV4Validator {
 
             String[] rawPairs = rawQuery.split("&");
             String action = findRawParam(rawPairs, "Action");
+            String user = findRawParam(rawPairs, "User");
             String dateTime = findRawParam(rawPairs, "X-Amz-Date");
             String expires = findRawParam(rawPairs, "X-Amz-Expires");
             String credential = findRawParam(rawPairs, "X-Amz-Credential");
@@ -69,6 +74,12 @@ public class SigV4Validator {
             if (!"connect".equals(action) || dateTime == null || expires == null
                     || credential == null || signedHeaders == null || signature == null) {
                 LOG.debugv("IAM token missing required SigV4 parameters");
+                return false;
+            }
+
+            if (expectedUsername != null && user != null && !expectedUsername.equals(user)) {
+                LOG.debugv("IAM token user mismatch: expected={0}, got={1}",
+                        expectedUsername, user);
                 return false;
             }
 
@@ -111,7 +122,9 @@ public class SigV4Validator {
             byte[] signingKey = deriveSigningKey(secretKey, date, region, service);
             String expectedSignature = hexEncode(hmacSha256(signingKey, stringToSign));
 
-            boolean valid = expectedSignature.equals(signature);
+            boolean valid = MessageDigest.isEqual(
+                    expectedSignature.getBytes(StandardCharsets.UTF_8),
+                    signature.getBytes(StandardCharsets.UTF_8));
             if (!valid) {
                 LOG.debugv("IAM token signature mismatch for accessKey={0}", accessKeyId);
             }

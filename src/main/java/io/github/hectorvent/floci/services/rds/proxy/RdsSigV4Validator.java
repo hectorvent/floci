@@ -42,9 +42,12 @@ public class RdsSigV4Validator {
      * The token is a presigned URL without the scheme, e.g.:
      * {@code hostname:port/?Action=connect&DBUser=admin&X-Amz-Signature=...}
      *
-     * @return true if the token signature is valid and the token is not expired
+     * @param token the presigned URL token
+     * @param clientUsername the username from the PostgreSQL startup message;
+     *                       must match the {@code DBUser} in the token
+     * @return true if the token signature is valid, the DBUser matches, and the token is not expired
      */
-    public boolean validate(String token) {
+    public boolean validate(String token, String clientUsername) {
         try {
             URI uri = URI.create("http://" + token);
             String host = uri.getHost();
@@ -71,6 +74,12 @@ public class RdsSigV4Validator {
             if (!"connect".equals(action) || dbUser == null || dateTime == null || expires == null
                     || credential == null || signedHeaders == null || signature == null) {
                 LOG.debugv("RDS IAM token missing required SigV4 parameters");
+                return false;
+            }
+
+            if (clientUsername != null && !clientUsername.equals(dbUser)) {
+                LOG.debugv("RDS IAM token DBUser mismatch: client={0}, token={1}",
+                        clientUsername, dbUser);
                 return false;
             }
 
@@ -115,7 +124,9 @@ public class RdsSigV4Validator {
             byte[] signingKey = deriveSigningKey(secretKey, date, region, service);
             String expectedSignature = hexEncode(hmacSha256(signingKey, stringToSign));
 
-            boolean valid = expectedSignature.equals(signature);
+            boolean valid = MessageDigest.isEqual(
+                    expectedSignature.getBytes(StandardCharsets.UTF_8),
+                    signature.getBytes(StandardCharsets.UTF_8));
             if (!valid) {
                 LOG.debugv("RDS IAM token signature mismatch for accessKey={0}", accessKeyId);
             }

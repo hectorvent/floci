@@ -222,7 +222,7 @@ public class ElastiCacheQueryHandler {
             return AwsQueryResponse.error("InvalidParameter", "Token parameter is required.", AwsNamespaces.EC, 400);
         }
         try {
-            boolean valid = sigV4Validator.validate(token, null);
+            boolean valid = sigV4Validator.validate(token, null, null);
             if (!valid) {
                 return AwsQueryResponse.error("SignatureDoesNotMatch",
                         "The request signature does not match.", AwsNamespaces.EC, 403);
