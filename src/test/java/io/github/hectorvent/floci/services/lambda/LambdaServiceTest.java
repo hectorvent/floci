@@ -237,4 +237,48 @@ class LambdaServiceTest {
         LambdaFunction updated = service.updateFunctionCode(REGION, "update-fn", Map.of());
         assertNotEquals(originalRevision, updated.getRevisionId());
     }
+
+    @Test
+    void concurrentPutFunctionConcurrency_endsInConsistentState() throws Exception {
+        // Exercise the per-function serialization in concurrencyOpLocks:
+        // two threads racing Put on the same function must leave the
+        // limiter and the persisted reserved value in agreement with
+        // whichever write landed last.
+        service.createFunction(REGION, baseRequest("race-fn"));
+
+        int iterations = 50;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < iterations; i++) {
+                int a = 100 + i;
+                int b = 200 + i;
+                java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.Future<Integer> fA = pool.submit(() -> {
+                    start.await();
+                    return service.putFunctionConcurrency(REGION, "race-fn", a)
+                            .getReservedConcurrentExecutions();
+                });
+                java.util.concurrent.Future<Integer> fB = pool.submit(() -> {
+                    start.await();
+                    return service.putFunctionConcurrency(REGION, "race-fn", b)
+                            .getReservedConcurrentExecutions();
+                });
+                start.countDown();
+                fA.get();
+                fB.get();
+
+                LambdaFunction fn = service.getFunction(REGION, "race-fn");
+                Integer stored = fn.getReservedConcurrentExecutions();
+                assertTrue(stored.equals(a) || stored.equals(b),
+                        "store should reflect one of the two writes, got " + stored);
+                // If the serialization worked, the Get call returns the
+                // value that also matches the limiter-tracked total (via
+                // Σreserved for this one-function region).
+                assertEquals(stored.intValue(),
+                        service.getFunctionConcurrency(REGION, "race-fn").intValue());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }
