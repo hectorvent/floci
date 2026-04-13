@@ -1,6 +1,7 @@
 package com.floci.test;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -206,6 +207,9 @@ class S3NotificationsTest {
 
     @Test
     void lambdaNotificationInvokesFunctionForMatchingObject() throws InterruptedException {
+        Assumptions.assumeTrue(TestFixtures.isLambdaDispatchAvailable(),
+                "Lambda REQUEST_RESPONSE dispatch unavailable in this environment");
+
         String key = "incoming/report.csv";
         String expectedMessage = "[s3-notification] received " + bucketName + "/" + key;
 

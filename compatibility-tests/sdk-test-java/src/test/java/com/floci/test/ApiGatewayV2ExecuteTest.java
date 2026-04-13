@@ -151,6 +151,30 @@ class ApiGatewayV2ExecuteTest {
         } catch (ConnectException e) {
             Assumptions.assumeTrue(false, "Floci endpoint is not reachable at " + TestFixtures.endpoint());
         }
+
+        // Probe result is memoized in TestFixtures; skip warmup if dispatch is unavailable
+        if (!TestFixtures.isLambdaDispatchAvailable()) {
+            lambdaDispatchAvailable = false;
+            return;
+        }
+
+        // Warm the API GW → Lambda dispatch path and verify the response carries
+        // the expected Lambda proxy envelope (statusCode in body). The direct
+        // probe above only tests raw invoke; APIGW integration may behave differently.
+        try {
+            HttpResponse<String> warmup = http.send(HttpRequest.newBuilder()
+                            .uri(URI.create(baseUrl + "/echo/warmup"))
+                            .timeout(Duration.ofSeconds(30))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            JsonNode warmupBody = JSON.readTree(warmup.body());
+            lambdaDispatchAvailable = warmup.statusCode() == 200
+                    && warmupBody.path("statusCode").asInt() == 200;
+        } catch (Exception e) {
+            lambdaDispatchAvailable = false;
+        }
     }
 
     @AfterAll
@@ -174,6 +198,9 @@ class ApiGatewayV2ExecuteTest {
     @Test
     @Order(1)
     void dispatchesHttpApiRouteToLambdaWithV2EventShape() throws Exception {
+        Assumptions.assumeTrue(lambdaDispatchAvailable,
+                "Lambda dispatch unavailable in this environment");
+
         HttpResponse<String> response = http.send(HttpRequest.newBuilder()
                         .uri(URI.create(baseUrl + "/echo/child/path?color=blue"))
                         .timeout(Duration.ofSeconds(10))
@@ -183,14 +210,9 @@ class ApiGatewayV2ExecuteTest {
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
 
-        // Lambda dispatch may not work in CI (no Docker-in-Docker for containers).
-        // Gate this and downstream tests on successful dispatch.
         JsonNode body = JSON.readTree(response.body());
-        lambdaDispatchAvailable = response.statusCode() == 200
-                && body.path("statusCode").asInt() == 200;
-        Assumptions.assumeTrue(lambdaDispatchAvailable,
-                "Lambda dispatch unavailable (HTTP " + response.statusCode()
-                        + ", body statusCode " + body.path("statusCode").asInt() + ")");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(body.path("statusCode").asInt()).isEqualTo(200);
 
         JsonNode event = JSON.readTree(body.path("body").asText());
 

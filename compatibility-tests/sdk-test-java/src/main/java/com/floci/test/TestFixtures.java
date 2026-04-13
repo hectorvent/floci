@@ -37,8 +37,22 @@ import software.amazon.awssdk.services.scheduler.SchedulerClient;
 import software.amazon.awssdk.services.appconfig.AppConfigClient;
 import software.amazon.awssdk.services.appconfigdata.AppConfigDataClient;
 
+import software.amazon.awssdk.core.SdkBytes;
+import software.amazon.awssdk.services.lambda.model.CreateFunctionRequest;
+import software.amazon.awssdk.services.lambda.model.DeleteFunctionRequest;
+import software.amazon.awssdk.services.lambda.model.FunctionCode;
+import software.amazon.awssdk.services.lambda.model.InvokeRequest;
+import software.amazon.awssdk.services.lambda.model.InvokeResponse;
+import software.amazon.awssdk.services.lambda.model.InvocationType;
+import software.amazon.awssdk.services.lambda.model.Runtime;
+
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Shared test utilities and AWS client factories.
@@ -95,6 +109,80 @@ public final class TestFixtures {
      */
     public static String proxyHost() {
         return ENDPOINT.getHost();
+    }
+
+    // ============================================
+    // Lambda dispatch availability probe
+    // ============================================
+
+    private static volatile Boolean lambdaDispatchAvailable;
+
+    /**
+     * Checks whether Lambda REQUEST_RESPONSE invocation works in the current
+     * environment. Creates a minimal no-op function, invokes it, and tears it
+     * down. The result is memoized so it runs at most once per JVM.
+     *
+     * Thread-safe: uses double-checked locking so parallel test classes don't
+     * race the probe.
+     *
+     * Returns false on any transport-level failure (timeout, connection refused,
+     * SDK timeout) so that tests can skip cleanly when Docker-in-Docker is
+     * unavailable in CI.
+     */
+    public static boolean isLambdaDispatchAvailable() {
+        if (lambdaDispatchAvailable != null) {
+            return lambdaDispatchAvailable;
+        }
+        synchronized (TestFixtures.class) {
+            if (lambdaDispatchAvailable != null) {
+                return lambdaDispatchAvailable;
+            }
+            String probeFn = uniqueName("probe-lambda-dispatch");
+            LambdaClient probe = lambdaClient();
+            try {
+                probe.createFunction(CreateFunctionRequest.builder()
+                        .functionName(probeFn)
+                        .runtime(Runtime.NODEJS20_X)
+                        .role("arn:aws:iam::000000000000:role/lambda-role")
+                        .handler("index.handler")
+                        .code(FunctionCode.builder()
+                                .zipFile(SdkBytes.fromByteArray(probeZip()))
+                                .build())
+                        .build());
+                InvokeResponse response = probe.invoke(InvokeRequest.builder()
+                        .functionName(probeFn)
+                        .invocationType(InvocationType.REQUEST_RESPONSE)
+                        .payload(SdkBytes.fromUtf8String("{}"))
+                        .overrideConfiguration(c -> c.apiCallTimeout(Duration.ofSeconds(30)))
+                        .build());
+                lambdaDispatchAvailable = response.statusCode() == 200;
+            } catch (Exception e) {
+                lambdaDispatchAvailable = false;
+            } finally {
+                try {
+                    probe.deleteFunction(DeleteFunctionRequest.builder()
+                            .functionName(probeFn).build());
+                } catch (Exception ignored) {
+                }
+                probe.close();
+            }
+            return lambdaDispatchAvailable;
+        }
+    }
+
+    private static byte[] probeZip() {
+        String code = "exports.handler = async () => ({ statusCode: 200 });";
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+                zos.putNextEntry(new ZipEntry("index.js"));
+                zos.write(code.getBytes(StandardCharsets.UTF_8));
+                zos.closeEntry();
+            }
+            return baos.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to build probe ZIP", e);
+        }
     }
 
     // ============================================

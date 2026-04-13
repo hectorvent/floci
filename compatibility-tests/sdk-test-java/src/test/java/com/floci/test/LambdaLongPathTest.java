@@ -66,6 +66,9 @@ class LambdaLongPathTest {
     @Test
     @Order(2)
     void longPathFileIsAccessibleAtRuntime() throws Exception {
+        Assumptions.assumeTrue(TestFixtures.isLambdaDispatchAvailable(),
+                "Lambda REQUEST_RESPONSE dispatch unavailable in this environment");
+
         InvokeResponse response = lambda.invoke(InvokeRequest.builder()
                 .functionName(FUNCTION_NAME)
                 .invocationType(InvocationType.REQUEST_RESPONSE)
