@@ -1289,6 +1289,7 @@ class S3IntegrationTest {
             .get("/" + bucket + "?location")
         .then()
             .statusCode(200)
+            .body(not(containsString("<?xml")))
             .body(containsString("<LocationConstraint"))
             .body(not(containsString("us-east-1")));
 
@@ -1318,6 +1319,7 @@ class S3IntegrationTest {
             .get("/" + bucket + "?location")
         .then()
             .statusCode(200)
+            .body(not(containsString("<?xml")))
             .body(containsString("eu-central-1"));
 
         given().when().delete("/" + bucket);
