@@ -140,13 +140,21 @@ class LambdaConcurrencyTest {
     @Order(9)
     void putFunctionConcurrency_exceedsAccountUnreservedMin_throwsLimitExceeded() {
         // Floci default: regionLimit=1000, unreservedMin=100 → max single Put = 900
+        // The Lambda SDK v2 model does not declare LimitExceededException as a
+        // dedicated subclass, so the SDK surfaces it as the generic
+        // LambdaException. We therefore assert the wire-level identity
+        // (status code + __type error code) rather than a Java type, which is
+        // what AWS clients actually discriminate on.
         assertThatThrownBy(() -> lambda.putFunctionConcurrency(
                 PutFunctionConcurrencyRequest.builder()
                         .functionName(FUNCTION_NAME)
                         .reservedConcurrentExecutions(901)
                         .build()))
-                .isInstanceOf(LambdaException.class)
-                .hasMessageContaining("UnreservedConcurrentExecution");
+                .isInstanceOfSatisfying(LambdaException.class, ex -> {
+                    assertThat(ex.statusCode()).isEqualTo(400);
+                    assertThat(ex.awsErrorDetails().errorCode()).isEqualTo("LimitExceededException");
+                    assertThat(ex.getMessage()).contains("UnreservedConcurrentExecution");
+                });
     }
 
     @Test

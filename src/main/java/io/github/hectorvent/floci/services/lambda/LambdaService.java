@@ -276,7 +276,12 @@ public class LambdaService {
         if (concurrencyLimiter != null) {
             concurrencyLimiter.reset(fn.getFunctionArn());
         }
-        concurrencyOpLocks.remove(fn.getFunctionArn());
+        // Intentionally do not remove the per-function lock from
+        // concurrencyOpLocks here. Removing it while another thread is
+        // synchronized on the same lock would let a subsequent Put/Delete
+        // create a fresh lock object and run in parallel, reintroducing the
+        // limiter/store divergence the map exists to prevent. The map grows
+        // by one Object per deleted function — acceptable for a local emulator.
         codeStore.delete(functionName);
         functionStore.delete(region, functionName);
         LOG.infov("Deleted Lambda function: {0}", functionName);
