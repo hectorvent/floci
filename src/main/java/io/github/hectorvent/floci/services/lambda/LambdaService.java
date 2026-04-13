@@ -272,18 +272,22 @@ public class LambdaService {
 
     public void deleteFunction(String region, String functionName) {
         LambdaFunction fn = getFunction(region, functionName); // throws 404 if not found
+        String arn = fn.getFunctionArn();
         warmPool.drainFunction(functionName);
-        if (concurrencyLimiter != null) {
-            concurrencyLimiter.reset(fn.getFunctionArn());
+        // Take the same per-function lock used by Put/DeleteFunctionConcurrency
+        // so a concurrent concurrency mutation cannot interleave with the
+        // limiter reset and store delete and leave the two views out of sync.
+        // The lock entry itself stays in the map after the delete: removing it
+        // could race with another thread already synchronized on the same
+        // object, letting a follow-up request allocate a fresh lock and run
+        // in parallel — the very serialization this map exists to prevent.
+        synchronized (lockForConcurrencyOp(arn)) {
+            if (concurrencyLimiter != null) {
+                concurrencyLimiter.reset(arn);
+            }
+            codeStore.delete(functionName);
+            functionStore.delete(region, functionName);
         }
-        // Intentionally do not remove the per-function lock from
-        // concurrencyOpLocks here. Removing it while another thread is
-        // synchronized on the same lock would let a subsequent Put/Delete
-        // create a fresh lock object and run in parallel, reintroducing the
-        // limiter/store divergence the map exists to prevent. The map grows
-        // by one Object per deleted function — acceptable for a local emulator.
-        codeStore.delete(functionName);
-        functionStore.delete(region, functionName);
         LOG.infov("Deleted Lambda function: {0}", functionName);
     }
 
