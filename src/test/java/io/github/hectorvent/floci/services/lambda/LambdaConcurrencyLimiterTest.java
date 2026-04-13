@@ -207,9 +207,16 @@ class LambdaConcurrencyLimiterTest {
 
         // Unreserved pool is also per-region
         LambdaConcurrencyLimiter small = new LambdaConcurrencyLimiter(1, 0);
-        small.acquire(fn(ARN, null));
-        // Same exhaustion in us-east-1, but ap-northeast-1 still has a slot
-        assertThrows(AwsException.class, () -> small.acquire(fn(ARN2, null)));
-        assertDoesNotThrow(() -> small.acquire(fn(ARN_OTHER_REGION, null)));
+        try (LambdaConcurrencyLimiter.Permit usEast = small.acquire(fn(ARN, null));
+             LambdaConcurrencyLimiter.Permit apne1 = small.acquire(fn(ARN_OTHER_REGION, null))) {
+            // Same exhaustion in us-east-1, but ap-northeast-1 has its own slot
+            // (already consumed by apne1 above, so second acquire there also throws)
+            assertThrows(AwsException.class, () -> small.acquire(fn(ARN2, null)));
+            assertThrows(AwsException.class, () -> small.acquire(fn(ARN_OTHER_REGION, null)));
+        }
+        // After close, both regions have capacity again
+        try (LambdaConcurrencyLimiter.Permit reacquire = small.acquire(fn(ARN, null))) {
+            assertEquals(1, small.unreservedInflightCount(REGION));
+        }
     }
 }
