@@ -892,8 +892,8 @@ public class DynamoDbService {
                 remaining = remaining.substring(4).trim();
                 remaining = applyAddClause(item, remaining, exprAttrNames, exprAttrValues);
             } else if (upper.startsWith("DELETE ")) {
-                // DELETE is for sets — skip for now
-                break;
+                remaining = remaining.substring(7).trim();
+                remaining = applyDeleteClause(item, remaining, exprAttrNames, exprAttrValues);
             } else {
                 break;
             }
@@ -1169,6 +1169,100 @@ public class DynamoDbService {
 
         // Unsupported type for ADD — just set the value
         return addValue;
+    }
+
+    private String applyDeleteClause(ObjectNode item, String clause,
+                                     JsonNode exprAttrNames, JsonNode exprAttrValues) {
+        while (!clause.isEmpty()) {
+            String upper = clause.toUpperCase();
+            if (upper.startsWith("SET ") || upper.startsWith("REMOVE ") || upper.startsWith("ADD ") || upper.startsWith("DELETE ")) {
+                break;
+            }
+
+            // Parse "attr :val"
+            String[] parts = clause.split("\\s+", 3);
+            if (parts.length < 2) break;
+
+            String attrName = resolveAttributeName(parts[0], exprAttrNames);
+            String valuePlaceholder = parts[1].replaceAll(",.*", "").trim();
+
+            if (valuePlaceholder.startsWith(":") && exprAttrValues != null) {
+                JsonNode deleteValue = exprAttrValues.get(valuePlaceholder);
+                if (deleteValue != null) {
+                    JsonNode existingValue = item.get(attrName);
+                    if (existingValue != null) {
+                        JsonNode newValue = applyDeleteOperation(existingValue, deleteValue);
+                        if (newValue == null) {
+                            item.remove(attrName);
+                        } else {
+                            item.set(attrName, newValue);
+                        }
+                    }
+                }
+            }
+
+            // Advance past this assignment
+            int commaIdx = findNextComma(clause);
+            if (commaIdx >= 0) {
+                clause = clause.substring(commaIdx + 1).trim();
+            } else {
+                int nextClause = findNextClauseKeyword(clause);
+                clause = nextClause >= 0 ? clause.substring(nextClause).trim() : "";
+            }
+        }
+        return clause;
+    }
+
+    /**
+     * Implements DynamoDB DELETE operation semantics:
+     * removes the specified elements from a set attribute (SS, NS, BS).
+     * Returns null if the resulting set is empty (caller should remove the attribute).
+     * Returns the existing value unchanged if types don't match or the value isn't a set.
+     */
+    private JsonNode applyDeleteOperation(JsonNode existingValue, JsonNode deleteValue) {
+        ObjectNode result = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+
+        if (deleteValue.has("SS") && existingValue.has("SS")) {
+            java.util.Set<String> toRemove = new java.util.LinkedHashSet<>();
+            deleteValue.get("SS").forEach(n -> toRemove.add(n.asText()));
+            java.util.List<String> remaining = new java.util.ArrayList<>();
+            existingValue.get("SS").forEach(n -> {
+                if (!toRemove.contains(n.asText())) remaining.add(n.asText());
+            });
+            if (remaining.isEmpty()) return null;
+            var arrayNode = result.putArray("SS");
+            remaining.forEach(arrayNode::add);
+            return result;
+        }
+
+        if (deleteValue.has("NS") && existingValue.has("NS")) {
+            java.util.Set<String> toRemove = new java.util.LinkedHashSet<>();
+            deleteValue.get("NS").forEach(n -> toRemove.add(n.asText()));
+            java.util.List<String> remaining = new java.util.ArrayList<>();
+            existingValue.get("NS").forEach(n -> {
+                if (!toRemove.contains(n.asText())) remaining.add(n.asText());
+            });
+            if (remaining.isEmpty()) return null;
+            var arrayNode = result.putArray("NS");
+            remaining.forEach(arrayNode::add);
+            return result;
+        }
+
+        if (deleteValue.has("BS") && existingValue.has("BS")) {
+            java.util.Set<String> toRemove = new java.util.LinkedHashSet<>();
+            deleteValue.get("BS").forEach(n -> toRemove.add(n.asText()));
+            java.util.List<String> remaining = new java.util.ArrayList<>();
+            existingValue.get("BS").forEach(n -> {
+                if (!toRemove.contains(n.asText())) remaining.add(n.asText());
+            });
+            if (remaining.isEmpty()) return null;
+            var arrayNode = result.putArray("BS");
+            remaining.forEach(arrayNode::add);
+            return result;
+        }
+
+        // DELETE on non-set types or mismatched set types is a no-op per DynamoDB spec
+        return existingValue;
     }
 
     String resolveAttributeName(String nameOrPlaceholder, JsonNode exprAttrNames) {

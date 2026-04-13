@@ -886,6 +886,208 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
+    @Order(29)
+    void deleteElementsFromStringSet() {
+        // Create table
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteSetTable",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Put item with a String Set
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteSetTable",
+                    "Item": {"pk": {"S": "k1"}, "tags": {"SS": ["a", "b", "c"]}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // DELETE "a" from the set
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteSetTable",
+                    "Key": {"pk": {"S": "k1"}},
+                    "UpdateExpression": "DELETE tags :val",
+                    "ExpressionAttributeValues": {":val": {"SS": ["a"]}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify "a" was removed, "b" and "c" remain
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteSetTable",
+                    "Key": {"pk": {"S": "k1"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.tags.SS.size()", equalTo(2))
+            .body("Item.tags.SS", hasItems("b", "c"))
+            .body("Item.tags.SS", not(hasItem("a")));
+
+        // DELETE remaining elements to verify attribute removal on empty set
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteSetTable",
+                    "Key": {"pk": {"S": "k1"}},
+                    "UpdateExpression": "DELETE tags :val",
+                    "ExpressionAttributeValues": {":val": {"SS": ["b", "c"]}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify attribute is removed entirely (DynamoDB doesn't allow empty sets)
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteSetTable",
+                    "Key": {"pk": {"S": "k1"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.tags", nullValue());
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "DeleteSetTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(30)
+    void deleteFromSetWithAddInSameExpression() {
+        // Create table
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteAddComboTable",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Put item with a String Set
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteAddComboTable",
+                    "Item": {"pk": {"S": "k1"}, "tags": {"SS": ["a", "b"]}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Combined: ADD "c" then DELETE "a" in the same expression
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteAddComboTable",
+                    "Key": {"pk": {"S": "k1"}},
+                    "UpdateExpression": "ADD tags :toAdd DELETE tags :toRemove",
+                    "ExpressionAttributeValues": {
+                        ":toAdd": {"SS": ["c"]},
+                        ":toRemove": {"SS": ["a"]}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify: should have "b" and "c", not "a"
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "DeleteAddComboTable",
+                    "Key": {"pk": {"S": "k1"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.tags.SS.size()", equalTo(2))
+            .body("Item.tags.SS", hasItems("b", "c"))
+            .body("Item.tags.SS", not(hasItem("a")));
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "DeleteAddComboTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     void unsupportedOperation() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateGlobalTable")
