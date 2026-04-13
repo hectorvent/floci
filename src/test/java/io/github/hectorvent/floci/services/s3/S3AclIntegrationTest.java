@@ -61,7 +61,7 @@ class S3AclIntegrationTest {
             .statusCode(200);
 
         given()
-            .header("x-amz-copy-source", "/" + BUCKET + "/public.txt")
+            .header("x-amz-copy-source", "/" + BUCKET + "/copy-source.txt")
         .when()
             .put("/" + BUCKET + "/copy-default-private.txt")
         .then()
@@ -145,6 +145,19 @@ class S3AclIntegrationTest {
             .body("bad acl")
         .when()
             .put("/" + BUCKET + "/invalid-acl.txt")
+        .then()
+            .statusCode(400)
+            .body(containsString("InvalidArgument"))
+            .body(containsString("Unsupported x-amz-acl value"));
+    }
+
+    @Test
+    @Order(7)
+    void initiateMultipartUploadRejectsUnsupportedCannedAcl() {
+        given()
+            .header("x-amz-acl", "totally-unsupported")
+        .when()
+            .post("/" + BUCKET + "/invalid-multipart.txt?uploads")
         .then()
             .statusCode(400)
             .body(containsString("InvalidArgument"))

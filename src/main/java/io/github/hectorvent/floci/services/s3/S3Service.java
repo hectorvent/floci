@@ -930,6 +930,9 @@ public class S3Service {
                                                    Map<String, String> metadata, String storageClass,
                                                    String contentDisposition, String acl) {
         ensureBucketExists(bucket);
+        if (acl != null && !acl.isBlank()) {
+            cannedObjectAclXml(acl);
+        }
         MultipartUpload upload = new MultipartUpload(bucket, key, contentType);
         if (metadata != null) {
             upload.getMetadata().putAll(metadata);
