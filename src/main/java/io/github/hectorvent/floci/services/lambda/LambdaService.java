@@ -127,6 +127,12 @@ public class LambdaService {
         }
         int count = 0;
         for (LambdaFunction fn : functionStore.listAll()) {
+            // Reserved concurrency is a function-level property; published
+            // versions share the $LATEST record's value. Skip non-$LATEST
+            // entries to avoid double-counting into totalReserved().
+            if (!"$LATEST".equals(fn.getVersion())) {
+                continue;
+            }
             Integer reserved = fn.getReservedConcurrentExecutions();
             if (reserved != null) {
                 concurrencyLimiter.setReserved(fn.getFunctionArn(), reserved);
@@ -629,8 +635,7 @@ public class LambdaService {
         }
         LambdaFunction fn = getFunction(region, functionName);
         if (concurrencyLimiter != null) {
-            concurrencyLimiter.validatePut(fn.getFunctionArn(), reservedConcurrentExecutions);
-            concurrencyLimiter.setReserved(fn.getFunctionArn(), reservedConcurrentExecutions);
+            concurrencyLimiter.validateAndSetReserved(fn.getFunctionArn(), reservedConcurrentExecutions);
         }
         fn.setReservedConcurrentExecutions(reservedConcurrentExecutions);
         functionStore.save(region, fn);

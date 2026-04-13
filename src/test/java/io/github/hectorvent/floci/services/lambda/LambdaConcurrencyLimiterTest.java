@@ -79,8 +79,8 @@ class LambdaConcurrencyLimiterTest {
     void validatePut_rejectsWhenUnreservedMinViolated() {
         LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter(1000, 100);
         // totalReserved=0, max allowed for new function = 1000 - 100 = 900
-        assertDoesNotThrow(() -> limiter.validatePut(ARN, 900));
-        AwsException ex = assertThrows(AwsException.class, () -> limiter.validatePut(ARN, 901));
+        assertDoesNotThrow(() -> limiter.validateAndSetReserved(ARN, 900));
+        AwsException ex = assertThrows(AwsException.class, () -> limiter.validateAndSetReserved(ARN, 901));
         assertEquals("LimitExceededException", ex.getErrorCode());
         assertEquals(400, ex.getHttpStatus());
     }
@@ -90,7 +90,7 @@ class LambdaConcurrencyLimiterTest {
         LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter(1000, 100);
         limiter.setReserved(ARN, 500);
         // Updating the same ARN to 900 should succeed (self is excluded from "other")
-        assertDoesNotThrow(() -> limiter.validatePut(ARN, 900));
+        assertDoesNotThrow(() -> limiter.validateAndSetReserved(ARN, 900));
     }
 
     @Test
@@ -98,8 +98,8 @@ class LambdaConcurrencyLimiterTest {
         LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter(1000, 100);
         limiter.setReserved(ARN2, 500);
         // otherReserved=500, max for ARN = 1000 - 100 - 500 = 400
-        assertDoesNotThrow(() -> limiter.validatePut(ARN, 400));
-        assertThrows(AwsException.class, () -> limiter.validatePut(ARN, 401));
+        assertDoesNotThrow(() -> limiter.validateAndSetReserved(ARN, 400));
+        assertThrows(AwsException.class, () -> limiter.validateAndSetReserved(ARN, 401));
     }
 
     @Test

@@ -31,6 +31,8 @@ public class LambdaConcurrencyLimiter {
     private final ConcurrentHashMap<String, AtomicInteger> inflight = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Integer> reserved = new ConcurrentHashMap<>();
     private final AtomicInteger unreservedInflight = new AtomicInteger();
+    /** Guards atomic validate-then-set on the reserved map (Put operations). */
+    private final Object reservedLock = new Object();
     private final int accountLimit;
     private final int unreservedMin;
 
@@ -73,9 +75,11 @@ public class LambdaConcurrencyLimiter {
     }
 
     private Permit acquireUnreserved() {
-        int cap = Math.max(0, accountLimit - totalReserved());
         while (true) {
             int current = unreservedInflight.get();
+            // Recompute cap each spin so a concurrent setReserved is observed
+            // promptly and we do not grant permits above the live pool.
+            int cap = Math.max(0, accountLimit - totalReserved());
             if (current >= cap) {
                 throw throttle();
             }
@@ -86,32 +90,40 @@ public class LambdaConcurrencyLimiter {
     }
 
     /**
-     * Register (or update) a function's reserved value. Returns the previous value,
-     * or {@code null} if none was set.
+     * Register (or update) a function's reserved value without validation.
+     * Intended for startup rehydration from persisted state.
      */
     public Integer setReserved(String functionArn, int value) {
-        return reserved.put(functionArn, value);
+        synchronized (reservedLock) {
+            return reserved.put(functionArn, value);
+        }
     }
 
     public Integer clearReserved(String functionArn) {
-        return reserved.remove(functionArn);
+        synchronized (reservedLock) {
+            return reserved.remove(functionArn);
+        }
     }
 
     /**
-     * Validates that setting {@code target} for {@code functionArn} leaves at least
-     * {@code unreservedMin} unreserved capacity.
+     * Atomically validates and applies a reserved value. Two concurrent Puts for
+     * different functions cannot each pass validation against stale totals and
+     * then collectively push unreserved capacity below the minimum.
      *
      * @throws AwsException {@code LimitExceededException} if the value would
      *         drop unreserved below the minimum.
      */
-    public void validatePut(String functionArn, int target) {
-        int otherReserved = totalReserved() - reserved.getOrDefault(functionArn, 0);
-        int maxAllowed = accountLimit - unreservedMin - otherReserved;
-        if (target > maxAllowed) {
-            throw new AwsException("LimitExceededException",
-                    "Specified ReservedConcurrentExecutions for function decreases account's "
-                    + "UnreservedConcurrentExecution below its minimum value of ["
-                    + unreservedMin + "].", 400);
+    public void validateAndSetReserved(String functionArn, int target) {
+        synchronized (reservedLock) {
+            int otherReserved = totalReserved() - reserved.getOrDefault(functionArn, 0);
+            int maxAllowed = accountLimit - unreservedMin - otherReserved;
+            if (target > maxAllowed) {
+                throw new AwsException("LimitExceededException",
+                        "Specified ReservedConcurrentExecutions for function decreases account's "
+                        + "UnreservedConcurrentExecution below its minimum value of ["
+                        + unreservedMin + "].", 400);
+            }
+            reserved.put(functionArn, target);
         }
     }
 
