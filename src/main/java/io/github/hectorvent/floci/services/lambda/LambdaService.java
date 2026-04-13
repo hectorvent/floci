@@ -58,6 +58,13 @@ public class LambdaService {
     private final KinesisEventSourcePoller kinesisPoller;
     private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     private final ConcurrentHashMap<String, Integer> versionCounters = new ConcurrentHashMap<>();
+    /**
+     * Per-function locks covering PutFunctionConcurrency and
+     * DeleteFunctionConcurrency. Serializing the limiter update + persistence
+     * pair against itself for a given function prevents the limiter and store
+     * from diverging on interleaved concurrent requests.
+     */
+    private final ConcurrentHashMap<String, Object> concurrencyOpLocks = new ConcurrentHashMap<>();
 
     /** Package-private constructor for testing without CDI. Config defaults (timeout=3, memory=128) apply. */
     LambdaService(LambdaFunctionStore functionStore,
@@ -269,6 +276,7 @@ public class LambdaService {
         if (concurrencyLimiter != null) {
             concurrencyLimiter.reset(fn.getFunctionArn());
         }
+        concurrencyOpLocks.remove(fn.getFunctionArn());
         codeStore.delete(functionName);
         functionStore.delete(region, functionName);
         LOG.infov("Deleted Lambda function: {0}", functionName);
@@ -634,29 +642,28 @@ public class LambdaService {
                     "ReservedConcurrentExecutions must be a non-negative integer", 400);
         }
         LambdaFunction fn = getFunction(region, functionName);
-        Integer previousReserved = null;
-        boolean limiterUpdated = false;
-        if (concurrencyLimiter != null) {
-            // Validate and apply under the limiter's lock so that two concurrent
-            // Puts for different functions cannot both pass a stale-total check.
-            previousReserved = concurrencyLimiter.validateAndSetReserved(
-                    fn.getFunctionArn(), reservedConcurrentExecutions);
-            limiterUpdated = true;
-        }
-        fn.setReservedConcurrentExecutions(reservedConcurrentExecutions);
-        try {
-            functionStore.save(region, fn);
-        } catch (RuntimeException e) {
-            if (limiterUpdated) {
-                // Only roll back if the limiter still reflects the value we wrote.
-                // A concurrent successful Put for the same function must not be
-                // clobbered by our rollback.
-                concurrencyLimiter.rollbackReservedIfExpected(
-                        fn.getFunctionArn(),
-                        reservedConcurrentExecutions,
-                        previousReserved);
+        String arn = fn.getFunctionArn();
+        // Serialize limiter update + store save for this function so that two
+        // concurrent Puts cannot leave the limiter and persisted state out of
+        // sync, regardless of which call acquires the reservedLock first.
+        synchronized (lockForConcurrencyOp(arn)) {
+            Integer previousReserved = null;
+            boolean limiterUpdated = false;
+            if (concurrencyLimiter != null) {
+                previousReserved = concurrencyLimiter.validateAndSetReserved(
+                        arn, reservedConcurrentExecutions);
+                limiterUpdated = true;
             }
-            throw e;
+            fn.setReservedConcurrentExecutions(reservedConcurrentExecutions);
+            try {
+                functionStore.save(region, fn);
+            } catch (RuntimeException e) {
+                if (limiterUpdated) {
+                    concurrencyLimiter.rollbackReservedIfExpected(
+                            arn, reservedConcurrentExecutions, previousReserved);
+                }
+                throw e;
+            }
         }
         return fn;
     }
@@ -668,26 +675,29 @@ public class LambdaService {
 
     public void deleteFunctionConcurrency(String region, String functionName) {
         LambdaFunction fn = getFunction(region, functionName);
-        Integer previousReserved = null;
-        boolean limiterCleared = false;
-        if (concurrencyLimiter != null) {
-            previousReserved = concurrencyLimiter.clearReserved(fn.getFunctionArn());
-            limiterCleared = true;
-        }
-        fn.setReservedConcurrentExecutions(null);
-        try {
-            functionStore.save(region, fn);
-        } catch (RuntimeException e) {
-            if (limiterCleared && previousReserved != null) {
-                // Only restore if the limiter is still in the cleared state we
-                // left it in; a concurrent successful Put must not be clobbered.
-                concurrencyLimiter.rollbackReservedIfExpected(
-                        fn.getFunctionArn(),
-                        null,
-                        previousReserved);
+        String arn = fn.getFunctionArn();
+        synchronized (lockForConcurrencyOp(arn)) {
+            Integer previousReserved = null;
+            boolean limiterCleared = false;
+            if (concurrencyLimiter != null) {
+                previousReserved = concurrencyLimiter.clearReserved(arn);
+                limiterCleared = true;
             }
-            throw e;
+            fn.setReservedConcurrentExecutions(null);
+            try {
+                functionStore.save(region, fn);
+            } catch (RuntimeException e) {
+                if (limiterCleared && previousReserved != null) {
+                    concurrencyLimiter.rollbackReservedIfExpected(
+                            arn, null, previousReserved);
+                }
+                throw e;
+            }
         }
+    }
+
+    private Object lockForConcurrencyOp(String functionArn) {
+        return concurrencyOpLocks.computeIfAbsent(functionArn, k -> new Object());
     }
 
     public LambdaFunction getFunctionByUrlId(String urlId) {

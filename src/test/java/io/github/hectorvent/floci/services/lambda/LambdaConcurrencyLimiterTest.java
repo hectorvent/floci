@@ -71,12 +71,46 @@ class LambdaConcurrencyLimiterTest {
         LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter(3, 0);
         limiter.setReserved(ARN, 2);
         // Reserved function consumes its own pool, not the region pool
-        limiter.acquire(fn(ARN, 2));
-        limiter.acquire(fn(ARN, 2));
-        // Unreserved function can still use the full regionLimit - totalReserved = 1
-        limiter.acquire(fn(ARN2, null));
-        AwsException ex = assertThrows(AwsException.class, () -> limiter.acquire(fn(ARN2, null)));
-        assertEquals(429, ex.getHttpStatus());
+        try (LambdaConcurrencyLimiter.Permit p1 = limiter.acquire(fn(ARN, 2));
+             LambdaConcurrencyLimiter.Permit p2 = limiter.acquire(fn(ARN, 2));
+             // Unreserved function can still use the full regionLimit - totalReserved = 1
+             LambdaConcurrencyLimiter.Permit p3 = limiter.acquire(fn(ARN2, null))) {
+            AwsException ex = assertThrows(AwsException.class, () -> limiter.acquire(fn(ARN2, null)));
+            assertEquals(429, ex.getHttpStatus());
+        }
+    }
+
+    @Test
+    void reset_preservesInflightCounterWhenBusy() {
+        // If a function is deleted while invocations are still running, and the
+        // same ARN is recreated, new invocations must see the remaining inflight
+        // so we don't transiently over-subscribe.
+        LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter();
+        LambdaFunction before = fn(3);
+        LambdaConcurrencyLimiter.Permit held = limiter.acquire(before);
+        assertEquals(1, limiter.inflightCount(ARN));
+
+        limiter.reset(ARN);
+        assertEquals(1, limiter.inflightCount(ARN), "inflight retained while permit is open");
+
+        LambdaFunction recreated = fn(3);
+        try (LambdaConcurrencyLimiter.Permit p2 = limiter.acquire(recreated)) {
+            assertEquals(2, limiter.inflightCount(ARN));
+        }
+        held.close();
+        assertEquals(0, limiter.inflightCount(ARN));
+    }
+
+    @Test
+    void reset_dropsIdleInflightCounter() {
+        LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter();
+        try (LambdaConcurrencyLimiter.Permit p = limiter.acquire(fn(1))) {
+            assertEquals(1, limiter.inflightCount(ARN));
+        }
+        assertEquals(0, limiter.inflightCount(ARN));
+        limiter.reset(ARN);
+        // No permits open, so reset should drop the entry entirely.
+        assertEquals(0, limiter.inflightCount(ARN));
     }
 
     @Test
@@ -107,13 +141,10 @@ class LambdaConcurrencyLimiterTest {
     }
 
     @Test
-    void reset_clearsInflightAndReserved() {
+    void reset_clearsReservedEntry() {
         LambdaConcurrencyLimiter limiter = new LambdaConcurrencyLimiter();
-        LambdaFunction f = fn(1);
         limiter.setReserved(ARN, 1);
-        limiter.acquire(f);
         limiter.reset(ARN);
-        assertEquals(0, limiter.inflightCount(ARN));
         assertEquals(0, limiter.totalReserved(REGION));
     }
 

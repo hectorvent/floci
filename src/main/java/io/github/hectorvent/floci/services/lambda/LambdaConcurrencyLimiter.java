@@ -175,9 +175,22 @@ public class LambdaConcurrencyLimiter {
         }
     }
 
-    /** Clears both inflight and reserved entries for a deleted function. */
+    /**
+     * Clears the reserved entry for a deleted function. The inflight counter
+     * is intentionally retained: permits held by still-running invocations
+     * captured a reference to the existing counter and must decrement into it
+     * on close. If the same ARN is later recreated, the counter is reused so
+     * new invocations see any remaining inflight rather than starting from
+     * zero and allowing transient over-subscription.
+     *
+     * <p>Idle counters (value 0) are dropped so long-lived emulator runs do
+     * not accumulate stale entries.
+     */
     public void reset(String functionArn) {
-        inflight.remove(functionArn);
+        AtomicInteger counter = inflight.get(functionArn);
+        if (counter != null && counter.get() == 0) {
+            inflight.remove(functionArn);
+        }
         synchronized (reservedLock) {
             writeReserved(functionArn, null);
         }
