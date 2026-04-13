@@ -6,7 +6,7 @@
 
 setup() {
     load 'test_helper/common-setup'
-    REPO_NAME="floci-it/app-cli"
+    REPO_NAME="floci-it/app-cli-$(unique_name)"
 }
 
 teardown() {

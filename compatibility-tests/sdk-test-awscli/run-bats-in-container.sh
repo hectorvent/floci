@@ -5,7 +5,7 @@ report_dir="$(mktemp -d /tmp/bats-junit-XXXXXX)"
 trap 'rm -rf "$report_dir"' EXIT
 
 set +e
-/opt/bats-core/bin/bats --report-formatter junit -o "$report_dir" test/
+/opt/bats-core/bin/bats --jobs 4 --report-formatter junit -o "$report_dir" test/
 status=$?
 set -e
 
