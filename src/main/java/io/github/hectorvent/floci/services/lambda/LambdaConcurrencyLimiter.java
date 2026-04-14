@@ -31,7 +31,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 @ApplicationScoped
 public class LambdaConcurrencyLimiter {
 
-    /** Inflight counts per function ARN (globally unique). */
+    /**
+     * Inflight counts per function ARN (globally unique). Entries are
+     * retained even when the count drops to zero — see {@link #reset} for
+     * the race this avoids. The map therefore grows by one entry per
+     * distinct ARN the limiter has ever seen, including entries left over
+     * from functions that have been deleted and recreated under a new
+     * name. For a local emulator the resulting footprint is negligible.
+     */
     private final ConcurrentHashMap<String, AtomicInteger> inflight = new ConcurrentHashMap<>();
     /** Reserved values partitioned by region. */
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, Integer>> reservedByRegion
@@ -284,8 +291,6 @@ public class LambdaConcurrencyLimiter {
 
     @FunctionalInterface
     public interface Permit extends AutoCloseable {
-        Permit NOOP = () -> { };
-
         @Override
         void close();
     }

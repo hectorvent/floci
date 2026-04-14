@@ -271,11 +271,14 @@ class LambdaServiceTest {
                 Integer stored = fn.getReservedConcurrentExecutions();
                 assertTrue(stored.equals(a) || stored.equals(b),
                         "store should reflect one of the two writes, got " + stored);
-                // If the serialization worked, the Get call returns the
-                // value that also matches the limiter-tracked total (via
-                // Σreserved for this one-function region).
+                // The real invariant: the limiter's Σreserved for this
+                // region must agree with what was persisted. Comparing
+                // getFunctionConcurrency() to stored would be a tautology —
+                // both read the same LambdaFunction field — so assert
+                // against the limiter's independently-maintained total.
                 assertEquals(stored.intValue(),
-                        service.getFunctionConcurrency(REGION, "race-fn").intValue());
+                        service.concurrencyLimiter().totalReserved(REGION),
+                        "limiter totalReserved must match persisted reserved value");
             }
         } finally {
             pool.shutdownNow();

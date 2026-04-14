@@ -59,10 +59,17 @@ public class LambdaService {
     private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     private final ConcurrentHashMap<String, Integer> versionCounters = new ConcurrentHashMap<>();
     /**
-     * Per-function locks covering PutFunctionConcurrency and
-     * DeleteFunctionConcurrency. Serializing the limiter update + persistence
-     * pair against itself for a given function prevents the limiter and store
-     * from diverging on interleaved concurrent requests.
+     * Per-function locks covering PutFunctionConcurrency,
+     * DeleteFunctionConcurrency, and deleteFunction itself. Serializing the
+     * limiter update + persistence pair against itself for a given function
+     * prevents the limiter and store from diverging on interleaved concurrent
+     * requests.
+     *
+     * <p>Entries are intentionally never removed — see {@code deleteFunction}
+     * for the race this avoids. The map therefore grows by one {@code Object}
+     * per distinct function ARN the emulator has ever seen (create/delete
+     * cycles with fresh names included). Acceptable footprint for a local
+     * emulator workload.
      */
     private final ConcurrentHashMap<String, Object> concurrencyOpLocks = new ConcurrentHashMap<>();
 
@@ -126,6 +133,11 @@ public class LambdaService {
         this.poller = poller;
         this.kinesisPoller = kinesisPoller;
         this.dynamodbStreamsPoller = dynamodbStreamsPoller;
+    }
+
+    /** Package-private accessor for tests that want to assert limiter state directly. */
+    LambdaConcurrencyLimiter concurrencyLimiter() {
+        return concurrencyLimiter;
     }
 
     /**
