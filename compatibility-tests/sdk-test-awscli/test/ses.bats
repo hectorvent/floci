@@ -4,8 +4,8 @@
 load 'test_helper/common-setup'
 
 setup_file() {
-    export TEST_EMAIL="test-$(date +%s)@example.com"
-    export TEST_DOMAIN="test-$(date +%s).example.com"
+    export TEST_EMAIL="$(unique_name test)@example.com"
+    export TEST_DOMAIN="$(unique_name test).example.com"
 }
 
 teardown_file() {

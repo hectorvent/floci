@@ -88,7 +88,7 @@ teardown() {
 @test "KMS: create alias" {
     out=$(aws_cmd kms create-key --description "bats-test-key")
     KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
-    alias_name="alias/bats-test-$(date +%s)"
+    alias_name="alias/bats-test-$(unique_name)"
 
     run aws_cmd kms create-alias --alias-name "$alias_name" --target-key-id "$KEY_ID"
     assert_success
@@ -100,7 +100,7 @@ teardown() {
 @test "KMS: list aliases" {
     out=$(aws_cmd kms create-key --description "bats-test-key")
     KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
-    alias_name="alias/bats-test-$(date +%s)"
+    alias_name="alias/bats-test-$(unique_name)"
 
     aws_cmd kms create-alias --alias-name "$alias_name" --target-key-id "$KEY_ID" >/dev/null
 
@@ -116,7 +116,7 @@ teardown() {
 @test "KMS: delete alias" {
     out=$(aws_cmd kms create-key --description "bats-test-key")
     KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
-    alias_name="alias/bats-test-$(date +%s)"
+    alias_name="alias/bats-test-$(unique_name)"
 
     aws_cmd kms create-alias --alias-name "$alias_name" --target-key-id "$KEY_ID" >/dev/null
 
