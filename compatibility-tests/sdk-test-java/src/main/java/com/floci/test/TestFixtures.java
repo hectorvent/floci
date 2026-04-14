@@ -47,7 +47,6 @@ import software.amazon.awssdk.services.lambda.model.InvocationType;
 import software.amazon.awssdk.services.lambda.model.Runtime;
 
 import java.io.ByteArrayOutputStream;
-import java.net.ConnectException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -162,8 +161,6 @@ public final class TestFixtures {
             } catch (SdkClientException e) {
                 // SDK-level timeout or connection failure (wraps ConnectException,
                 // ApiCallTimeoutException, etc.)
-                lambdaDispatchAvailable = false;
-            } catch (ConnectException e) {
                 lambdaDispatchAvailable = false;
             } finally {
                 try {
