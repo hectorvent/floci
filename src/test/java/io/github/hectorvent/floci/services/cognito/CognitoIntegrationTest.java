@@ -5,11 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.RandomUtils;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -19,6 +25,7 @@ import java.security.Signature;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -515,8 +522,31 @@ class CognitoIntegrationTest {
         assertEquals(0, resp.path("ClientSecrets").size());
     }
 
-    @Test
+    @ParameterizedTest
     @Order(81)
+    @MethodSource("generateInvalidUserPoolSecret")
+    void addUserPoolClientSecretInvalid(String clientSecret) {
+        cognitoAction("AddUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s",
+                  "ClientSecret": "%s"
+                }
+                """.formatted(clientId, poolId, clientSecret))
+                .then()
+                .statusCode(400);
+    }
+
+    public static Stream<Arguments> generateInvalidUserPoolSecret() {
+        return Stream.of(
+            Arguments.of("a".repeat(23)), // too short
+            Arguments.of("a".repeat(65)), // too large
+            Arguments.of("$".repeat(32)) // contains invalid characters
+        );
+    }
+
+    @Test
+    @Order(82)
     void addUserPoolClientSecretAutoGeneratesValue() throws Exception {
         JsonNode resp = cognitoJson("AddUserPoolClientSecret", """
                 {
@@ -535,7 +565,7 @@ class CognitoIntegrationTest {
     }
 
     @Test
-    @Order(82)
+    @Order(83)
     void addUserPoolClientSecretWithExplicitValue() throws Exception {
         String clientSecretValue = UUID.randomUUID().toString().replaceAll("-", "");
         JsonNode resp = cognitoJson("AddUserPoolClientSecret", """
@@ -552,7 +582,7 @@ class CognitoIntegrationTest {
     }
 
     @Test
-    @Order(83)
+    @Order(84)
     void listUserPoolClientSecretsReturnsTwo() throws Exception {
         JsonNode resp = cognitoJson("ListUserPoolClientSecrets", """
                 {
@@ -564,7 +594,7 @@ class CognitoIntegrationTest {
     }
 
     @Test
-    @Order(84)
+    @Order(85)
     void addUserPoolClientSecretExceedsLimit() {
         cognitoAction("AddUserPoolClientSecret", """
                 {
@@ -577,7 +607,7 @@ class CognitoIntegrationTest {
     }
 
     @Test
-    @Order(85)
+    @Order(86)
     void deleteUserPoolClientSecretNotFound() {
         cognitoAction("DeleteUserPoolClientSecret", """
                 {
@@ -591,7 +621,7 @@ class CognitoIntegrationTest {
     }
 
     @Test
-    @Order(86)
+    @Order(87)
     void deleteUserPoolClientSecretCannotDeleteOnlyOne() {
         cognitoAction("DeleteUserPoolClientSecret", """
                 {
@@ -615,7 +645,7 @@ class CognitoIntegrationTest {
     }
 
     @Test
-    @Order(87)
+    @Order(88)
     void listUserPoolClientSecretsAfterDelete() throws Exception {
         JsonNode resp = cognitoJson("ListUserPoolClientSecrets", """
                 {
@@ -628,7 +658,7 @@ class CognitoIntegrationTest {
     }
 
     @Test
-    @Order(88)
+    @Order(89)
     void fullRotateScenario() throws Exception {
         // Set up a resource server so the OAuth client_credentials flow has valid scopes
         cognitoJson("CreateResourceServer", """

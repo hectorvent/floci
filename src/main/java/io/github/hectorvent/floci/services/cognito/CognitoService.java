@@ -18,6 +18,7 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @ApplicationScoped
@@ -223,6 +224,9 @@ public class CognitoService {
 
         if (clientSecret == null) {
             clientSecret = generateSecretValue();
+        } else if (!clientSecret.matches("\\w{24,64}")) {
+            throw new AwsException("InvalidParameterException",
+                    "Client secret format is invalid.", 400);
         }
         long epochMillis = System.currentTimeMillis();
         UserPoolClientSecret userPoolClientSecret = new UserPoolClientSecret(
