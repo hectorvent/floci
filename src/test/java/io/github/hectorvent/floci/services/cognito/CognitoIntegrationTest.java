@@ -524,13 +524,14 @@ class CognitoIntegrationTest {
                   "UserPoolId": "%s"
                 }
                 """.formatted(clientId, poolId));
-        clientSecretId1 = resp.path("ClientSecretId").asText();
+        JsonNode clientSecretDescriptor = resp.path("ClientSecretDescriptor");
+        clientSecretId1 = clientSecretDescriptor.path("ClientSecretId").asText();
         assertNotNull(clientSecretId1);
         assertTrue(clientSecretId1.startsWith(clientId + "--"),
                 "ClientSecretId should be prefixed with the ClientId");
-        assertNotNull(resp.path("ClientSecretValue").asText(null),
+        assertNotNull(clientSecretDescriptor.path("ClientSecretValue").asText(null),
                 "Auto-generated secret should include ClientSecretValue in response");
-        assertTrue(resp.path("ClientSecretCreateDate").asLong() > 0);
+        assertTrue(clientSecretDescriptor.path("ClientSecretCreateDate").asLong() > 0);
     }
 
     @Test
@@ -544,9 +545,9 @@ class CognitoIntegrationTest {
                   "ClientSecret": "%s"
                 }
                 """.formatted(clientId, poolId, clientSecretValue));
-        clientSecretId2 = resp.path("ClientSecretId").asText();
+        clientSecretId2 = resp.path("ClientSecretDescriptor").path("ClientSecretId").asText();
         assertNotNull(clientSecretId2);
-        assertTrue(resp.path("ClientSecretValue").isMissingNode(),
+        assertTrue(resp.path("ClientSecretDescriptor").path("ClientSecretValue").isMissingNode(),
                 "Explicit secret should not include ClientSecretValue in response");
     }
 
@@ -675,7 +676,8 @@ class CognitoIntegrationTest {
                   "UserPoolId": "%s"
                 }
                 """.formatted(rotClientId, poolId));
-        String secret2Value = addResp.path("ClientSecretValue").asText();
+        String secret2Value = addResp.path("ClientSecretDescriptor")
+                .path("ClientSecretValue").asText();
         assertNotNull(secret2Value);
 
         // authenticate with new client-credentials successfully
@@ -694,6 +696,9 @@ class CognitoIntegrationTest {
 
         // authentication with client credentials 1 fails
         oauthToken(rotClientId, secret1Value).then().statusCode(400);
+
+        // secret 2 still works after rotation
+        oauthToken(rotClientId, secret2Value).then().statusCode(200);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────

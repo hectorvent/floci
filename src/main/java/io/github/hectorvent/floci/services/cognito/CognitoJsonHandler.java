@@ -644,8 +644,9 @@ public class CognitoJsonHandler {
         );
 
         boolean includeClientSecretValue = clientSecret == null;
-        ObjectNode response = clientSecretToNode(cs, includeClientSecretValue);
-        return Response.ok(response).build();
+        ObjectNode wrapper = objectMapper.createObjectNode();
+        wrapper.set("ClientSecretDescriptor", clientSecretToNode(cs, includeClientSecretValue));
+        return Response.ok(wrapper).build();
     }
 
     private Response handleDeleteUserPoolClientSecret(JsonNode request) {

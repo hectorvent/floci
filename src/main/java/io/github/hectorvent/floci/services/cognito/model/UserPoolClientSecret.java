@@ -10,6 +10,10 @@ public class UserPoolClientSecret {
     private String clientSecretValue;
     private long clientSecretCreateDate;
 
+    public UserPoolClientSecret() {
+        // empty constructor for jackson deserialisation
+    }
+
     public UserPoolClientSecret(String clientSecretId,
                                 long clientSecretCreateDate, String clientSecretValue) {
         this.clientSecretCreateDate = clientSecretCreateDate;
