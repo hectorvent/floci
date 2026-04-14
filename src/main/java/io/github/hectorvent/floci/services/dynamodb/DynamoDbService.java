@@ -1066,20 +1066,22 @@ public class DynamoDbService {
                 break;
             }
 
+            // Split on the earlier of the next clause keyword or the next comma.
+            // Prefer the keyword when it comes first so intra-clause commas in a
+            // following clause (e.g. "REMOVE a SET b = :b, c = :c") don't bleed
+            // into this helper's attribute parsing.
             int commaIdx = findNextComma(clause);
+            int nextClause = findNextClauseKeyword(clause);
             String attrPart;
-            if (commaIdx >= 0) {
+            if (nextClause >= 0 && (commaIdx < 0 || nextClause < commaIdx)) {
+                attrPart = clause.substring(0, nextClause).trim();
+                clause = clause.substring(nextClause).trim();
+            } else if (commaIdx >= 0) {
                 attrPart = clause.substring(0, commaIdx).trim();
                 clause = clause.substring(commaIdx + 1).trim();
             } else {
-                int nextClause = findNextClauseKeyword(clause);
-                if (nextClause >= 0) {
-                    attrPart = clause.substring(0, nextClause).trim();
-                    clause = clause.substring(nextClause).trim();
-                } else {
-                    attrPart = clause.trim();
-                    clause = "";
-                }
+                attrPart = clause.trim();
+                clause = "";
             }
 
             removeValueAtPath(item, attrPart, exprAttrNames);
@@ -1111,13 +1113,17 @@ public class DynamoDbService {
                 }
             }
 
-            // Advance past this assignment
+            // Advance past this assignment. Prefer the next clause keyword when
+            // it precedes the next comma so intra-clause commas in a following
+            // SET (e.g. "ADD a :v SET b = :b, c = :c") don't swallow the keyword.
             int commaIdx = findNextComma(clause);
-            if (commaIdx >= 0) {
+            int nextClause = findNextClauseKeyword(clause);
+            if (nextClause >= 0 && (commaIdx < 0 || nextClause < commaIdx)) {
+                clause = clause.substring(nextClause).trim();
+            } else if (commaIdx >= 0) {
                 clause = clause.substring(commaIdx + 1).trim();
             } else {
-                int nextClause = findNextClauseKeyword(clause);
-                clause = nextClause >= 0 ? clause.substring(nextClause).trim() : "";
+                clause = "";
             }
         }
         return clause;
@@ -1224,13 +1230,17 @@ public class DynamoDbService {
                 }
             }
 
-            // Advance past this assignment
+            // Advance past this assignment. Prefer the next clause keyword when
+            // it precedes the next comma so intra-clause commas in a following
+            // SET (e.g. "DELETE s :v SET b = :b, c = :c") don't swallow the keyword.
             int commaIdx = findNextComma(clause);
-            if (commaIdx >= 0) {
+            int nextClause = findNextClauseKeyword(clause);
+            if (nextClause >= 0 && (commaIdx < 0 || nextClause < commaIdx)) {
+                clause = clause.substring(nextClause).trim();
+            } else if (commaIdx >= 0) {
                 clause = clause.substring(commaIdx + 1).trim();
             } else {
-                int nextClause = findNextClauseKeyword(clause);
-                clause = nextClause >= 0 ? clause.substring(nextClause).trim() : "";
+                clause = "";
             }
         }
         return clause;
@@ -1458,10 +1468,22 @@ public class DynamoDbService {
     }
 
     private int indexOfKeyword(String upper, String keyword) {
-        int idx = upper.indexOf(keyword);
-        // Ensure it's at word boundary (start of string or preceded by space)
-        if (idx > 0 && upper.charAt(idx - 1) != ' ') return -1;
-        return idx;
+        // Find the next occurrence of keyword at a word boundary (start of string
+        // or preceded by whitespace). Loop past non-boundary hits so attribute
+        // names that contain a keyword as a substring (e.g. "oldSET" before a
+        // real "SET " clause) don't shadow a later valid match.
+        //
+        // Go AWS SDK v2 expression.Builder emits newline-separated clauses, so
+        // the boundary check accepts any whitespace (space, tab, CR, LF), not
+        // just literal space.
+        int from = 0;
+        while (from <= upper.length()) {
+            int idx = upper.indexOf(keyword, from);
+            if (idx < 0) return -1;
+            if (idx == 0 || Character.isWhitespace(upper.charAt(idx - 1))) return idx;
+            from = idx + 1;
+        }
+        return -1;
     }
 
     // --- Filter expression evaluation ---
