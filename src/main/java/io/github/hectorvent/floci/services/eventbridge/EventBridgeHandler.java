@@ -59,6 +59,8 @@ public class EventBridgeHandler {
                 case "ListTargetsByRule" -> handleListTargetsByRule(request, region);
                 case "PutEvents" -> handlePutEvents(request, region);
                 case "ListTagsForResource" -> handleListTagsForResource(request, region);
+                case "TagResource" -> handleTagResource(request, region);
+                case "UntagResource" -> handleUntagResource(request, region);
                 default -> Response.status(400)
                         .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
                         .build();
@@ -299,6 +301,27 @@ public class EventBridgeHandler {
             tagsArray.add(tagNode);
         });
         return Response.ok(response).build();
+    }
+
+    private Response handleTagResource(JsonNode request, String region) {
+        String resourceArn = request.path("ResourceARN").asText(null);
+        if (resourceArn == null || resourceArn.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ResourceARN is required.", 400);
+        }
+        Map<String, String> tags = parseTagsArray(request.path("Tags"));
+        eventBridgeService.tagResource(resourceArn, tags, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleUntagResource(JsonNode request, String region) {
+        String resourceArn = request.path("ResourceARN").asText(null);
+        if (resourceArn == null || resourceArn.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ResourceARN is required.", 400);
+        }
+        List<String> tagKeys = new ArrayList<>();
+        request.path("TagKeys").forEach(k -> tagKeys.add(k.asText()));
+        eventBridgeService.untagResource(resourceArn, tagKeys, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
     }
 
     // ──────────────────────────── Helpers ────────────────────────────

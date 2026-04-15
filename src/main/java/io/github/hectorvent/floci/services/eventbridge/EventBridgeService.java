@@ -339,6 +339,74 @@ public class EventBridgeService {
         return Map.of();
     }
 
+    public void tagResource(String resourceArn, Map<String, String> tags, String region) {
+        if (resourceArn.contains("event-bus/")) {
+            String busName = resourceArn.substring(resourceArn.lastIndexOf("event-bus/") + "event-bus/".length());
+            String key = busKey(region, busName);
+            EventBus bus = busStore.get(key)
+                    .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                            "Resource not found: " + resourceArn, 404));
+            bus.getTags().putAll(tags);
+            busStore.put(key, bus);
+            return;
+        }
+        if (resourceArn.contains("rule/")) {
+            String afterRule = resourceArn.substring(resourceArn.lastIndexOf("rule/") + "rule/".length());
+            String busName;
+            String ruleName;
+            if (afterRule.contains("/")) {
+                int slashIdx = afterRule.indexOf('/');
+                busName = afterRule.substring(0, slashIdx);
+                ruleName = afterRule.substring(slashIdx + 1);
+            } else {
+                busName = "default";
+                ruleName = afterRule;
+            }
+            String key = ruleKey(region, busName, ruleName);
+            Rule rule = ruleStore.get(key)
+                    .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                            "Resource not found: " + resourceArn, 404));
+            rule.getTags().putAll(tags);
+            ruleStore.put(key, rule);
+            return;
+        }
+        throw new AwsException("ResourceNotFoundException", "Resource not found: " + resourceArn, 404);
+    }
+
+    public void untagResource(String resourceArn, List<String> tagKeys, String region) {
+        if (resourceArn.contains("event-bus/")) {
+            String busName = resourceArn.substring(resourceArn.lastIndexOf("event-bus/") + "event-bus/".length());
+            String key = busKey(region, busName);
+            EventBus bus = busStore.get(key)
+                    .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                            "Resource not found: " + resourceArn, 404));
+            tagKeys.forEach(bus.getTags()::remove);
+            busStore.put(key, bus);
+            return;
+        }
+        if (resourceArn.contains("rule/")) {
+            String afterRule = resourceArn.substring(resourceArn.lastIndexOf("rule/") + "rule/".length());
+            String busName;
+            String ruleName;
+            if (afterRule.contains("/")) {
+                int slashIdx = afterRule.indexOf('/');
+                busName = afterRule.substring(0, slashIdx);
+                ruleName = afterRule.substring(slashIdx + 1);
+            } else {
+                busName = "default";
+                ruleName = afterRule;
+            }
+            String key = ruleKey(region, busName, ruleName);
+            Rule rule = ruleStore.get(key)
+                    .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                            "Resource not found: " + resourceArn, 404));
+            tagKeys.forEach(rule.getTags()::remove);
+            ruleStore.put(key, rule);
+            return;
+        }
+        throw new AwsException("ResourceNotFoundException", "Resource not found: " + resourceArn, 404);
+    }
+
     // ──────────────────────────── PutEvents ────────────────────────────
 
     public record PutEventsResult(int failedCount, List<Map<String, String>> entries) {}
