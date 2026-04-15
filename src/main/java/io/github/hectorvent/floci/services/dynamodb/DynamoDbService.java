@@ -951,6 +951,10 @@ public class DynamoDbService {
                    clause, exprAttrNames, exprAttrValues);
         while (!clause.isEmpty()) {
             String upper = clause.toUpperCase();
+            if (upper.startsWith("SET ")) {
+                clause = clause.substring(4).trim();
+                upper = clause.toUpperCase();
+            }
             if (upper.startsWith("REMOVE ") || upper.startsWith("ADD ") || upper.startsWith("DELETE ")) {
                 break;
             }
@@ -982,7 +986,6 @@ public class DynamoDbService {
                 valuePart = rest.trim();
                 rest = "";
             }
-
 
             // Resolve the value
             if (valuePart.startsWith("if_not_exists(")) {
@@ -1081,6 +1084,10 @@ public class DynamoDbService {
     private String applyRemoveClause(ObjectNode item, String clause, JsonNode exprAttrNames) {
         while (!clause.isEmpty()) {
             String upper = clause.toUpperCase();
+            if (upper.startsWith("REMOVE ")) {
+                clause = clause.substring(7).trim();
+                upper = clause.toUpperCase();
+            }
             if (upper.startsWith("SET ") || upper.startsWith("ADD ") || upper.startsWith("DELETE ")) {
                 break;
             }
@@ -1112,6 +1119,10 @@ public class DynamoDbService {
                                   JsonNode exprAttrNames, JsonNode exprAttrValues) {
         while (!clause.isEmpty()) {
             String upper = clause.toUpperCase();
+            if (upper.startsWith("ADD ")) {
+                clause = clause.substring(4).trim();
+                upper = clause.toUpperCase();
+            }
             if (upper.startsWith("SET ") || upper.startsWith("REMOVE ") || upper.startsWith("DELETE ")) {
                 break;
             }
@@ -1223,6 +1234,10 @@ public class DynamoDbService {
                                      JsonNode exprAttrNames, JsonNode exprAttrValues) {
         while (!clause.isEmpty()) {
             String upper = clause.toUpperCase();
+            if (upper.startsWith("DELETE ")) {
+                clause = clause.substring(7).trim();
+                upper = clause.toUpperCase();
+            }
             if (upper.startsWith("SET ") || upper.startsWith("REMOVE ") || upper.startsWith("ADD ") || upper.startsWith("DELETE ")) {
                 break;
             }

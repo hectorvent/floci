@@ -215,6 +215,9 @@ public class LambdaService {
         fn.setLastModified(System.currentTimeMillis());
         fn.setRevisionId(UUID.randomUUID().toString());
 
+        
+        LOG.infov("Creating function {0} with runtime {1}", fn.getFunctionName(), fn.getRuntime());
+
         // Handle environment variables
         @SuppressWarnings("unchecked")
         Map<String, Object> envBlock = (Map<String, Object>) request.get("Environment");
@@ -823,7 +826,7 @@ public class LambdaService {
             zipExtractor.extractTo(zipBytes, codePath);
             fn.setCodeLocalPath(codePath.toAbsolutePath().normalize().toString());
             fn.setCodeSizeBytes(zipBytes.length);
-
+            LOG.infov("Checking handler for {0} with runtime {1}", fn.getFunctionName(), fn.getRuntime());
             // For file-based runtimes, verify handler file exists (skip Java and .NET which use different handler formats)
             if (fn.getRuntime() != null && !fn.getRuntime().startsWith("java") && !fn.getRuntime().startsWith("dotnet")) {
                 String handlerFile = fn.getHandler().split("\\.")[0];

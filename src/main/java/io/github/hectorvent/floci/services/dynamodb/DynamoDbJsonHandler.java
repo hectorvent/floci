@@ -291,9 +291,34 @@ public class DynamoDbJsonHandler {
             response.set("Attributes", result.newItem());
         } else if ("ALL_OLD" .equals(returnValues) && result.oldItem() != null) {
             response.set("Attributes", result.oldItem());
+        } else if ("UPDATED_NEW".equals(returnValues) && result.oldItem() != null && result.newItem() != null) {
+            response.set("Attributes", getChangedAttributes(result.newItem(), result.oldItem()));
+        } else if ("UPDATED_OLD".equals(returnValues) && result.oldItem() != null && result.newItem() != null) {
+            response.set("Attributes", getChangedAttributes(result.oldItem(), result.newItem()));
         }
         addConsumedCapacity(response, request, tableName, 1, true);
         return Response.ok(response).build();
+    }
+
+    private JsonNode getChangedAttributes(JsonNode preferredItem, JsonNode secondaryItem){
+        ObjectNode changedAttributes = objectMapper.createObjectNode();
+        Iterator<Map.Entry<String, JsonNode>> fields = preferredItem.fields();
+        while (fields.hasNext()) {
+            var entry = fields.next();
+            String attrName = entry.getKey();
+            JsonNode value = entry.getValue();
+
+            if (secondaryItem.has(attrName)){
+                JsonNode secondaryValue = secondaryItem.get(attrName);
+                if (!value.equals(secondaryValue)){
+                    changedAttributes.put(attrName, value);
+                }
+            }
+            else {
+                changedAttributes.put(attrName, value);
+            }
+        }
+        return changedAttributes;
     }
 
     private Response handleQuery(JsonNode request, String region) {
