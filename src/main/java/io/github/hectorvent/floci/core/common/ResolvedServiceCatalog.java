@@ -177,7 +177,11 @@ public class ResolvedServiceCatalog {
                 descriptor("ecr", "ecr", config.services().ecr().enabled(), true,
                         null, null, 5000L, null, ServiceProtocol.JSON,
                         protocols(ServiceProtocol.JSON),
-                        Set.of("AmazonEC2ContainerRegistry_V20150921."), Set.of("ecr"), Set.of(), Set.of())
+                        Set.of("AmazonEC2ContainerRegistry_V20150921."), Set.of("ecr"), Set.of(), Set.of()),
+                descriptor("tagging", "tagging", config.services().tagging().enabled(), true,
+                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        protocols(ServiceProtocol.JSON),
+                        Set.of("ResourceGroupsTaggingAPI_20170126."), Set.of("tagging"), Set.of(), Set.of())
         ));
     }
 
