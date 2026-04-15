@@ -1343,6 +1343,30 @@ public class S3Service {
         bucketStore.put(bucketName, bucket);
     }
 
+    public String getBucketOwnershipControls(String bucketName) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket", "The specified bucket does not exist.", 404));
+        if (bucket.getOwnershipControlsConfiguration() == null) {
+            throw new AwsException("OwnershipControlsNotFoundError",
+                    "The bucket ownership controls were not found.", 404);
+        }
+        return bucket.getOwnershipControlsConfiguration();
+    }
+
+    public void putBucketOwnershipControls(String bucketName, String ownershipControlsXml) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket", "The specified bucket does not exist.", 404));
+        bucket.setOwnershipControlsConfiguration(ownershipControlsXml);
+        bucketStore.put(bucketName, bucket);
+    }
+
+    public void deleteBucketOwnershipControls(String bucketName) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket", "The specified bucket does not exist.", 404));
+        bucket.setOwnershipControlsConfiguration(null);
+        bucketStore.put(bucketName, bucket);
+    }
+
     public void restoreObject(String bucketName, String key, String versionId, String restoreXml) {
         // Validation only - stub implementation
         getObject(bucketName, key, versionId);

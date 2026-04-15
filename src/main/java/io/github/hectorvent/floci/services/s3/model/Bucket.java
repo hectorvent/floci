@@ -24,6 +24,7 @@ public class Bucket {
     private String acl; // XML representation or JSON stub
     private String encryptionConfiguration; // XML string
     private String publicAccessBlockConfiguration; // XML string
+    private String ownershipControlsConfiguration; // XML string
     private String region;
 
     public Bucket() {
@@ -80,6 +81,11 @@ public class Bucket {
     public String getPublicAccessBlockConfiguration() { return publicAccessBlockConfiguration; }
     public void setPublicAccessBlockConfiguration(String publicAccessBlockConfiguration) {
         this.publicAccessBlockConfiguration = publicAccessBlockConfiguration;
+    }
+
+    public String getOwnershipControlsConfiguration() { return ownershipControlsConfiguration; }
+    public void setOwnershipControlsConfiguration(String ownershipControlsConfiguration) {
+        this.ownershipControlsConfiguration = ownershipControlsConfiguration;
     }
 
     public String getRegion() { return region; }

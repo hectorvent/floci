@@ -167,6 +167,10 @@ public class S3Controller {
                 s3Service.putPublicAccessBlock(bucket, new String(body, StandardCharsets.UTF_8));
                 return Response.ok().build();
             }
+            if (hasQueryParam(uriInfo, "ownershipControls")) {
+                s3Service.putBucketOwnershipControls(bucket, new String(body, StandardCharsets.UTF_8));
+                return Response.ok().build();
+            }
 
             String locationConstraint = null;
             if (body != null && body.length > 0) {
@@ -224,6 +228,10 @@ public class S3Controller {
             }
             if (hasQueryParam(uriInfo, "publicAccessBlock")) {
                 s3Service.deletePublicAccessBlock(bucket);
+                return Response.noContent().build();
+            }
+            if (hasQueryParam(uriInfo, "ownershipControls")) {
+                s3Service.deleteBucketOwnershipControls(bucket);
                 return Response.noContent().build();
             }
             s3Service.deleteBucket(bucket);
@@ -285,6 +293,9 @@ public class S3Controller {
             }
             if (hasQueryParam(uriInfo, "publicAccessBlock")) {
                 return Response.ok(s3Service.getPublicAccessBlock(bucket)).build();
+            }
+            if (hasQueryParam(uriInfo, "ownershipControls")) {
+                return Response.ok(s3Service.getBucketOwnershipControls(bucket)).build();
             }
 
             int max = (maxKeys != null && maxKeys > 0) ? maxKeys : 1000;
