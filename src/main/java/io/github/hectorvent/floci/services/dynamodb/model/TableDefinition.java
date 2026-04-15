@@ -32,6 +32,8 @@ public class TableDefinition {
     private String billingMode; // "PROVISIONED" or "PAY_PER_REQUEST"
     private String ttlAttributeName;
     private boolean ttlEnabled;
+    private boolean pointInTimeRecoveryEnabled;
+    private int pointInTimeRecoveryRecoveryPeriodInDays;
     private boolean streamEnabled;
     private String streamArn;
     private String streamViewType;
@@ -43,6 +45,7 @@ public class TableDefinition {
         this.tags = new HashMap<>();
         this.globalSecondaryIndexes = new ArrayList<>();
         this.localSecondaryIndexes = new ArrayList<>();
+        this.pointInTimeRecoveryRecoveryPeriodInDays = 35;
         this.kinesisStreamingDestinations = new ArrayList<>();
     }
 
@@ -68,6 +71,7 @@ public class TableDefinition {
         this.tags = new HashMap<>();
         this.globalSecondaryIndexes = new ArrayList<>();
         this.localSecondaryIndexes = new ArrayList<>();
+        this.pointInTimeRecoveryRecoveryPeriodInDays = 35;
         this.kinesisStreamingDestinations = new ArrayList<>();
     }
 
@@ -119,6 +123,16 @@ public class TableDefinition {
 
     public boolean isTtlEnabled() { return ttlEnabled; }
     public void setTtlEnabled(boolean ttlEnabled) { this.ttlEnabled = ttlEnabled; }
+
+    public boolean isPointInTimeRecoveryEnabled() { return pointInTimeRecoveryEnabled; }
+    public void setPointInTimeRecoveryEnabled(boolean pointInTimeRecoveryEnabled) {
+        this.pointInTimeRecoveryEnabled = pointInTimeRecoveryEnabled;
+    }
+
+    public int getPointInTimeRecoveryRecoveryPeriodInDays() { return pointInTimeRecoveryRecoveryPeriodInDays; }
+    public void setPointInTimeRecoveryRecoveryPeriodInDays(int pointInTimeRecoveryRecoveryPeriodInDays) {
+        this.pointInTimeRecoveryRecoveryPeriodInDays = pointInTimeRecoveryRecoveryPeriodInDays;
+    }
 
     public boolean isStreamEnabled() { return streamEnabled; }
     public void setStreamEnabled(boolean streamEnabled) { this.streamEnabled = streamEnabled; }

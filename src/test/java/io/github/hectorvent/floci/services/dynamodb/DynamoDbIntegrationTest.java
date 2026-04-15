@@ -1088,6 +1088,134 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
+    void updateAndDescribeContinuousBackups() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ContinuousBackupsTable",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DescribeContinuousBackups")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ContinuousBackupsTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("ContinuousBackupsDescription.ContinuousBackupsStatus", equalTo("ENABLED"))
+            .body("ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus",
+                    equalTo("DISABLED"))
+            .body("ContinuousBackupsDescription.PointInTimeRecoveryDescription.RecoveryPeriodInDays",
+                    nullValue());
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateContinuousBackups")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ContinuousBackupsTable",
+                    "PointInTimeRecoverySpecification": {
+                        "PointInTimeRecoveryEnabled": true
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("ContinuousBackupsDescription.ContinuousBackupsStatus", equalTo("ENABLED"))
+            .body("ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus",
+                    equalTo("ENABLED"))
+            .body("ContinuousBackupsDescription.PointInTimeRecoveryDescription.RecoveryPeriodInDays",
+                    equalTo(35));
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DescribeContinuousBackups")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ContinuousBackupsTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus",
+                    equalTo("ENABLED"));
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ContinuousBackupsTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    void updateContinuousBackupsRejectsOutOfRangeRecoveryPeriod() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ContinuousBackupsValidationTable",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateContinuousBackups")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ContinuousBackupsValidationTable",
+                    "PointInTimeRecoverySpecification": {
+                        "PointInTimeRecoveryEnabled": true,
+                        "RecoveryPeriodInDays": 36
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ValidationException"));
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ContinuousBackupsValidationTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     void unsupportedOperation() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateGlobalTable")

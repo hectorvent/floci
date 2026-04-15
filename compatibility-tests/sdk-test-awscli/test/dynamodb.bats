@@ -170,6 +170,34 @@ teardown() {
     assert_success
 }
 
+@test "DynamoDB: update and describe continuous backups" {
+    aws_cmd dynamodb create-table \
+        --table-name "$TABLE_NAME" \
+        --attribute-definitions AttributeName=pk,AttributeType=S \
+        --key-schema AttributeName=pk,KeyType=HASH \
+        --billing-mode PAY_PER_REQUEST >/dev/null
+
+    ddb_wait_table "$TABLE_NAME"
+
+    run aws_cmd dynamodb describe-continuous-backups --table-name "$TABLE_NAME"
+    assert_success
+    status=$(json_get "$output" '.ContinuousBackupsDescription.ContinuousBackupsStatus')
+    [ "$status" = "ENABLED" ]
+    pitr_status=$(json_get "$output" '.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus')
+    [ "$pitr_status" = "DISABLED" ]
+    missing_period=$(echo "$output" | jq '.ContinuousBackupsDescription.PointInTimeRecoveryDescription | has("RecoveryPeriodInDays")')
+    [ "$missing_period" = "false" ]
+
+    run aws_cmd dynamodb update-continuous-backups \
+        --table-name "$TABLE_NAME" \
+        --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true
+    assert_success
+    updated_status=$(json_get "$output" '.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus')
+    [ "$updated_status" = "ENABLED" ]
+    recovery_period=$(json_get "$output" '.ContinuousBackupsDescription.PointInTimeRecoveryDescription.RecoveryPeriodInDays')
+    [ "$recovery_period" = "35" ]
+}
+
 # --- DynamoDB GSI/LSI Tests ---
 
 @test "DynamoDB: create table with GSI and LSI" {

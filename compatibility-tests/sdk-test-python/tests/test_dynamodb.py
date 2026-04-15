@@ -65,6 +65,55 @@ class TestDynamoDBTable:
         response = dynamodb_client.describe_time_to_live(TableName=test_table)
         assert response["TimeToLiveDescription"]["TimeToLiveStatus"] == "DISABLED"
 
+    def test_update_and_describe_continuous_backups(self, dynamodb_client, unique_name):
+        """Test PITR can be enabled and described through the SDK."""
+        table_name = f"pytest-ddb-{unique_name}"
+
+        dynamodb_client.create_table(
+            TableName=table_name,
+            KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+
+        try:
+            response = dynamodb_client.describe_continuous_backups(TableName=table_name)
+            assert (
+                response["ContinuousBackupsDescription"]["ContinuousBackupsStatus"]
+                == "ENABLED"
+            )
+            assert (
+                response["ContinuousBackupsDescription"][
+                    "PointInTimeRecoveryDescription"
+                ]["PointInTimeRecoveryStatus"]
+                == "DISABLED"
+            )
+            assert (
+                "RecoveryPeriodInDays"
+                not in response["ContinuousBackupsDescription"][
+                    "PointInTimeRecoveryDescription"
+                ]
+            )
+
+            response = dynamodb_client.update_continuous_backups(
+                TableName=table_name,
+                PointInTimeRecoverySpecification={"PointInTimeRecoveryEnabled": True},
+            )
+            assert (
+                response["ContinuousBackupsDescription"][
+                    "PointInTimeRecoveryDescription"
+                ]["PointInTimeRecoveryStatus"]
+                == "ENABLED"
+            )
+            assert (
+                response["ContinuousBackupsDescription"][
+                    "PointInTimeRecoveryDescription"
+                ]["RecoveryPeriodInDays"]
+                == 35
+            )
+        finally:
+            dynamodb_client.delete_table(TableName=table_name)
+
     def test_delete_table(self, dynamodb_client, unique_name):
         """Test DeleteTable removes table."""
         table_name = f"pytest-ddb-{unique_name}"

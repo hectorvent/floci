@@ -799,6 +799,20 @@ public class DynamoDbService {
         LOG.infov("Updated TTL for table {0}: enabled={1}, attr={2}", tableName, enabled, ttlAttributeName);
     }
 
+    public TableDefinition updateContinuousBackups(String tableName, boolean enabled,
+                                                   Integer recoveryPeriodInDays, String region) {
+        String storageKey = regionKey(region, tableName);
+        TableDefinition table = tableStore.get(storageKey)
+                .orElseThrow(() -> resourceNotFoundException(tableName));
+        table.setPointInTimeRecoveryEnabled(enabled);
+        table.setPointInTimeRecoveryRecoveryPeriodInDays(
+                recoveryPeriodInDays != null ? recoveryPeriodInDays : table.getPointInTimeRecoveryRecoveryPeriodInDays());
+        tableStore.put(storageKey, table);
+        LOG.infov("Updated PITR for table {0}: enabled={1}, recoveryPeriodInDays={2}",
+                tableName, enabled, table.getPointInTimeRecoveryRecoveryPeriodInDays());
+        return table;
+    }
+
     static boolean isExpired(JsonNode item, TableDefinition table) {
         if (!table.isTtlEnabled() || table.getTtlAttributeName() == null) return false;
         JsonNode attr = item.get(table.getTtlAttributeName());

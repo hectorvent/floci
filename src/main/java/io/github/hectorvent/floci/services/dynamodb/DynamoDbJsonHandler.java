@@ -53,6 +53,8 @@ public class DynamoDbJsonHandler {
             case "UpdateTable" -> handleUpdateTable(request, region);
             case "DescribeTimeToLive" -> handleDescribeTimeToLive(request, region);
             case "UpdateTimeToLive" -> handleUpdateTimeToLive(request, region);
+            case "DescribeContinuousBackups" -> handleDescribeContinuousBackups(request, region);
+            case "UpdateContinuousBackups" -> handleUpdateContinuousBackups(request, region);
             case "TransactWriteItems" -> handleTransactWriteItems(request, region);
             case "TransactGetItems" -> handleTransactGetItems(request, region);
             case "TagResource" -> handleTagResource(request, region);
@@ -528,6 +530,35 @@ public class DynamoDbJsonHandler {
         return Response.ok(response).build();
     }
 
+    private Response handleDescribeContinuousBackups(JsonNode request, String region) {
+        String tableName = request.path("TableName").asText();
+        TableDefinition table = dynamoDbService.describeTable(tableName, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("ContinuousBackupsDescription", continuousBackupsDescriptionNode(table));
+        return Response.ok(response).build();
+    }
+
+    private Response handleUpdateContinuousBackups(JsonNode request, String region) {
+        String tableName = request.path("TableName").asText();
+        JsonNode spec = request.path("PointInTimeRecoverySpecification");
+        boolean enabled = spec.path("PointInTimeRecoveryEnabled").asBoolean(false);
+        Integer recoveryPeriodInDays = spec.has("RecoveryPeriodInDays")
+                ? spec.path("RecoveryPeriodInDays").asInt()
+                : null;
+        if (recoveryPeriodInDays != null && (recoveryPeriodInDays < 1 || recoveryPeriodInDays > 35)) {
+            throw new AwsException("ValidationException",
+                    "RecoveryPeriodInDays must be between 1 and 35", 400);
+        }
+
+        TableDefinition table = dynamoDbService.updateContinuousBackups(
+                tableName, enabled, recoveryPeriodInDays, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("ContinuousBackupsDescription", continuousBackupsDescriptionNode(table));
+        return Response.ok(response).build();
+    }
+
     private Response handleTransactWriteItems(JsonNode request, String region) {
         JsonNode transactItemsNode = request.path("TransactItems");
         List<JsonNode> transactItems = new ArrayList<>();
@@ -845,6 +876,20 @@ public class DynamoDbJsonHandler {
             node.put("LatestStreamLabel", label);
         }
 
+        return node;
+    }
+
+    private ObjectNode continuousBackupsDescriptionNode(TableDefinition table) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("ContinuousBackupsStatus", "ENABLED");
+
+        ObjectNode pitrNode = objectMapper.createObjectNode();
+        pitrNode.put("PointInTimeRecoveryStatus",
+                table.isPointInTimeRecoveryEnabled() ? "ENABLED" : "DISABLED");
+        if (table.isPointInTimeRecoveryEnabled()) {
+            pitrNode.put("RecoveryPeriodInDays", table.getPointInTimeRecoveryRecoveryPeriodInDays());
+        }
+        node.set("PointInTimeRecoveryDescription", pitrNode);
         return node;
     }
 }
