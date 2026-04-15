@@ -1,34 +1,31 @@
 package io.github.hectorvent.floci.services.ecr.registry;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
 import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
-import io.github.hectorvent.floci.services.lambda.launcher.ImageCacheService;
+import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
+import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager.ContainerInfo;
+import io.github.hectorvent.floci.core.common.docker.ContainerLogStreamer;
+import io.github.hectorvent.floci.core.common.docker.ContainerSpec;
+import io.github.hectorvent.floci.core.common.docker.PortAllocator;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
-import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.ExecCreateCmdResponse;
-import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.command.InspectExecResponse;
-import com.github.dockerjava.api.exception.NotFoundException;
-import com.github.dockerjava.api.model.Frame;
-import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
-import com.github.dockerjava.api.model.ExposedPort;
-import com.github.dockerjava.api.model.HostConfig;
-import com.github.dockerjava.api.model.Mount;
-import com.github.dockerjava.api.model.MountType;
-import com.github.dockerjava.api.model.Ports;
-import com.github.dockerjava.api.model.Volume;
+import com.github.dockerjava.api.model.Frame;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.io.Closeable;
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -46,29 +43,38 @@ public class EcrRegistryManager {
 
     private static final Logger LOG = Logger.getLogger(EcrRegistryManager.class);
     private static final int CONTAINER_INTERNAL_PORT = 5000;
-
     private static final String NAMED_VOLUME = "floci-ecr-registry-data";
 
-    private final DockerClient dockerClient;
-    private final EmulatorConfig config;
-    private final ImageCacheService imageCacheService;
+    private final ContainerBuilder containerBuilder;
+    private final ContainerLifecycleManager lifecycleManager;
+    private final ContainerLogStreamer logStreamer;
     private final ContainerDetector containerDetector;
+    private final PortAllocator portAllocator;
+    private final EmulatorConfig config;
+    private final RegionResolver regionResolver;
 
     private volatile boolean started;
     private volatile boolean reconciled;
     private volatile int hostPort;
     private volatile String containerId;
+    private volatile Closeable logStream;
     private volatile java.util.function.Consumer<List<String>> reconcileHook;
 
     @Inject
-    public EcrRegistryManager(DockerClient dockerClient,
+    public EcrRegistryManager(ContainerBuilder containerBuilder,
+                              ContainerLifecycleManager lifecycleManager,
+                              ContainerLogStreamer logStreamer,
+                              ContainerDetector containerDetector,
+                              PortAllocator portAllocator,
                               EmulatorConfig config,
-                              ImageCacheService imageCacheService,
-                              ContainerDetector containerDetector) {
-        this.dockerClient = dockerClient;
-        this.config = config;
-        this.imageCacheService = imageCacheService;
+                              RegionResolver regionResolver) {
+        this.containerBuilder = containerBuilder;
+        this.lifecycleManager = lifecycleManager;
+        this.logStreamer = logStreamer;
         this.containerDetector = containerDetector;
+        this.portAllocator = portAllocator;
+        this.config = config;
+        this.regionResolver = regionResolver;
         this.hostPort = config.services().ecr().registryBasePort();
     }
 
@@ -122,93 +128,93 @@ public class EcrRegistryManager {
         }
         String name = config.services().ecr().registryContainerName();
 
-        Container existing = findExistingContainer(name);
-        if (existing != null) {
-            adoptExisting(existing);
+        // Check for existing container to adopt
+        var existing = lifecycleManager.findByName(name);
+        if (existing.isPresent()) {
+            adoptExisting(existing.get());
             runReconcileOnce();
             return;
         }
 
-        int chosenPort = allocatePort();
+        // Allocate port
+        int chosenPort = portAllocator.allocate(
+                config.services().ecr().registryBasePort(),
+                config.services().ecr().registryMaxPort());
+
         String image = config.services().ecr().registryImage();
 
-        // Pull the registry image on demand. CI runners and fresh dev machines
-        // will not have it cached locally; without this we'd see
-        // "Status 404: No such image: registry:2" from createContainerCmd.
-        imageCacheService.ensureImageExists(image);
+        // Build environment variables
+        List<String> env = new ArrayList<>(List.of(
+                "REGISTRY_STORAGE_DELETE_ENABLED=true",
+                "REGISTRY_HTTP_ADDR=0.0.0.0:" + CONTAINER_INTERNAL_PORT
+        ));
 
-        ExposedPort exposed = ExposedPort.tcp(CONTAINER_INTERNAL_PORT);
-        Ports portBindings = new Ports();
-        portBindings.bind(exposed, Ports.Binding.bindPort(chosenPort));
+        // Build container spec
+        ContainerBuilder.Builder specBuilder = containerBuilder.newContainer(image)
+                .withName(name)
+                .withEnv(env)
+                .withPortBinding(CONTAINER_INTERNAL_PORT, chosenPort)
+                .withDockerNetwork(config.services().ecr().dockerNetwork())
+                .withLogRotation();
 
+        // Handle persistence mounting based on storage configuration
+        addPersistenceMounts(specBuilder, env);
+
+        ContainerSpec spec = specBuilder.build();
+
+        try {
+            ContainerInfo info = lifecycleManager.createAndStart(spec);
+            this.containerId = info.containerId();
+            this.hostPort = chosenPort;
+            this.started = true;
+            LOG.infov("Started ECR backing registry {0} on host port {1}", name, chosenPort);
+
+            // Attach log streaming (new feature)
+            attachLogStream();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to start ECR backing registry container: " + e.getMessage(), e);
+        }
+        runReconcileOnce();
+    }
+
+    private void addPersistenceMounts(ContainerBuilder.Builder specBuilder, List<String> env) {
         String hostPersistentPath = config.storage().hostPersistentPath();
         boolean inContainer = containerDetector.isRunningInContainer();
         boolean isExplicitVolumeName = !hostPersistentPath.startsWith("/")
                 && !hostPersistentPath.startsWith(".");
         boolean isRelativeDefault = hostPersistentPath.startsWith(".");
 
-        HostConfig hostConfig = HostConfig.newHostConfig()
-                .withPortBindings(portBindings);
-
-        List<String> env = new java.util.ArrayList<>(List.of(
-                "REGISTRY_STORAGE_DELETE_ENABLED=true",
-                "REGISTRY_HTTP_ADDR=0.0.0.0:" + CONTAINER_INTERNAL_PORT
-        ));
-
         if (inContainer && isRelativeDefault) {
-            // Zero-config fallback for in-container Floci. A relative host path can't
-            // be bind-mounted into a sibling container (Docker Desktop rejects it).
-            // Use a dedicated named volume so `docker compose up` works without any
-            // FLOCI_STORAGE_HOST_PERSISTENT_PATH configuration.
-            hostConfig.withMounts(List.of(new Mount()
-                    .withType(MountType.VOLUME)
-                    .withSource(NAMED_VOLUME)
-                    .withTarget("/var/lib/registry")));
+            // Zero-config fallback for in-container Floci
+            specBuilder.withNamedVolume(NAMED_VOLUME, "/var/lib/registry");
             LOG.infov("Floci in container with relative host-persistent-path ({0}); "
                     + "using named volume {1} for ECR registry data",
                     hostPersistentPath, NAMED_VOLUME);
         } else if (isExplicitVolumeName) {
-            // User set hostPersistentPath to a Docker named-volume name — share the
-            // volume with the rest of Floci's persistent data and tell the registry
-            // to write inside it.
+            // User set hostPersistentPath to a Docker named-volume name
             String internalMountPath = "/app/data";
-            hostConfig.withBinds(new Bind(hostPersistentPath, new Volume(internalMountPath)));
+            specBuilder.withBind(hostPersistentPath, internalMountPath);
             env.add("REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=" + internalMountPath + "/ecr/registry");
         } else {
-            // Host path bind-mount. On host dev, hostPersistentPath matches
-            // persistentPath so the replace is a no-op and we bind the absolute
-            // container data path. In a container with an absolute host path set,
-            // replace rewrites the container-internal path to the host-side path.
+            // Host path bind-mount
             String dataPath = Paths.get(config.services().ecr().dataPath(), "registry")
                     .toAbsolutePath().toString();
             String hostDataPath = dataPath.replace(config.storage().persistentPath(), hostPersistentPath);
             if (!inContainer) {
                 ensureDataDir();
             }
-            hostConfig.withBinds(new Bind(hostDataPath, new Volume("/var/lib/registry")));
+            specBuilder.withBind(hostDataPath, "/var/lib/registry");
         }
+    }
 
-        config.services().ecr().dockerNetwork()
-                .or(() -> config.services().dockerNetwork())
-                .filter(n -> !n.isBlank())
-                .ifPresent(hostConfig::withNetworkMode);
+    private void attachLogStream() {
+        String shortId = containerId.length() >= 8 ? containerId.substring(0, 8) : containerId;
+        String logGroup = "/aws/ecr/registry";
+        String logStreamName = logStreamer.generateLogStreamName(shortId);
+        String region = regionResolver.getDefaultRegion();
 
-        try {
-            CreateContainerResponse created = dockerClient.createContainerCmd(image)
-                    .withName(name)
-                    .withEnv(env)
-                    .withExposedPorts(exposed)
-                    .withHostConfig(hostConfig)
-                    .exec();
-            this.containerId = created.getId();
-            dockerClient.startContainerCmd(containerId).exec();
-            this.hostPort = chosenPort;
-            this.started = true;
-            LOG.infov("Started ECR backing registry {0} on host port {1}", name, chosenPort);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to start ECR backing registry container: " + e.getMessage(), e);
-        }
-        runReconcileOnce();
+        this.logStream = logStreamer.attach(
+                containerId, logGroup, logStreamName, region, "ecr:registry");
     }
 
     private void runReconcileOnce() {
@@ -218,8 +224,15 @@ public class EcrRegistryManager {
         try {
             // Give the registry a moment to be ready on first start
             for (int i = 0; i < 10; i++) {
-                if (httpClient().ping()) break;
-                try { Thread.sleep(200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                if (httpClient().ping()) {
+                    break;
+                }
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
             }
             List<String> repos = httpClient().catalog();
             reconcileHook.accept(repos);
@@ -248,6 +261,8 @@ public class EcrRegistryManager {
         }
         long startMs = System.currentTimeMillis();
         StringBuilder output = new StringBuilder();
+
+        DockerClient dockerClient = lifecycleManager.getDockerClient();
 
         ExecCreateCmdResponse exec = dockerClient
                 .execCreateCmd(containerId)
@@ -299,77 +314,26 @@ public class EcrRegistryManager {
             LOG.infov("Leaving ECR backing registry container {0} running for next start-up", containerId);
             return;
         }
-        try {
-            dockerClient.stopContainerCmd(containerId).withTimeout(5).exec();
-        } catch (Exception e) {
-            LOG.warnv("Error stopping ECR registry container: {0}", e.getMessage());
-        }
-        try {
-            dockerClient.removeContainerCmd(containerId).withForce(true).exec();
-        } catch (Exception e) {
-            LOG.warnv("Error removing ECR registry container: {0}", e.getMessage());
-        }
-    }
-
-    private Container findExistingContainer(String name) {
-        try {
-            List<Container> all = dockerClient.listContainersCmd().withShowAll(true).exec();
-            for (Container c : all) {
-                String[] names = c.getNames();
-                if (names == null) continue;
-                for (String n : names) {
-                    if (n.equals("/" + name) || n.equals(name)) {
-                        return c;
-                    }
-                }
-            }
-        } catch (Exception e) {
-            LOG.debugv("Could not list containers while searching for {0}: {1}", name, e.getMessage());
-        }
-        return null;
+        lifecycleManager.stopAndRemove(containerId, logStream);
     }
 
     private void adoptExisting(Container existing) {
         this.containerId = existing.getId();
         try {
-            InspectContainerResponse inspect = dockerClient.inspectContainerCmd(containerId).exec();
-            boolean running = Boolean.TRUE.equals(inspect.getState().getRunning());
-            if (!running) {
-                dockerClient.startContainerCmd(containerId).exec();
-            }
-            var bindings = inspect.getNetworkSettings().getPorts().getBindings();
-            var binding = bindings.get(ExposedPort.tcp(CONTAINER_INTERNAL_PORT));
-            if (binding != null && binding.length > 0) {
-                this.hostPort = Integer.parseInt(binding[0].getHostPortSpec());
+            ContainerInfo info = lifecycleManager.adopt(containerId, List.of(CONTAINER_INTERNAL_PORT));
+            var endpoint = info.getEndpoint(CONTAINER_INTERNAL_PORT);
+            if (endpoint != null) {
+                this.hostPort = endpoint.port();
             }
             this.started = true;
             LOG.infov("Adopted existing ECR registry container {0} on host port {1}",
                     containerId, hostPort);
-        } catch (NotFoundException nf) {
-            this.containerId = null;
+
+            // Attach log streaming to adopted container
+            attachLogStream();
         } catch (Exception e) {
             LOG.warnv("Failed to adopt existing ECR registry container: {0}", e.getMessage());
-        }
-    }
-
-    private int allocatePort() {
-        int base = config.services().ecr().registryBasePort();
-        int max = config.services().ecr().registryMaxPort();
-        for (int p = base; p <= max; p++) {
-            if (isPortFree(p)) {
-                return p;
-            }
-        }
-        throw new RuntimeException("No free port available in range "
-                + base + "-" + max + " for ECR registry");
-    }
-
-    private boolean isPortFree(int port) {
-        try (ServerSocket s = new ServerSocket(port)) {
-            s.setReuseAddress(true);
-            return true;
-        } catch (IOException e) {
-            return false;
+            this.containerId = null;
         }
     }
 
