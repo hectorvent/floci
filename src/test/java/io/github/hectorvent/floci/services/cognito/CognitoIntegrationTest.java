@@ -5,11 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.RandomUtils;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -19,6 +25,7 @@ import java.security.Signature;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -614,7 +621,242 @@ class CognitoIntegrationTest {
         assertNotNull(refreshed.path("AuthenticationResult").path("IdToken").asText(null));
     }
 
+    // ── Client Secrets ────────────────────────────────────────────────
+
+    private static String clientSecretId1;
+    private static String clientSecretId2;
+
+    @Test
+    @Order(80)
+    void listUserPoolClientSecretsInitiallyEmpty() throws Exception {
+        JsonNode resp = cognitoJson("ListUserPoolClientSecrets", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, poolId));
+        assertEquals(0, resp.path("ClientSecrets").size());
+    }
+
+    @ParameterizedTest
+    @Order(81)
+    @MethodSource("generateInvalidUserPoolSecret")
+    void addUserPoolClientSecretInvalid(String clientSecret) {
+        cognitoAction("AddUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s",
+                  "ClientSecret": "%s"
+                }
+                """.formatted(clientId, poolId, clientSecret))
+                .then()
+                .statusCode(400);
+    }
+
+    public static Stream<Arguments> generateInvalidUserPoolSecret() {
+        return Stream.of(
+            Arguments.of("a".repeat(23)), // too short
+            Arguments.of("a".repeat(65)), // too large
+            Arguments.of("$".repeat(32)) // contains invalid characters
+        );
+    }
+
+    @Test
+    @Order(82)
+    void addUserPoolClientSecretAutoGeneratesValue() throws Exception {
+        JsonNode resp = cognitoJson("AddUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, poolId));
+        JsonNode clientSecretDescriptor = resp.path("ClientSecretDescriptor");
+        clientSecretId1 = clientSecretDescriptor.path("ClientSecretId").asText();
+        assertNotNull(clientSecretId1);
+        assertTrue(clientSecretId1.startsWith(clientId + "--"),
+                "ClientSecretId should be prefixed with the ClientId");
+        assertNotNull(clientSecretDescriptor.path("ClientSecretValue").asText(null),
+                "Auto-generated secret should include ClientSecretValue in response");
+        assertTrue(clientSecretDescriptor.path("ClientSecretCreateDate").asLong() > 0);
+    }
+
+    @Test
+    @Order(83)
+    void addUserPoolClientSecretWithExplicitValue() throws Exception {
+        String clientSecretValue = UUID.randomUUID().toString().replaceAll("-", "");
+        JsonNode resp = cognitoJson("AddUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s",
+                  "ClientSecret": "%s"
+                }
+                """.formatted(clientId, poolId, clientSecretValue));
+        clientSecretId2 = resp.path("ClientSecretDescriptor").path("ClientSecretId").asText();
+        assertNotNull(clientSecretId2);
+        assertTrue(resp.path("ClientSecretDescriptor").path("ClientSecretValue").isMissingNode(),
+                "Explicit secret should not include ClientSecretValue in response");
+    }
+
+    @Test
+    @Order(84)
+    void listUserPoolClientSecretsReturnsTwo() throws Exception {
+        JsonNode resp = cognitoJson("ListUserPoolClientSecrets", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, poolId));
+        assertEquals(2, resp.path("ClientSecrets").size());
+    }
+
+    @Test
+    @Order(85)
+    void addUserPoolClientSecretExceedsLimit() {
+        cognitoAction("AddUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, poolId))
+                .then()
+                .statusCode(400);
+    }
+
+    @Test
+    @Order(86)
+    void deleteUserPoolClientSecretNotFound() {
+        cognitoAction("DeleteUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "ClientSecretId": "nonexistent",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, poolId))
+                .then()
+                .statusCode(404);
+    }
+
+    @Test
+    @Order(87)
+    void deleteUserPoolClientSecretCannotDeleteOnlyOne() {
+        cognitoAction("DeleteUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "ClientSecretId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, clientSecretId1, poolId))
+                .then()
+                .statusCode(200);
+
+        cognitoAction("DeleteUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "ClientSecretId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, clientSecretId2, poolId))
+                .then()
+                .statusCode(400);
+    }
+
+    @Test
+    @Order(88)
+    void listUserPoolClientSecretsAfterDelete() throws Exception {
+        JsonNode resp = cognitoJson("ListUserPoolClientSecrets", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(clientId, poolId));
+        assertEquals(1, resp.path("ClientSecrets").size());
+        assertEquals(clientSecretId2, resp.path("ClientSecrets").get(0).path("ClientSecretId").asText());
+    }
+
+    @Test
+    @Order(89)
+    void fullRotateScenario() throws Exception {
+        // Set up a resource server so the OAuth client_credentials flow has valid scopes
+        cognitoJson("CreateResourceServer", """
+                {
+                  "UserPoolId": "%s",
+                  "Identifier": "api",
+                  "Name": "API",
+                  "Scopes": [
+                    { "ScopeName": "read", "ScopeDescription": "Read access" }
+                  ]
+                }
+                """.formatted(poolId));
+
+        // Create a confidential client with client_credentials flow enabled
+        JsonNode clientResp = cognitoJson("CreateUserPoolClient", """
+                {
+                  "UserPoolId": "%s",
+                  "ClientName": "rotation-client",
+                  "GenerateSecret": true,
+                  "AllowedOAuthFlowsUserPoolClient": true,
+                  "AllowedOAuthFlows": ["client_credentials"],
+                  "AllowedOAuthScopes": ["api/read"]
+                }
+                """.formatted(poolId));
+        String rotClientId = clientResp.path("UserPoolClient").path("ClientId").asText();
+        String secret1Value = clientResp.path("UserPoolClient").path("ClientSecret").asText();
+
+        // client-secret-1 is still valid — authenticate with client-credentials successfully
+        oauthToken(rotClientId, secret1Value).then().statusCode(200);
+
+        // grab secret-1's ID so we can delete it later
+        JsonNode secrets = cognitoJson("ListUserPoolClientSecrets", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(rotClientId, poolId));
+        assertEquals(1, secrets.path("ClientSecrets").size());
+        String secret1Id = secrets.path("ClientSecrets").get(0).path("ClientSecretId").asText();
+
+        // add new client-secret (auto-generated)
+        JsonNode addResp = cognitoJson("AddUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(rotClientId, poolId));
+        String secret2Value = addResp.path("ClientSecretDescriptor")
+                .path("ClientSecretValue").asText();
+        assertNotNull(secret2Value);
+
+        // authenticate with new client-credentials successfully
+        oauthToken(rotClientId, secret2Value).then().statusCode(200);
+
+        // delete client-credentials 1
+        cognitoAction("DeleteUserPoolClientSecret", """
+                {
+                  "ClientId": "%s",
+                  "ClientSecretId": "%s",
+                  "UserPoolId": "%s"
+                }
+                """.formatted(rotClientId, secret1Id, poolId))
+                .then()
+                .statusCode(200);
+
+        // authentication with client credentials 1 fails
+        oauthToken(rotClientId, secret1Value).then().statusCode(400);
+
+        // secret 2 still works after rotation
+        oauthToken(rotClientId, secret2Value).then().statusCode(200);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────
+
+    private static Response oauthToken(String oauthClientId, String oauthClientSecret) {
+        return given()
+                .formParam("grant_type", "client_credentials")
+                .formParam("client_id", oauthClientId)
+                .formParam("client_secret", oauthClientSecret)
+        .when()
+                .post("/cognito-idp/oauth2/token");
+    }
 
     private static Response cognitoAction(String action, String body) {
         return given()
