@@ -319,13 +319,17 @@ public class ContainerLifecycleManager {
         Map<Integer, EndpointInfo> endpoints = new HashMap<>();
 
         for (int containerPort : spec.exposedPorts()) {
-            endpoints.put(containerPort, resolveEndpoint(inspect, containerPort));
+            endpoints.put(containerPort, resolveEndpoint(inspect, containerPort, spec.networkMode()));
         }
 
         return endpoints;
     }
 
     private EndpointInfo resolveEndpoint(InspectContainerResponse inspect, int containerPort) {
+        return resolveEndpoint(inspect, containerPort, null);
+    }
+
+    private EndpointInfo resolveEndpoint(InspectContainerResponse inspect, int containerPort, String preferredNetwork) {
         if (!containerDetector.isRunningInContainer()) {
             // Native mode: use localhost and the bound host port
             var bindings = inspect.getNetworkSettings().getPorts().getBindings();
@@ -338,15 +342,27 @@ public class ContainerLifecycleManager {
             // Fallback to container port
             return new EndpointInfo("localhost", containerPort);
         } else {
-            // Container mode: use container IP on the docker network
-            String containerIp = resolveContainerIp(inspect);
+            // Container mode: use container IP on the docker network.
+            // Prefer the configured network's IP — the container may be on multiple
+            // networks (bridge + the configured network) when connectToNetworkCmd()
+            // is used instead of withNetworkMode() during creation.
+            String containerIp = resolveContainerIp(inspect, preferredNetwork);
             return new EndpointInfo(containerIp, containerPort);
         }
     }
 
-    private String resolveContainerIp(InspectContainerResponse inspect) {
+    private String resolveContainerIp(InspectContainerResponse inspect, String preferredNetwork) {
         var networks = inspect.getNetworkSettings().getNetworks();
         if (networks != null) {
+            // Prefer the configured network so that when the container is on both
+            // bridge (default) and the service network, we return the right IP.
+            if (preferredNetwork != null && networks.containsKey(preferredNetwork)) {
+                String ip = networks.get(preferredNetwork).getIpAddress();
+                if (ip != null && !ip.isBlank()) {
+                    return ip;
+                }
+            }
+            // Fall back to any network
             for (Map.Entry<String, ContainerNetwork> entry : networks.entrySet()) {
                 String ip = entry.getValue().getIpAddress();
                 if (ip != null && !ip.isBlank()) {
