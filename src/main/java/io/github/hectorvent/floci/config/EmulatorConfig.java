@@ -53,6 +53,8 @@ public interface EmulatorConfig {
 
     ServicesConfig services();
 
+    DockerConfig docker();
+
     InitHooksConfig initHooks();
 
     interface StorageConfig {
@@ -575,5 +577,25 @@ public interface EmulatorConfig {
 
         @WithDefault("30")
         long timeoutSeconds();
+    }
+
+    /**
+     * Configuration for Docker container management shared across all services
+     * that spawn Docker containers (Lambda, RDS, ElastiCache, ECS, ECR, MSK).
+     */
+    interface DockerConfig {
+        /**
+         * Maximum size of each container log file before rotation.
+         * Uses Docker's json-file log driver max-size option format (e.g., "10m", "100k", "1g").
+         */
+        @WithDefault("10m")
+        String logMaxSize();
+
+        /**
+         * Maximum number of rotated log files to retain per container.
+         * When this limit is reached, the oldest log file is deleted.
+         */
+        @WithDefault("3")
+        String logMaxFile();
     }
 }
