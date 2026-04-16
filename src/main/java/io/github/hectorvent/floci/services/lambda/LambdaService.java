@@ -323,6 +323,48 @@ public class LambdaService {
         return fn;
     }
 
+    public LambdaFunction updateFunctionConfiguration(String region, String functionName, Map<String, Object> request) {
+        LambdaFunction fn = getFunction(region, functionName);
+
+        if (request.containsKey("Description")) {
+            fn.setDescription((String) request.get("Description"));
+        }
+        if (request.containsKey("Handler")) {
+            fn.setHandler((String) request.get("Handler"));
+        }
+        if (request.containsKey("MemorySize")) {
+            fn.setMemorySize(((Number) request.get("MemorySize")).intValue());
+        }
+        if (request.containsKey("Role")) {
+            fn.setRole((String) request.get("Role"));
+        }
+        if (request.containsKey("Runtime")) {
+            fn.setRuntime((String) request.get("Runtime"));
+        }
+        if (request.containsKey("Timeout")) {
+            fn.setTimeout(((Number) request.get("Timeout")).intValue());
+        }
+        if (request.containsKey("Environment")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> envBlock = (Map<String, Object>) request.get("Environment");
+            if (envBlock != null && envBlock.containsKey("Variables")) {
+                @SuppressWarnings("unchecked")
+                Map<String, String> vars = (Map<String, String>) envBlock.get("Variables");
+                fn.setEnvironment(vars != null ? vars : new java.util.HashMap<>());
+            }
+        }
+
+        fn.setLastModified(System.currentTimeMillis());
+        fn.setRevisionId(UUID.randomUUID().toString());
+
+        // Drain warm containers so the next invocation picks up the new configuration
+        warmPool.drainFunction(functionName);
+
+        functionStore.save(region, fn);
+        LOG.infov("Updated configuration for function: {0}", functionName);
+        return fn;
+    }
+
     public void deleteFunction(String region, String functionName) {
         LambdaFunction fn = getFunction(region, functionName); // throws 404 if not found
         functionName = fn.getFunctionName();

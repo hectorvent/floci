@@ -123,6 +123,26 @@ public class LambdaController {
         return Response.ok(buildFunctionConfiguration(fn)).build();
     }
 
+    // ──────────────────────────── UpdateFunctionConfiguration ────────────────────────────
+
+    @PUT
+    @Path("/functions/{functionName}/configuration")
+    public Response updateFunctionConfiguration(@Context HttpHeaders headers,
+                                                @PathParam("functionName") String functionName,
+                                                String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            LambdaFunction fn = lambdaService.updateFunctionConfiguration(region, functionName, request);
+            return Response.ok(buildFunctionConfiguration(fn)).build();
+        } catch (AwsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AwsException("InvalidParameterValueException", e.getMessage(), 400);
+        }
+    }
+
     // ──────────────────────────── UpdateFunctionCode ────────────────────────────
 
     @PUT
