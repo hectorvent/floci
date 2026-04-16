@@ -985,7 +985,25 @@ public class DynamoDbService {
 
 
             // Resolve the value
-            if (valuePart.startsWith("if_not_exists(")) {
+            // Check for arithmetic expressions (operand + operand, operand - operand)
+            // before handling individual expression types, since the left operand can be
+            // a function like if_not_exists(...).
+            int arithmeticIdx = findArithmeticOperator(valuePart);
+            if (arithmeticIdx >= 0) {
+                String leftExpr = valuePart.substring(0, arithmeticIdx).trim();
+                char operator = valuePart.charAt(arithmeticIdx);
+                String rightExpr = valuePart.substring(arithmeticIdx + 1).trim();
+                JsonNode leftVal = evaluateSetExpr(item, leftExpr, exprAttrNames, exprAttrValues);
+                JsonNode rightVal = evaluateSetExpr(item, rightExpr, exprAttrNames, exprAttrValues);
+                if (leftVal != null && rightVal != null && leftVal.has("N") && rightVal.has("N")) {
+                    java.math.BigDecimal left = new java.math.BigDecimal(leftVal.get("N").asText());
+                    java.math.BigDecimal right = new java.math.BigDecimal(rightVal.get("N").asText());
+                    java.math.BigDecimal result = (operator == '+') ? left.add(right) : left.subtract(right);
+                    ObjectNode numNode = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                    numNode.put("N", result.toPlainString());
+                    setValueAtPath(item, attrPath, numNode, exprAttrNames);
+                }
+            } else if (valuePart.startsWith("if_not_exists(")) {
                 // if_not_exists(attrRef, fallbackExpr) evaluates to:
                 //   attrRef's current value  — when attrRef exists in the item
                 //   fallbackExpr             — otherwise
@@ -1532,6 +1550,28 @@ public class DynamoDbService {
         } catch (NumberFormatException e) {
             return a.compareTo(b);
         }
+    }
+
+    /**
+     * Finds the index of an arithmetic operator (+ or -) that is outside
+     * function parentheses. Returns -1 if none found.
+     */
+    private int findArithmeticOperator(String expr) {
+        int depth = 0;
+        for (int i = 0; i < expr.length(); i++) {
+            char c = expr.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+            } else if (depth == 0 && (c == '+' || c == '-')) {
+                // Ensure this is a binary operator, not a sign at the start or after '('
+                if (i > 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
     }
 
     private String[] extractFunctionArgs(String funcCall) {

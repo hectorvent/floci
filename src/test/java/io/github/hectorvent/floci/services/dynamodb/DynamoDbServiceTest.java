@@ -558,6 +558,140 @@ class DynamoDbServiceTest {
     }
 
     @Test
+    void updateItemSetArithmeticIncrement() {
+        createUsersTable();
+
+        // Put an item with counter = 100
+        ObjectNode existing = mapper.createObjectNode();
+        existing.set("userId", attributeValue("S", "u1"));
+        ObjectNode counterVal = mapper.createObjectNode();
+        counterVal.put("N", "100");
+        existing.set("counter", counterVal);
+        service.putItem("Users", existing);
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":inc", incVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = counter + :inc",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("101", stored.get("counter").get("N").asText(),
+                "counter should be incremented from 100 to 101");
+    }
+
+    @Test
+    void updateItemSetArithmeticDecrement() {
+        createUsersTable();
+
+        ObjectNode existing = mapper.createObjectNode();
+        existing.set("userId", attributeValue("S", "u1"));
+        ObjectNode counterVal = mapper.createObjectNode();
+        counterVal.put("N", "50");
+        existing.set("counter", counterVal);
+        service.putItem("Users", existing);
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode decVal = mapper.createObjectNode();
+        decVal.put("N", "3");
+        exprValues.set(":dec", decVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = counter - :dec",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("47", stored.get("counter").get("N").asText(),
+                "counter should be decremented from 50 to 47");
+    }
+
+    @Test
+    void updateItemSetIfNotExistsWithArithmeticOnNewItem() {
+        createUsersTable();
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode startVal = mapper.createObjectNode();
+        startVal.put("N", "60000000");
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":start", startVal);
+        exprValues.set(":inc", incVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = if_not_exists(counter, :start) + :inc",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("60000001", stored.get("counter").get("N").asText(),
+                "counter should be if_not_exists default (60000000) + 1 = 60000001");
+    }
+
+    @Test
+    void updateItemSetIfNotExistsWithArithmeticOnExistingItem() {
+        createUsersTable();
+
+        ObjectNode existing = mapper.createObjectNode();
+        existing.set("userId", attributeValue("S", "u1"));
+        ObjectNode counterVal = mapper.createObjectNode();
+        counterVal.put("N", "60000005");
+        existing.set("counter", counterVal);
+        service.putItem("Users", existing);
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode startVal = mapper.createObjectNode();
+        startVal.put("N", "60000000");
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":start", startVal);
+        exprValues.set(":inc", incVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = if_not_exists(counter, :start) + :inc",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("60000006", stored.get("counter").get("N").asText(),
+                "counter should be existing (60000005) + 1 = 60000006");
+    }
+
+    @Test
+    void updateItemSetArithmeticConsecutiveIncrements() {
+        createUsersTable();
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode startVal = mapper.createObjectNode();
+        startVal.put("N", "0");
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":start", startVal);
+        exprValues.set(":inc", incVal);
+
+        // Three consecutive increments
+        for (int i = 0; i < 3; i++) {
+            service.updateItem("Users", key, null,
+                    "SET counter = if_not_exists(counter, :start) + :inc",
+                    null, exprValues, null);
+        }
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("3", stored.get("counter").get("N").asText(),
+                "counter should be 3 after three increments starting from 0");
+    }
+
+    @Test
     void scanWithBoolFilterExpression() {
         createUsersTable();
         ObjectNode u1 = item("userId", "u1");
