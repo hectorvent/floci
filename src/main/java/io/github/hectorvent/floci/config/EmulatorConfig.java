@@ -234,6 +234,7 @@ public interface EmulatorConfig {
         AppConfigDataServiceConfig appconfigdata();
         EcrServiceConfig ecr();
         ResourceGroupsTaggingServiceConfig tagging();
+        BedrockRuntimeServiceConfig bedrockRuntime();
     }
 
     interface SsmServiceConfig {
@@ -464,6 +465,11 @@ public interface EmulatorConfig {
     }
 
     interface ResourceGroupsTaggingServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface BedrockRuntimeServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }

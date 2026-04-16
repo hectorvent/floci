@@ -137,3 +137,5 @@ floci:
       enabled: true
     ecr:
       enabled: true
+    bedrock-runtime:
+      enabled: true

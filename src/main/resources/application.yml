@@ -167,3 +167,5 @@ floci:
       tls-enabled: false
       keep-running-on-shutdown: true
       uri-style: hostname
+    bedrock-runtime:
+      enabled: true
