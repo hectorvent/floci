@@ -163,6 +163,18 @@ services:
 docker compose up
 ```
 
+Or run Floci directly with Docker:
+
+```bash
+docker run -d --name floci \
+  -p 4566:4566 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e FLOCI_DEFAULT_REGION=us-east-1 \
+  -e FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK=bridge \
+  -u root \
+  hectorvent/floci:latest
+```
+
 All services are available at `http://localhost:4566`. Use any AWS region — credentials can be anything.
 
 ```bash
