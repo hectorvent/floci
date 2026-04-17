@@ -145,6 +145,31 @@ class SqsJsonProtocolTest {
     }
 
     @Test
+    @Order(6)
+    void sendMessageBatchReturnsMd5OfMessageAttributes() {
+        String body = "{\"QueueUrl\":\"" + queueUrl + "\","
+                + "\"Entries\":[{"
+                + "\"Id\":\"m1\","
+                + "\"MessageBody\":\"batch body\","
+                + "\"MessageAttributes\":{"
+                + "\"trace-id\":{\"DataType\":\"String\",\"StringValue\":\"abc-123\"}"
+                + "}}]}";
+
+        given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AmazonSQS.SendMessageBatch")
+            .body(body)
+        .when()
+            .post("/" + ACCOUNT_ID + "/" + QUEUE_NAME)
+        .then()
+            .statusCode(200)
+            .body("Successful", hasSize(1))
+            .body("Successful[0].Id", equalTo("m1"))
+            .body("Successful[0].MD5OfMessageBody", notNullValue())
+            .body("Successful[0].MD5OfMessageAttributes", notNullValue());
+    }
+
+    @Test
     @Order(7)
     void deleteQueueViaQueueUrlPath() {
         String body = "{\"QueueUrl\":\"" + queueUrl + "\"}";
