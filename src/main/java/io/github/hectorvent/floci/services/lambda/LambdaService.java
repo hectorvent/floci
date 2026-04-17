@@ -500,7 +500,7 @@ public class LambdaService {
                     "ScalingConfig.MaximumConcurrency must be a numeric value", 400);
         }
         double d = ((Number) mc).doubleValue();
-        if (d != Math.floor(d)) {
+        if (Double.isNaN(d) || Double.isInfinite(d) || d != Math.floor(d)) {
             throw new AwsException("InvalidParameterValueException",
                     "ScalingConfig.MaximumConcurrency must be an integer", 400);
         }

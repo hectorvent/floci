@@ -452,6 +452,100 @@ class EsmIntegrationTest {
 
     @Test
     @Order(49)
+    void updateEventSourceMappingRejectsInvalidScalingConfig() {
+        String uuid = given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "FunctionName": "%s",
+                    "EventSourceArn": "%s",
+                    "BatchSize": 2
+                }
+                """.formatted(FUNCTION_NAME, QUEUE_ARN))
+        .when()
+            .post(LAMBDA_BASE + "/event-source-mappings")
+        .then()
+            .statusCode(202)
+        .extract()
+            .path("UUID");
+
+        // Below minimum
+        given()
+            .contentType("application/json")
+            .body("{ \"ScalingConfig\": { \"MaximumConcurrency\": 1 } }")
+        .when()
+            .put(LAMBDA_BASE + "/event-source-mappings/" + uuid)
+        .then()
+            .statusCode(400)
+            .body("message", containsString("between 2 and 1000"));
+
+        // Above maximum
+        given()
+            .contentType("application/json")
+            .body("{ \"ScalingConfig\": { \"MaximumConcurrency\": 1001 } }")
+        .when()
+            .put(LAMBDA_BASE + "/event-source-mappings/" + uuid)
+        .then()
+            .statusCode(400)
+            .body("message", containsString("between 2 and 1000"));
+
+        given().delete(LAMBDA_BASE + "/event-source-mappings/" + uuid).then().statusCode(202);
+    }
+
+    @Test
+    @Order(50)
+    void listEventSourceMappingsWithMixedScalingConfig() {
+        // Create one ESM with ScalingConfig and one without.
+        String uuidWith = given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "FunctionName": "%s",
+                    "EventSourceArn": "%s",
+                    "BatchSize": 3,
+                    "ScalingConfig": { "MaximumConcurrency": 10 }
+                }
+                """.formatted(FUNCTION_NAME, QUEUE_ARN))
+        .when()
+            .post(LAMBDA_BASE + "/event-source-mappings")
+        .then()
+            .statusCode(202)
+        .extract()
+            .path("UUID");
+
+        String uuidWithout = given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "FunctionName": "%s",
+                    "EventSourceArn": "%s",
+                    "BatchSize": 4
+                }
+                """.formatted(FUNCTION_NAME, QUEUE_ARN))
+        .when()
+            .post(LAMBDA_BASE + "/event-source-mappings")
+        .then()
+            .statusCode(202)
+        .extract()
+            .path("UUID");
+
+        // List should return both; one with ScalingConfig and one without.
+        given()
+        .when()
+            .get(LAMBDA_BASE + "/event-source-mappings?FunctionName=" + FUNCTION_ARN)
+        .then()
+            .statusCode(200)
+            .body("EventSourceMappings.find { it.UUID == '" + uuidWith + "' }.ScalingConfig.MaximumConcurrency",
+                    equalTo(10))
+            .body("EventSourceMappings.find { it.UUID == '" + uuidWithout + "' }.ScalingConfig",
+                    nullValue());
+
+        given().delete(LAMBDA_BASE + "/event-source-mappings/" + uuidWith).then().statusCode(202);
+        given().delete(LAMBDA_BASE + "/event-source-mappings/" + uuidWithout).then().statusCode(202);
+    }
+
+    @Test
+    @Order(51)
     void updateEventSourceMappingAddsAndClearsScalingConfig() {
         String uuid = given()
             .contentType("application/json")
