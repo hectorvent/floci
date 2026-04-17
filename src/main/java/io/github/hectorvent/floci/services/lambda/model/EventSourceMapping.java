@@ -24,6 +24,7 @@ public class EventSourceMapping {
     private long lastModified;
     private List<String> functionResponseTypes = new ArrayList<>();
     private Map<String, String> shardSequenceNumbers = new HashMap<>();
+    private ScalingConfig scalingConfig;
 
     public EventSourceMapping() {
     }
@@ -70,5 +71,13 @@ public class EventSourceMapping {
     public Map<String, String> getShardSequenceNumbers() { return shardSequenceNumbers; }
     public void setShardSequenceNumbers(Map<String, String> shardSequenceNumbers) {
         this.shardSequenceNumbers = shardSequenceNumbers != null ? shardSequenceNumbers : new java.util.HashMap<>();
+    }
+
+    public ScalingConfig getScalingConfig() { return scalingConfig; }
+    public void setScalingConfig(ScalingConfig scalingConfig) { this.scalingConfig = scalingConfig; }
+
+    /** Convenience accessor: returns {@code null} when no cap is configured. */
+    public Integer getMaximumConcurrency() {
+        return scalingConfig != null ? scalingConfig.getMaximumConcurrency() : null;
     }
 }

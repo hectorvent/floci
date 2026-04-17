@@ -178,6 +178,34 @@ aws lambda create-event-source-mapping \
   --endpoint-url $AWS_ENDPOINT_URL
 ```
 
+### ScalingConfig (SQS only)
+
+`CreateEventSourceMapping` and `UpdateEventSourceMapping` accept a
+`ScalingConfig.MaximumConcurrency` integer between 2 and 1000 on SQS
+event sources, matching the AWS wire format. `GetEventSourceMapping` and
+`ListEventSourceMappings` echo the value back when set; responses omit
+the `ScalingConfig` field entirely when no cap is configured.
+
+```bash
+aws lambda create-event-source-mapping \
+  --function-name my-function \
+  --event-source-arn $QUEUE_ARN \
+  --scaling-config MaximumConcurrency=5 \
+  --endpoint-url $AWS_ENDPOINT_URL
+```
+
+Validation mirrors AWS: values outside 2–1000 are rejected with
+`InvalidParameterValueException`, and `ScalingConfig` on a non-SQS event
+source (Kinesis / DynamoDB Streams) is also rejected — those services
+use `ParallelizationFactor` instead, which is a separate field.
+
+!!! note "Enforcement status"
+    The configured `MaximumConcurrency` is persisted and returned on the
+    wire, but the SQS poller does not yet cap concurrent invocations at
+    this value (the poller today serializes invocations per ESM to one
+    at a time regardless). Real parallel dispatch capped by
+    `MaximumConcurrency` is tracked as a follow-up.
+
 ## Supported Runtimes
 
 Any runtime that has an official AWS Lambda container image works with Floci (e.g. `nodejs22.x`, `python3.13`, `java21`, `go1.x`, `provided.al2023`).

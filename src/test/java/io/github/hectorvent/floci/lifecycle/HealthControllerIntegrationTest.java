@@ -48,7 +48,8 @@ class HealthControllerIntegrationTest {
                 "appconfig": "running",
                 "appconfigdata": "running",
                 "ecr": "running",
-                "tagging": "running"
+                "tagging": "running",
+                "bedrock-runtime": "running"
               },
               "edition": "floci-always-free",
               "version": "dev"

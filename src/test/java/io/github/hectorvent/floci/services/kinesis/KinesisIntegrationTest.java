@@ -468,4 +468,137 @@ class KinesisIntegrationTest {
         .then()
             .statusCode(400);
     }
+
+    @Test
+    @Order(30)
+    void updateStreamModeRoundTrip() {
+        // Create a dedicated stream so other ordered tests aren't affected by the mode flip.
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.CreateStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "stream-mode-test", "ShardCount": 1}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Default mode is PROVISIONED.
+        String streamArn = given()
+            .header("X-Amz-Target", "Kinesis_20131202.DescribeStreamSummary")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "stream-mode-test"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("StreamDescriptionSummary.StreamModeDetails.StreamMode", equalTo("PROVISIONED"))
+            .extract().jsonPath().getString("StreamDescriptionSummary.StreamARN");
+
+        // Switch to ON_DEMAND.
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.UpdateStreamMode")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamARN\": \"" + streamArn + "\", \"StreamModeDetails\": {\"StreamMode\": \"ON_DEMAND\"}}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // DescribeStream now reports ON_DEMAND.
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.DescribeStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "stream-mode-test"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("StreamDescription.StreamModeDetails.StreamMode", equalTo("ON_DEMAND"));
+
+        // Calling UpdateStreamMode again with the same mode is a no-op (mirrors retention semantics)
+        // and is what terraform-provider-aws does on every refresh. See #440.
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.UpdateStreamMode")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamARN\": \"" + streamArn + "\", \"StreamModeDetails\": {\"StreamMode\": \"ON_DEMAND\"}}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(31)
+    void createStreamWithOnDemandMode() {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.CreateStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "on-demand-create-test", "ShardCount": 1, "StreamModeDetails": {"StreamMode": "ON_DEMAND"}}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.DescribeStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "on-demand-create-test"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("StreamDescription.StreamModeDetails.StreamMode", equalTo("ON_DEMAND"));
+    }
+
+    @Test
+    @Order(32)
+    void updateStreamModeRequiresStreamArn() {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.UpdateStreamMode")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "stream-mode-test", "StreamModeDetails": {"StreamMode": "ON_DEMAND"}}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidArgumentException"));
+    }
+
+    @Test
+    @Order(33)
+    void updateStreamModeRejectsInvalidMode() {
+        String streamArn = given()
+            .header("X-Amz-Target", "Kinesis_20131202.DescribeStreamSummary")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "stream-mode-test"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().jsonPath().getString("StreamDescriptionSummary.StreamARN");
+
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.UpdateStreamMode")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamARN\": \"" + streamArn + "\", \"StreamModeDetails\": {\"StreamMode\": \"BOGUS\"}}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidArgumentException"));
+    }
 }

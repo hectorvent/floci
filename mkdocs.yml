@@ -98,4 +98,5 @@ nav:
     - OpenSearch: services/opensearch.md
     - EC2: services/ec2.md
     - AppConfig: services/appconfig.md
+    - Bedrock Runtime: services/bedrock-runtime.md
   - Contributing: contributing.md

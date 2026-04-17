@@ -233,4 +233,113 @@ class KinesisJsonHandlerTest {
         assertEquals("by-name",
                 responseEntity(resp).get("StreamDescription").get("StreamName").asText());
     }
+
+    @Test
+    void describeStreamReturnsDefaultStreamMode() {
+        createStream("test-stream");
+
+        ObjectNode req = MAPPER.createObjectNode();
+        req.put("StreamName", "test-stream");
+        Response resp = handler.handle("DescribeStream", req, REGION);
+        ObjectNode desc = (ObjectNode) responseEntity(resp).get("StreamDescription");
+        assertEquals("PROVISIONED", desc.get("StreamModeDetails").get("StreamMode").asText());
+    }
+
+    @Test
+    void describeStreamSummaryReturnsDefaultStreamMode() {
+        createStream("test-stream");
+
+        ObjectNode req = MAPPER.createObjectNode();
+        req.put("StreamName", "test-stream");
+        Response resp = handler.handle("DescribeStreamSummary", req, REGION);
+        ObjectNode summary = (ObjectNode) responseEntity(resp).get("StreamDescriptionSummary");
+        assertEquals("PROVISIONED", summary.get("StreamModeDetails").get("StreamMode").asText());
+    }
+
+    @Test
+    void createStreamHonorsOnDemandStreamMode() {
+        ObjectNode req = MAPPER.createObjectNode();
+        req.put("StreamName", "test-stream");
+        req.put("ShardCount", 1);
+        req.putObject("StreamModeDetails").put("StreamMode", "ON_DEMAND");
+        assertThat(handler.handle("CreateStream", req, REGION).getStatus(), is(200));
+
+        ObjectNode descReq = MAPPER.createObjectNode();
+        descReq.put("StreamName", "test-stream");
+        Response resp = handler.handle("DescribeStream", descReq, REGION);
+        ObjectNode desc = (ObjectNode) responseEntity(resp).get("StreamDescription");
+        assertEquals("ON_DEMAND", desc.get("StreamModeDetails").get("StreamMode").asText());
+    }
+
+    @Test
+    void updateStreamModeSwitchesProvisionedToOnDemand() {
+        createStream("test-stream");
+
+        ObjectNode updateReq = MAPPER.createObjectNode();
+        updateReq.put("StreamARN", STREAM_ARN);
+        updateReq.putObject("StreamModeDetails").put("StreamMode", "ON_DEMAND");
+        assertThat(handler.handle("UpdateStreamMode", updateReq, REGION).getStatus(), is(200));
+
+        ObjectNode descReq = MAPPER.createObjectNode();
+        descReq.put("StreamName", "test-stream");
+        Response resp = handler.handle("DescribeStream", descReq, REGION);
+        ObjectNode desc = (ObjectNode) responseEntity(resp).get("StreamDescription");
+        assertEquals("ON_DEMAND", desc.get("StreamModeDetails").get("StreamMode").asText());
+    }
+
+    @Test
+    void updateStreamModeSameModeIsNoOp() {
+        // Terraform refresh calls UpdateStreamMode unconditionally; same-mode must succeed.
+        createStream("test-stream");
+
+        ObjectNode updateReq = MAPPER.createObjectNode();
+        updateReq.put("StreamARN", STREAM_ARN);
+        updateReq.putObject("StreamModeDetails").put("StreamMode", "PROVISIONED");
+        assertThat(handler.handle("UpdateStreamMode", updateReq, REGION).getStatus(), is(200));
+    }
+
+    @Test
+    void updateStreamModeRejectsInvalidMode() {
+        createStream("test-stream");
+
+        ObjectNode updateReq = MAPPER.createObjectNode();
+        updateReq.put("StreamARN", STREAM_ARN);
+        updateReq.putObject("StreamModeDetails").put("StreamMode", "BOGUS");
+        AwsException ex = assertThrows(AwsException.class,
+                () -> handler.handle("UpdateStreamMode", updateReq, REGION));
+        assertEquals("InvalidArgumentException", ex.getErrorCode());
+    }
+
+    @Test
+    void updateStreamModeRequiresStreamArn() {
+        createStream("test-stream");
+
+        ObjectNode updateReq = MAPPER.createObjectNode();
+        updateReq.put("StreamName", "test-stream");
+        updateReq.putObject("StreamModeDetails").put("StreamMode", "ON_DEMAND");
+        AwsException ex = assertThrows(AwsException.class,
+                () -> handler.handle("UpdateStreamMode", updateReq, REGION));
+        assertEquals("InvalidArgumentException", ex.getErrorCode());
+    }
+
+    @Test
+    void updateStreamModeRequiresStreamModeDetails() {
+        createStream("test-stream");
+
+        ObjectNode updateReq = MAPPER.createObjectNode();
+        updateReq.put("StreamARN", STREAM_ARN);
+        AwsException ex = assertThrows(AwsException.class,
+                () -> handler.handle("UpdateStreamMode", updateReq, REGION));
+        assertEquals("InvalidArgumentException", ex.getErrorCode());
+    }
+
+    @Test
+    void updateStreamModeRejectsUnknownStream() {
+        ObjectNode updateReq = MAPPER.createObjectNode();
+        updateReq.put("StreamARN", STREAM_ARN);
+        updateReq.putObject("StreamModeDetails").put("StreamMode", "ON_DEMAND");
+        AwsException ex = assertThrows(AwsException.class,
+                () -> handler.handle("UpdateStreamMode", updateReq, REGION));
+        assertEquals("ResourceNotFoundException", ex.getErrorCode());
+    }
 }

@@ -25,6 +25,8 @@ public class KinesisService {
             "IncomingBytes", "IncomingRecords", "OutgoingBytes", "OutgoingRecords",
             "WriteProvisionedThroughputExceeded", "ReadProvisionedThroughputExceeded",
             "IteratorAgeMilliseconds", "ALL");
+    private static final Set<String> VALID_STREAM_MODES = Set.of("PROVISIONED", "ON_DEMAND");
+    private static final String DEFAULT_STREAM_MODE = "PROVISIONED";
 
     private final StorageBackend<String, KinesisStream> store;
     private final StorageBackend<String, KinesisConsumer> consumerStore;
@@ -49,6 +51,16 @@ public class KinesisService {
     }
 
     public KinesisStream createStream(String streamName, int shardCount, String region) {
+        return createStream(streamName, shardCount, null, region);
+    }
+
+    public KinesisStream createStream(String streamName, int shardCount, String streamMode, String region) {
+        String resolvedMode = streamMode != null ? streamMode : DEFAULT_STREAM_MODE;
+        if (!VALID_STREAM_MODES.contains(resolvedMode)) {
+            throw new AwsException("InvalidArgumentException",
+                    "StreamMode must be PROVISIONED or ON_DEMAND, got: " + resolvedMode, 400);
+        }
+
         String storageKey = regionKey(region, streamName);
         if (store.get(storageKey).isPresent()) {
             throw new AwsException("ResourceInUseException", "Stream already exists: " + streamName, 400);
@@ -56,6 +68,7 @@ public class KinesisService {
 
         String arn = regionResolver.buildArn("kinesis", region, "stream/" + streamName);
         KinesisStream stream = new KinesisStream(streamName, arn);
+        stream.setStreamMode(resolvedMode);
 
         for (int i = 0; i < shardCount; i++) {
             String shardId = String.format("shardId-%012d", i);
@@ -63,8 +76,30 @@ public class KinesisService {
         }
 
         store.put(storageKey, stream);
-        LOG.infov("Created Kinesis stream: {0} in region {1} with {2} shards", streamName, region, shardCount);
+        LOG.infov("Created Kinesis stream: {0} in region {1} with {2} shards (mode: {3})",
+                streamName, region, shardCount, resolvedMode);
         return stream;
+    }
+
+    public void updateStreamMode(String streamName, String streamMode, String region) {
+        if (streamMode == null || !VALID_STREAM_MODES.contains(streamMode)) {
+            throw new AwsException("InvalidArgumentException",
+                    "StreamMode must be PROVISIONED or ON_DEMAND, got: " + streamMode, 400);
+        }
+        KinesisStream stream = resolveStream(streamName, region);
+        if (!"ACTIVE".equals(stream.getStreamStatus())) {
+            throw new AwsException("ResourceInUseException",
+                    "Stream " + streamName + " is not ACTIVE (current state: " + stream.getStreamStatus() + ")", 400);
+        }
+        // Same-mode is a no-op. Mirrors the same-value behaviour in
+        // increase/decreaseStreamRetentionPeriod (see #342). Avoids breaking
+        // terraform-provider-aws which calls UpdateStreamMode on every refresh.
+        if (streamMode.equals(stream.getStreamMode())) {
+            return;
+        }
+        stream.setStreamMode(streamMode);
+        store.put(regionKey(region, streamName), stream);
+        LOG.infov("Updated stream mode for {0} to {1}", streamName, streamMode);
     }
 
     public List<String> listStreams(String region) {

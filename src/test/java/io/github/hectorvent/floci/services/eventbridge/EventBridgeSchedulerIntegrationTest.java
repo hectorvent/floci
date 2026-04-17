@@ -296,6 +296,8 @@ class EventBridgeSchedulerIntegrationTest {
             @Override
             public ServicesConfig services() { return null; }
             @Override
+            public DockerConfig docker() { return null; }
+            @Override
             public EmulatorConfig.InitHooksConfig initHooks() { return null; }
         };
     }

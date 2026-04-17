@@ -61,6 +61,7 @@ public class KinesisJsonHandler {
             case "DecreaseStreamRetentionPeriod" -> handleDecreaseStreamRetentionPeriod(request, region);
             case "EnableEnhancedMonitoring" -> handleEnableEnhancedMonitoring(request, region);
             case "DisableEnhancedMonitoring" -> handleDisableEnhancedMonitoring(request, region);
+            case "UpdateStreamMode" -> handleUpdateStreamMode(request, region);
             default -> Response.status(400)
                     .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
                     .build();
@@ -75,14 +76,9 @@ public class KinesisJsonHandler {
 
         String streamArn = request.path("StreamARN").asText(null);
         if (streamArn != null) {
-            int streamIdx = streamArn.indexOf(":stream/");
-            if (streamIdx >= 0) {
-                String after = streamArn.substring(streamIdx + 8);
-                int slash = after.indexOf('/');
-                String name = slash >= 0 ? after.substring(0, slash) : after;
-                if (!name.isBlank()) {
-                    return name;
-                }
+            String name = parseStreamNameFromArn(streamArn);
+            if (name != null) {
+                return name;
             }
         }
 
@@ -90,11 +86,58 @@ public class KinesisJsonHandler {
                 "StreamName or valid StreamARN must be provided", 400);
     }
 
+    private String parseStreamNameFromArn(String streamArn) {
+        int streamIdx = streamArn.indexOf(":stream/");
+        if (streamIdx < 0) {
+            return null;
+        }
+        String after = streamArn.substring(streamIdx + 8);
+        int slash = after.indexOf('/');
+        String name = slash >= 0 ? after.substring(0, slash) : after;
+        return name.isBlank() ? null : name;
+    }
+
     private Response handleCreateStream(JsonNode request, String region) {
         String streamName = request.path("StreamName").asText();
         int shardCount = request.path("ShardCount").asInt(1);
-        service.createStream(streamName, shardCount, region);
+        String streamMode = null;
+        JsonNode modeDetails = request.path("StreamModeDetails");
+        if (modeDetails.isObject()) {
+            String mode = modeDetails.path("StreamMode").asText(null);
+            if (mode != null && !mode.isBlank()) {
+                streamMode = mode;
+            }
+        }
+        service.createStream(streamName, shardCount, streamMode, region);
         return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleUpdateStreamMode(JsonNode request, String region) {
+        // UpdateStreamMode accepts only StreamARN per the AWS API; StreamName is not valid.
+        String streamArn = request.path("StreamARN").asText(null);
+        if (streamArn == null || streamArn.isBlank()) {
+            throw new AwsException("InvalidArgumentException", "StreamARN is required", 400);
+        }
+        JsonNode modeDetails = request.path("StreamModeDetails");
+        if (!modeDetails.isObject()) {
+            throw new AwsException("InvalidArgumentException", "StreamModeDetails is required", 400);
+        }
+        String streamMode = modeDetails.path("StreamMode").asText(null);
+        if (streamMode == null || streamMode.isBlank()) {
+            throw new AwsException("InvalidArgumentException", "StreamModeDetails.StreamMode is required", 400);
+        }
+        String streamName = extractStreamNameFromArn(streamArn);
+        service.updateStreamMode(streamName, streamMode, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private String extractStreamNameFromArn(String streamArn) {
+        String name = parseStreamNameFromArn(streamArn);
+        if (name == null) {
+            throw new AwsException("InvalidArgumentException",
+                    "StreamARN does not contain a valid stream name: " + streamArn, 400);
+        }
+        return name;
     }
 
     private Response handleDeleteStream(JsonNode request, String region) {
@@ -128,6 +171,7 @@ public class KinesisJsonHandler {
         if (stream.getKeyId() != null) {
             desc.put("KeyId", stream.getKeyId());
         }
+        addStreamModeDetailsNode(desc, stream);
 
         addEnhancedMonitoringNode(desc, stream);
 
@@ -169,6 +213,7 @@ public class KinesisJsonHandler {
         if (stream.getKeyId() != null) {
             summary.put("KeyId", stream.getKeyId());
         }
+        addStreamModeDetailsNode(summary, stream);
 
         addEnhancedMonitoringNode(summary, stream);
 
@@ -178,6 +223,10 @@ public class KinesisJsonHandler {
     private void addEnhancedMonitoringNode(ObjectNode parent, KinesisStream stream) {
         ArrayNode shardLevelMetrics = parent.putArray("EnhancedMonitoring").addObject().putArray("ShardLevelMetrics");
         stream.getEnhancedMonitoringMetrics().stream().sorted().forEach(shardLevelMetrics::add);
+    }
+
+    private void addStreamModeDetailsNode(ObjectNode parent, KinesisStream stream) {
+        parent.putObject("StreamModeDetails").put("StreamMode", stream.getStreamMode());
     }
 
     private Response handleRegisterStreamConsumer(JsonNode request, String region) {

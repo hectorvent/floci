@@ -54,6 +54,10 @@ floci:
     validate-signatures: false
     presign-secret: local-emulator-secret
 
+  docker:
+    log-max-size: "10m"
+    log-max-file: "3"
+
   services:
     ssm:
       enabled: true
@@ -163,3 +167,5 @@ floci:
       tls-enabled: false
       keep-running-on-shutdown: true
       uri-style: hostname
+    bedrock-runtime:
+      enabled: true

@@ -123,6 +123,26 @@ public class LambdaController {
         return Response.ok(buildFunctionConfiguration(fn)).build();
     }
 
+    // ──────────────────────────── UpdateFunctionConfiguration ────────────────────────────
+
+    @PUT
+    @Path("/functions/{functionName}/configuration")
+    public Response updateFunctionConfiguration(@Context HttpHeaders headers,
+                                                @PathParam("functionName") String functionName,
+                                                String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            LambdaFunction fn = lambdaService.updateFunctionConfiguration(region, functionName, request);
+            return Response.ok(buildFunctionConfiguration(fn)).build();
+        } catch (AwsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AwsException("InvalidParameterValueException", e.getMessage(), 400);
+        }
+    }
+
     // ──────────────────────────── UpdateFunctionCode ────────────────────────────
 
     @PUT
@@ -274,6 +294,14 @@ public class LambdaController {
         ArrayNode responseTypes = node.putArray("FunctionResponseTypes");
         if (esm.getFunctionResponseTypes() != null) {
             esm.getFunctionResponseTypes().forEach(responseTypes::add);
+        }
+        // Only emit ScalingConfig when a cap is actually set — AWS omits the
+        // field entirely on mappings with no MaximumConcurrency rather than
+        // returning an empty object.
+        Integer maxConcurrency = esm.getMaximumConcurrency();
+        if (maxConcurrency != null) {
+            ObjectNode scaling = node.putObject("ScalingConfig");
+            scaling.put("MaximumConcurrency", maxConcurrency.intValue());
         }
         @SuppressWarnings("unchecked")
         Map<String, Object> result = objectMapper.convertValue(node, Map.class);

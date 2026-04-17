@@ -317,6 +317,21 @@ public class SqsService {
                     "Message body must be shorter than " + maxMessageSize + " bytes.", 400);
         }
 
+        int queueDelaySeconds = parseDelaySecondsAttribute(queue.getAttributes().get("DelaySeconds"));
+
+        // Resolve the effective delay:
+        //   - FIFO queues only support queue-level DelaySeconds per AWS SQS,
+        //     so any per-message value is ignored and we always use the
+        //     queue attribute. Without this, FIFO silently dropped the
+        //     queue-level default (issue #475).
+        //   - Standard queues honor per-message DelaySeconds when provided
+        //     (> 0). Applying the queue-level default on the standard path
+        //     requires distinguishing "omitted" from "explicit 0" in the
+        //     handlers, which the current int-parameter API cannot express;
+        //     that's left as follow-up work -- this patch only addresses
+        //     the FIFO regression called out in the issue.
+        int effectiveDelaySeconds = queue.isFifo() ? queueDelaySeconds : delaySeconds;
+
         // FIFO queue validation
         if (queue.isFifo()) {
             if (messageGroupId == null || messageGroupId.isEmpty()) {
@@ -353,6 +368,9 @@ public class SqsService {
             message.setMessageGroupId(messageGroupId);
             message.setMessageDeduplicationId(dedupId);
             message.setSequenceNumber(sequenceCounter.incrementAndGet());
+            if (effectiveDelaySeconds > 0) {
+                message.setVisibleAt(Instant.now().plusSeconds(effectiveDelaySeconds));
+            }
             if (messageAttributes != null && !messageAttributes.isEmpty()) {
                 message.getMessageAttributes().putAll(messageAttributes);
                 message.updateMd5OfMessageAttributes();
@@ -367,8 +385,8 @@ public class SqsService {
 
         // Standard queue
         Message message = new Message(body);
-        if (delaySeconds > 0) {
-            message.setVisibleAt(Instant.now().plusSeconds(delaySeconds));
+        if (effectiveDelaySeconds > 0) {
+            message.setVisibleAt(Instant.now().plusSeconds(effectiveDelaySeconds));
         }
         if (messageAttributes != null && !messageAttributes.isEmpty()) {
             message.getMessageAttributes().putAll(messageAttributes);
@@ -379,6 +397,23 @@ public class SqsService {
         notifyReceivers(storageKey);
         LOG.debugv("Sent message {0} to queue {1}", message.getMessageId(), queueUrl);
         return message;
+    }
+
+    /**
+     * Parse the queue-level DelaySeconds attribute. Returns 0 when the
+     * attribute is null, empty, non-numeric, or negative -- the queue falls
+     * back to "no default delay" rather than failing the SendMessage call.
+     */
+    private int parseDelaySecondsAttribute(String value) {
+        if (value == null || value.isEmpty()) {
+            return 0;
+        }
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : 0;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private void notifyReceivers(String storageKey) {

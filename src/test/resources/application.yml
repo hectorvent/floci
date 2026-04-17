@@ -43,6 +43,10 @@ floci:
     timeout-seconds: 5
     shutdown-grace-period-seconds: 2
 
+  docker:
+    log-max-size: "10m"
+    log-max-file: "3"
+
   services:
     ssm:
       enabled: true
@@ -132,4 +136,6 @@ floci:
     appconfigdata:
       enabled: true
     ecr:
+      enabled: true
+    bedrock-runtime:
       enabled: true

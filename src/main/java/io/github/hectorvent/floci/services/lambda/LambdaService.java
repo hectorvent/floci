@@ -5,11 +5,12 @@ import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.services.lambda.model.EventSourceMapping;
-import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
+import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
 import io.github.hectorvent.floci.services.lambda.model.LambdaAlias;
 import io.github.hectorvent.floci.services.lambda.model.LambdaFunction;
 import io.github.hectorvent.floci.services.lambda.model.LambdaUrlConfig;
+import io.github.hectorvent.floci.services.lambda.model.ScalingConfig;
 import io.github.hectorvent.floci.services.lambda.zip.CodeStore;
 import io.github.hectorvent.floci.services.lambda.zip.ZipExtractor;
 import io.github.hectorvent.floci.services.s3.S3Service;
@@ -323,6 +324,48 @@ public class LambdaService {
         return fn;
     }
 
+    public LambdaFunction updateFunctionConfiguration(String region, String functionName, Map<String, Object> request) {
+        LambdaFunction fn = getFunction(region, functionName);
+
+        if (request.containsKey("Description")) {
+            fn.setDescription((String) request.get("Description"));
+        }
+        if (request.containsKey("Handler")) {
+            fn.setHandler((String) request.get("Handler"));
+        }
+        if (request.containsKey("MemorySize")) {
+            fn.setMemorySize(((Number) request.get("MemorySize")).intValue());
+        }
+        if (request.containsKey("Role")) {
+            fn.setRole((String) request.get("Role"));
+        }
+        if (request.containsKey("Runtime")) {
+            fn.setRuntime((String) request.get("Runtime"));
+        }
+        if (request.containsKey("Timeout")) {
+            fn.setTimeout(((Number) request.get("Timeout")).intValue());
+        }
+        if (request.containsKey("Environment")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> envBlock = (Map<String, Object>) request.get("Environment");
+            if (envBlock != null && envBlock.containsKey("Variables")) {
+                @SuppressWarnings("unchecked")
+                Map<String, String> vars = (Map<String, String>) envBlock.get("Variables");
+                fn.setEnvironment(vars != null ? vars : new java.util.HashMap<>());
+            }
+        }
+
+        fn.setLastModified(System.currentTimeMillis());
+        fn.setRevisionId(UUID.randomUUID().toString());
+
+        // Drain warm containers so the next invocation picks up the new configuration
+        warmPool.drainFunction(functionName);
+
+        functionStore.save(region, fn);
+        LOG.infov("Updated configuration for function: {0}", functionName);
+        return fn;
+    }
+
     public void deleteFunction(String region, String functionName) {
         LambdaFunction fn = getFunction(region, functionName); // throws 404 if not found
         functionName = fn.getFunctionName();
@@ -400,6 +443,8 @@ public class LambdaService {
                 ? (List<String>) request.get("FunctionResponseTypes")
                 : new ArrayList<>();
 
+        ScalingConfig scalingConfig = parseScalingConfig(request, eventSourceArn);
+
         String queueUrl = eventSourceArn.contains(":sqs:") ? AwsArnUtils.arnToQueueUrl(eventSourceArn, config.effectiveBaseUrl()) : null;
 
         EventSourceMapping esm = new EventSourceMapping();
@@ -412,6 +457,7 @@ public class LambdaService {
         esm.setBatchSize(batchSize);
         esm.setEnabled(enabled);
         esm.setState(enabled ? "Enabled" : "Disabled");
+        esm.setScalingConfig(scalingConfig);
         esm.setFunctionResponseTypes(functionResponseTypes);
         esm.setLastModified(System.currentTimeMillis());
 
@@ -421,6 +467,53 @@ public class LambdaService {
         }
         LOG.infov("Created ESM {0}: {1} → {2}", esm.getUuid(), eventSourceArn, resolvedName);
         return esm;
+    }
+
+    /**
+     * Parses {@code ScalingConfig} out of a create/update request and applies
+     * AWS-level validation: {@code MaximumConcurrency} must be in [2, 1000]
+     * and is only valid on SQS event sources. Returns {@code null} when no
+     * config was supplied or when the supplied config has no cap (AWS treats
+     * an empty ScalingConfig as "clear the cap").
+     */
+    private ScalingConfig parseScalingConfig(Map<String, Object> request, String eventSourceArn) {
+        Object raw = request.get("ScalingConfig");
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof Map<?, ?>)) {
+            throw new AwsException("InvalidParameterValueException",
+                    "ScalingConfig must be a JSON object", 400);
+        }
+        boolean isSqs = eventSourceArn != null && eventSourceArn.contains(":sqs:");
+        Map<?, ?> map = (Map<?, ?>) raw;
+        Object mc = map.get("MaximumConcurrency");
+        if (mc == null) {
+            if (!isSqs) {
+                throw new AwsException("InvalidParameterValueException",
+                        "ScalingConfig is only supported for Amazon SQS event source mappings", 400);
+            }
+            return null;
+        }
+        if (!(mc instanceof Number)) {
+            throw new AwsException("InvalidParameterValueException",
+                    "ScalingConfig.MaximumConcurrency must be a numeric value", 400);
+        }
+        double d = ((Number) mc).doubleValue();
+        if (Double.isNaN(d) || Double.isInfinite(d) || d != Math.floor(d)) {
+            throw new AwsException("InvalidParameterValueException",
+                    "ScalingConfig.MaximumConcurrency must be an integer", 400);
+        }
+        long longValue = ((Number) mc).longValue();
+        if (longValue < 2 || longValue > 1000) {
+            throw new AwsException("InvalidParameterValueException",
+                    "ScalingConfig.MaximumConcurrency must be between 2 and 1000 (got " + longValue + ")", 400);
+        }
+        if (!isSqs) {
+            throw new AwsException("InvalidParameterValueException",
+                    "ScalingConfig is only supported for Amazon SQS event source mappings", 400);
+        }
+        return new ScalingConfig((int) longValue);
     }
 
     private void startPollingHelper(EventSourceMapping esm) {
@@ -471,6 +564,11 @@ public class LambdaService {
             boolean nowEnabled = !Boolean.FALSE.equals(request.get("Enabled"));
             esm.setEnabled(nowEnabled);
             esm.setState(nowEnabled ? "Enabled" : "Disabled");
+        }
+        if (request.containsKey("ScalingConfig")) {
+            // AWS: passing ScalingConfig resets it. An empty object or one
+            // with MaximumConcurrency=null clears the cap.
+            esm.setScalingConfig(parseScalingConfig(request, esm.getEventSourceArn()));
         }
 
         esm.setLastModified(System.currentTimeMillis());

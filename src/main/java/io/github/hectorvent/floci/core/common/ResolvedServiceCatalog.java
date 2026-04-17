@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.core.common;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.services.appconfig.AppConfigController;
 import io.github.hectorvent.floci.services.appconfig.AppConfigDataController;
+import io.github.hectorvent.floci.services.bedrockruntime.BedrockRuntimeController;
 import io.github.hectorvent.floci.services.cognito.CognitoOAuthController;
 import io.github.hectorvent.floci.services.cognito.CognitoWellKnownController;
 import io.github.hectorvent.floci.services.lambda.LambdaController;
@@ -181,7 +182,18 @@ public class ResolvedServiceCatalog {
                 descriptor("tagging", "tagging", config.services().tagging().enabled(), true,
                         null, null, 5000L, null, ServiceProtocol.JSON,
                         protocols(ServiceProtocol.JSON),
-                        Set.of("ResourceGroupsTaggingAPI_20170126."), Set.of("tagging"), Set.of(), Set.of())
+                        Set.of("ResourceGroupsTaggingAPI_20170126."), Set.of("tagging"), Set.of(), Set.of()),
+                descriptor("bedrock-runtime", "bedrock-runtime",
+                        config.services().bedrockRuntime().enabled(), true,
+                        null, null, 5000L, null, ServiceProtocol.REST_JSON,
+                        protocols(ServiceProtocol.REST_JSON),
+                        Set.of(),
+                        // Register both signing names. boto3's service model declares
+                        // signingName=bedrock for bedrock-runtime; register the endpoint
+                        // id too as a safety net (catalog lookup is exact-match).
+                        Set.of("bedrock", "bedrock-runtime"),
+                        Set.of(),
+                        Set.of(BedrockRuntimeController.class))
         ));
     }
 
