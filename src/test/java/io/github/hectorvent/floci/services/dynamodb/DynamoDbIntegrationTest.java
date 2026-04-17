@@ -1324,6 +1324,111 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
+    @Order(31)
+    void updateItemSetArithmeticIncrement() {
+        // Create table
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "KeySchema": [{"AttributeName": "PK", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "PK", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // First call: if_not_exists(counter, :start) + :inc → 60000001
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}},
+                    "UpdateExpression": "SET customerId = if_not_exists(customerId, :start) + :inc",
+                    "ExpressionAttributeValues": {
+                        ":start": {"N": "60000000"},
+                        ":inc": {"N": "1"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify first increment
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.customerId.N", equalTo("60000001"));
+
+        // Second call: existing (60000001) + 1 → 60000002
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}},
+                    "UpdateExpression": "SET customerId = if_not_exists(customerId, :start) + :inc",
+                    "ExpressionAttributeValues": {
+                        ":start": {"N": "60000000"},
+                        ":inc": {"N": "1"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify second increment
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.customerId.N", equalTo("60000002"));
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ArithmeticTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     void unsupportedOperation() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateGlobalTable")
