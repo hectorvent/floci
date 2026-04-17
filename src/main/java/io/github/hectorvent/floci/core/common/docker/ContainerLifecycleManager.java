@@ -95,10 +95,10 @@ public class ContainerLifecycleManager {
         dockerClient.startContainerCmd(containerId).exec();
         LOG.infov("Started container {0}", containerId);
 
-        // Connect to the Docker network after starting so that host port bindings
-        // are established first. Setting withNetworkMode during create suppresses
-        // port publishing on macOS Docker Desktop.
-        if (spec.networkMode() != null && !spec.networkMode().isBlank()) {
+        // For containers with port bindings, withNetworkMode was skipped during creation
+        // (it suppresses port publishing on macOS Docker Desktop). Connect to the
+        // configured network now, after the host port bindings are established.
+        if (spec.networkMode() != null && !spec.networkMode().isBlank() && spec.hasPortBindings()) {
             try {
                 dockerClient.connectToNetworkCmd()
                         .withContainerId(containerId)
@@ -282,10 +282,13 @@ public class ContainerLifecycleManager {
             hostConfig.withPortBindings(ports);
         }
 
-        // Network mode is intentionally NOT set here.
-        // withNetworkMode() during container creation suppresses host port bindings
-        // on macOS Docker Desktop. Network attachment is done after start via
-        // connectToNetworkCmd() in createAndStart().
+        // Network mode: only set during creation when there are no host port bindings.
+        // withNetworkMode() + port bindings suppresses port publishing on macOS Docker Desktop,
+        // so containers with port bindings (e.g. ECR registry) connect to the network
+        // after start via connectToNetworkCmd() instead.
+        if (spec.networkMode() != null && !spec.networkMode().isBlank() && !spec.hasPortBindings()) {
+            hostConfig.withNetworkMode(spec.networkMode());
+        }
 
         // Mounts (named volumes, bind mounts)
         if (spec.mounts() != null && !spec.mounts().isEmpty()) {
