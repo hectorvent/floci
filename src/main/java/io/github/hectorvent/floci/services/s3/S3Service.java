@@ -804,6 +804,34 @@ public class S3Service {
         return bucket.getTags() != null ? bucket.getTags() : Map.of();
     }
 
+    public void putBucketWebsite(String bucketName, WebsiteConfiguration config) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket",
+                        "The specified bucket does not exist.", 404));
+        bucket.setWebsiteConfiguration(config);
+        bucketStore.put(bucketName, bucket);
+        LOG.infov("Set website configuration for bucket: {0}", bucketName);
+    }
+
+    public WebsiteConfiguration getBucketWebsite(String bucketName) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket",
+                        "The specified bucket does not exist.", 404));
+        if (bucket.getWebsiteConfiguration() == null) {
+            throw new AwsException("NoSuchWebsiteConfiguration", "The specified bucket does not have a website configuration.", 404);
+        }
+        return bucket.getWebsiteConfiguration();
+    }
+
+    public void deleteBucketWebsite(String bucketName) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket",
+                        "The specified bucket does not exist.", 404));
+        bucket.setWebsiteConfiguration(null);
+        bucketStore.put(bucketName, bucket);
+        LOG.infov("Deleted website configuration for bucket: {0}", bucketName);
+    }
+
     public void deleteBucketTagging(String bucketName) {
         Bucket bucket = bucketStore.get(bucketName)
                 .orElseThrow(() -> new AwsException("NoSuchBucket",
