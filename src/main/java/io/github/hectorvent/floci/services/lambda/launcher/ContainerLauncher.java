@@ -258,7 +258,8 @@ public class ContainerLauncher {
         LOG.infov("Stopping container {0}", handle.getContainerId());
         handle.setState(ContainerState.STOPPED);
 
-        // Close log stream first so the streaming thread exits cleanly
+        handle.getRuntimeApiServer().stop();
+
         if (handle.getLogStream() != null) {
             try { handle.getLogStream().close(); } catch (Exception ignored) {}
         }
@@ -274,8 +275,6 @@ public class ContainerLauncher {
         } catch (Exception e) {
             LOG.warnv("Error removing container {0}: {1}", handle.getContainerId(), e.getMessage());
         }
-
-        handle.getRuntimeApiServer().stop();
     }
 
     private void ensureLogGroupAndStream(String logGroup, String logStream, String region) {
