@@ -1196,6 +1196,139 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
+    void updateItemConditionalCheckFailedNoReturnValues() {
+        // Create a table for this test
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable1",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    
+    given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable1",
+                    "Item": {"pk": {"S": "k1"}, "testAttr": {"S": "abc"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable1",
+                    "Key": {"pk": {"S": "k1"}},
+                    "UpdateExpression": "SET testAttr = :val",
+                    "ExpressionAttributeValues": {":val": {"S": "123"}},
+                    "ConditionExpression": "attribute_exists(nonExistent)"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ConditionalCheckFailedException"))
+            .body("message", equalTo("The conditional request failed"))
+            .body("Item", is(nullValue()));
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ConditionCheckTable1"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    
+
+    @Test
+    void updateItemConditionalCheckFailedAllOldReturnValues() {
+                // Create a table for this test
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable2",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable2",
+                    "Item": {"pk": {"S": "k1"}, "testAttr": {"S": "abc"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable2",
+                    "Key": {"pk": {"S": "k1"}},
+                    "UpdateExpression": "SET testAttr = :val",
+                    "ExpressionAttributeValues": {":val": {"S": "123"}},
+                    "ConditionExpression": "attribute_exists(nonExistent)",
+                    "ReturnValuesOnConditionCheckFailure" : "ALL_OLD"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .body("__type", equalTo("ConditionalCheckFailedException"))
+            .body("message", equalTo("The conditional request failed"))
+            .body("Item.testAttr.S", equalTo("abc"));
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ConditionCheckTable2"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     void updateAndDescribeContinuousBackups() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
