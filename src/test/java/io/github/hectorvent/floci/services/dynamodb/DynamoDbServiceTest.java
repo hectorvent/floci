@@ -1558,4 +1558,80 @@ class DynamoDbServiceTest {
         assertTrue(returnedItem.has("testAttr"), "returned item should have testAttr");
         assertEquals("testVal", returnedItem.get("testAttr").get("S").asText());
     }
+
+    @Test
+    void putItemNetNewConditionFailedReturnValuesNone() {
+        createOrdersTable();
+    
+        ObjectNode order = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order, "attribute_exists(customerId)", null, null, "us-east-1", "NONE"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNull(stored, "item should not exist");
+
+        assertNull(ex.getItem());
+    }
+
+    @Test
+    void putItemNetNewConditionFailedReturnValuesAllOld() {
+        createOrdersTable();
+    
+        ObjectNode order = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order, "attribute_exists(customerId)", null, null, "us-east-1", "ALL_OLD"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNull(stored, "item should not exist");
+
+        assertNull(ex.getItem());
+    }
+
+    
+    @Test
+    void putItemExistingConditionFailedReturnValuesNone() {
+        createOrdersTable();
+    
+        ObjectNode order1 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode order2 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal1");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        service.putItem("Orders", order1);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order2, "attribute_exists(someAttr)", null, null, "us-east-1", "NONE"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+        assertTrue(stored.has("testAttr"), "item should have testAttr");
+        assertEquals("testVal", stored.get("testAttr").get("S").asText());
+
+        assertNull(ex.getItem());
+    }
+
+    @Test
+    void updateItemExistingConditionFailedReturnValuesAllOld() {
+        createOrdersTable();
+
+        ObjectNode order1 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode order2 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal1");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        service.putItem("Orders", order1);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order2, "attribute_exists(someAttr)", null, null, "us-east-1", "ALL_OLD"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+        assertTrue(stored.has("testAttr"), "item should have testAttr");
+        assertEquals("testVal", stored.get("testAttr").get("S").asText());
+
+        JsonNode returnedItem = ex.getItem();
+        assertNotNull(returnedItem);
+        assertTrue(returnedItem.has("testAttr"), "returned item should have testAttr");
+        assertEquals("testVal", returnedItem.get("testAttr").get("S").asText());
+    }
 }
