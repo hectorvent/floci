@@ -117,6 +117,7 @@ public class SesService {
         SentEmail email = new SentEmail(messageId, source, toAddresses, ccAddresses, bccAddresses,
                 subject, bodyText, bodyHtml);
         email.setReplyToAddresses(replyToAddresses);
+        email.setRegion(region);
         emailStore.put("email::" + region + "::" + messageId, email);
 
         LOG.infov("SES email sent: from={0}, to={1}, subject={2}, messageId={3}",
@@ -129,6 +130,7 @@ public class SesService {
         SentEmail email = new SentEmail(messageId, source,
                 destinations != null ? destinations : Collections.emptyList(),
                 rawMessage);
+        email.setRegion(region);
         emailStore.put("email::" + region + "::" + messageId, email);
 
         LOG.infov("SES raw email sent: from={0}, messageId={1}", source, messageId);
@@ -202,6 +204,10 @@ public class SesService {
         return emailStore.scan(k -> k.startsWith(prefix));
     }
 
+    public List<SentEmail> getAllEmails() {
+        return emailStore.scan(k -> k.startsWith("email::"));
+    }
+
     public void clearEmails(String region) {
         String prefix = "email::" + region + "::";
         List<String> keys = new ArrayList<>(emailStore.keys().stream()
@@ -209,6 +215,14 @@ public class SesService {
                 .toList());
         keys.forEach(emailStore::delete);
         LOG.infov("Cleared all SES emails in region {0}", region);
+    }
+
+    public void clearAllEmails() {
+        List<String> keys = new ArrayList<>(emailStore.keys().stream()
+                .filter(k -> k.startsWith("email::"))
+                .toList());
+        keys.forEach(emailStore::delete);
+        LOG.info("Cleared all SES emails across all regions");
     }
 
     public boolean isAccountSendingEnabled(String region) {

@@ -14,6 +14,9 @@ public class SentEmail {
     @JsonProperty("MessageId")
     private String messageId;
 
+    @JsonProperty("Region")
+    private String region;
+
     @JsonProperty("Source")
     private String source;
 
@@ -72,6 +75,9 @@ public class SentEmail {
 
     public String getMessageId() { return messageId; }
     public void setMessageId(String messageId) { this.messageId = messageId; }
+
+    public String getRegion() { return region; }
+    public void setRegion(String region) { this.region = region; }
 
     public String getSource() { return source; }
     public void setSource(String source) { this.source = source; }

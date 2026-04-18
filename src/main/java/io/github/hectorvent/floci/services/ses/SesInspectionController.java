@@ -38,8 +38,7 @@ public class SesInspectionController {
 
     @GET
     public Response getEmails(@QueryParam("id") String messageId) {
-        String region = regionResolver.getDefaultRegion();
-        List<SentEmail> emails = sesService.getEmails(region);
+        List<SentEmail> emails = sesService.getAllEmails();
 
         ArrayNode messages = objectMapper.createArrayNode();
         for (SentEmail email : emails) {
@@ -48,7 +47,7 @@ public class SesInspectionController {
             }
             ObjectNode node = objectMapper.createObjectNode();
             node.put("Id", email.getMessageId());
-            node.put("Region", region);
+            node.put("Region", email.getRegion() != null ? email.getRegion() : "");
             node.put("Source", email.getSource());
 
             if (email.isRaw()) {
@@ -104,8 +103,7 @@ public class SesInspectionController {
 
     @DELETE
     public Response clearEmails() {
-        String region = regionResolver.getDefaultRegion();
-        sesService.clearEmails(region);
+        sesService.clearAllEmails();
         return Response.ok().build();
     }
 }
