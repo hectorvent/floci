@@ -2,7 +2,6 @@ package io.github.hectorvent.floci.services.ses;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
-import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ses.model.Identity;
@@ -26,28 +25,23 @@ public class SesService {
     private final StorageBackend<String, Identity> identityStore;
     private final StorageBackend<String, SentEmail> emailStore;
     private final StorageBackend<String, Boolean> accountSettingsStore;
-    private final RegionResolver regionResolver;
 
     @Inject
-    public SesService(StorageFactory storageFactory, EmulatorConfig config,
-                      RegionResolver regionResolver) {
+    public SesService(StorageFactory storageFactory, EmulatorConfig config) {
         this.identityStore = storageFactory.create("ses", "ses-identities.json",
                 new TypeReference<Map<String, Identity>>() {});
         this.emailStore = storageFactory.create("ses", "ses-emails.json",
                 new TypeReference<Map<String, SentEmail>>() {});
         this.accountSettingsStore = storageFactory.create("ses", "ses-account-settings.json",
                 new TypeReference<Map<String, Boolean>>() {});
-        this.regionResolver = regionResolver;
     }
 
     SesService(StorageBackend<String, Identity> identityStore,
                StorageBackend<String, SentEmail> emailStore,
-               StorageBackend<String, Boolean> accountSettingsStore,
-               RegionResolver regionResolver) {
+               StorageBackend<String, Boolean> accountSettingsStore) {
         this.identityStore = identityStore;
         this.emailStore = emailStore;
         this.accountSettingsStore = accountSettingsStore;
-        this.regionResolver = regionResolver;
     }
 
     public Identity verifyEmailIdentity(String emailAddress, String region) {
@@ -125,6 +119,9 @@ public class SesService {
     }
 
     public String sendRawEmail(String source, List<String> destinations, String rawMessage, String region) {
+        if (rawMessage == null || rawMessage.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "RawMessage.Data is required.", 400);
+        }
         String messageId = UUID.randomUUID().toString();
         SentEmail email = new SentEmail(messageId, region, source,
                 destinations != null ? destinations : Collections.emptyList(),
