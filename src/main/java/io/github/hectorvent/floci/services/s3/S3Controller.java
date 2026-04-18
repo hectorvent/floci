@@ -13,9 +13,11 @@ import io.github.hectorvent.floci.services.s3.model.MultipartUpload;
 import io.github.hectorvent.floci.services.s3.model.FilterRule;
 import io.github.hectorvent.floci.services.s3.model.NotificationConfiguration;
 import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
+import io.github.hectorvent.floci.services.s3.model.CopyObjectOptions;
 import io.github.hectorvent.floci.services.s3.model.QueueNotification;
 import io.github.hectorvent.floci.services.s3.model.ObjectLockRetention;
 import io.github.hectorvent.floci.services.s3.model.Part;
+import io.github.hectorvent.floci.services.s3.model.PutObjectOptions;
 import io.github.hectorvent.floci.services.s3.model.S3Checksum;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.s3.model.TopicNotification;
@@ -413,13 +415,16 @@ public class S3Controller {
             String serverSideEncryption = httpHeaders.getHeaderString("x-amz-server-side-encryption");
             String cannedAcl = httpHeaders.getHeaderString("x-amz-acl");
             S3Object obj = s3Service.putObject(bucket, key, data, contentType, extractUserMetadata(httpHeaders),
-                    httpHeaders.getHeaderString("x-amz-storage-class"),
-                    persistedEncoding,
-                    lockMode, retainUntil, legalHold,
-                    contentDisposition,
-                    cacheControl,
-                    serverSideEncryption,
-                    cannedAcl);
+                    new PutObjectOptions()
+                            .withStorageClass(httpHeaders.getHeaderString("x-amz-storage-class"))
+                            .withContentEncoding(persistedEncoding)
+                            .withObjectLockMode(lockMode)
+                            .withRetainUntilDate(retainUntil)
+                            .withLegalHoldStatus(legalHold)
+                            .withContentDisposition(contentDisposition)
+                            .withCacheControl(cacheControl)
+                            .withServerSideEncryption(serverSideEncryption)
+                            .withAcl(cannedAcl));
             var resp = Response.ok().header("ETag", obj.getETag());
             if (obj.getVersionId() != null) {
                 resp.header("x-amz-version-id", obj.getVersionId());
@@ -1382,15 +1387,16 @@ public class S3Controller {
         String copyServerSideEncryption = httpHeaders.getHeaderString("x-amz-server-side-encryption");
         String cannedAcl = httpHeaders.getHeaderString("x-amz-acl");
         S3Object copy = s3Service.copyObject(sourceBucket, sourceKey, destBucket, destKey,
-                httpHeaders.getHeaderString("x-amz-metadata-directive"),
-                extractUserMetadata(httpHeaders),
-                httpHeaders.getHeaderString("x-amz-storage-class"),
-                contentType,
-                copyContentEncoding,
-                copyContentDisposition,
-                copyCacheControl,
-                copyServerSideEncryption,
-                cannedAcl);
+                new CopyObjectOptions()
+                        .withMetadataDirective(httpHeaders.getHeaderString("x-amz-metadata-directive"))
+                        .withReplacementMetadata(extractUserMetadata(httpHeaders))
+                        .withStorageClass(httpHeaders.getHeaderString("x-amz-storage-class"))
+                        .withContentType(contentType)
+                        .withContentEncoding(copyContentEncoding)
+                        .withContentDisposition(copyContentDisposition)
+                        .withCacheControl(copyCacheControl)
+                        .withServerSideEncryption(copyServerSideEncryption)
+                        .withAcl(cannedAcl));
         String xml = new XmlBuilder()
                 .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .start("CopyObjectResult", AwsNamespaces.S3)

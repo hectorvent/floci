@@ -1149,6 +1149,21 @@ class S3IntegrationTest {
 
     @Test
     @Order(140)
+    void putObjectRejectsUnsupportedServerSideEncryption() {
+        given()
+            .contentType("text/plain")
+            .header("x-amz-server-side-encryption", "totally-unsupported")
+            .body("bad encryption")
+        .when()
+            .put("/sse-bucket/invalid-encryption.txt")
+        .then()
+            .statusCode(400)
+            .body(containsString("InvalidArgument"))
+            .body(containsString("Unsupported x-amz-server-side-encryption value"));
+    }
+
+    @Test
+    @Order(141)
     void cleanupSseBucket() {
         given().delete("/sse-bucket/encrypted.txt");
         given().delete("/sse-bucket/encrypted-copy.txt");

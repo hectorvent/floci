@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.s3.model.GetObjectAttributesResult;
 import io.github.hectorvent.floci.services.s3.model.LambdaNotification;
 import io.github.hectorvent.floci.services.s3.model.NotificationConfiguration;
 import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
+import io.github.hectorvent.floci.services.s3.model.PutObjectOptions;
 import io.github.hectorvent.floci.services.s3.model.Bucket;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import org.junit.jupiter.api.BeforeEach;
@@ -109,6 +110,41 @@ class S3ServiceTest {
         S3Object got = s3Service.getObject("test-bucket", "greeting.txt");
         assertArrayEquals(data, got.getData());
         assertEquals("text/plain", got.getContentType());
+    }
+
+    @Test
+    void putObjectTrimsBlankServerSideEncryptionToAbsent() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+
+        S3Object put = s3Service.putObject(
+                "test-bucket",
+                "blank-sse.txt",
+                "data".getBytes(StandardCharsets.UTF_8),
+                "text/plain",
+                null,
+                new PutObjectOptions().withServerSideEncryption("   ")
+        );
+
+        assertNull(put.getServerSideEncryption());
+    }
+
+    @Test
+    void putObjectRejectsUnsupportedServerSideEncryption() {
+        s3Service.createBucket("test-bucket", "us-east-1");
+
+        AwsException exception = assertThrows(AwsException.class, () ->
+                s3Service.putObject(
+                        "test-bucket",
+                        "invalid-sse.txt",
+                        "data".getBytes(StandardCharsets.UTF_8),
+                        "text/plain",
+                        null,
+                        new PutObjectOptions().withServerSideEncryption("totally-unsupported")
+                )
+        );
+
+        assertEquals("InvalidArgument", exception.getErrorCode());
+        assertTrue(exception.getMessage().contains("Unsupported x-amz-server-side-encryption value"));
     }
 
     @Test
