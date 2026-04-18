@@ -52,14 +52,17 @@ public class SentEmail {
     public SentEmail() {}
 
     /** Constructor for Simple / Template content. */
-    public SentEmail(String messageId, String source, List<String> toAddresses,
-                     List<String> ccAddresses, List<String> bccAddresses,
+    public SentEmail(String messageId, String region, String source,
+                     List<String> toAddresses, List<String> ccAddresses,
+                     List<String> bccAddresses, List<String> replyToAddresses,
                      String subject, String bodyText, String bodyHtml) {
         this.messageId = messageId;
+        this.region = region;
         this.source = source;
         this.toAddresses = toAddresses;
         this.ccAddresses = ccAddresses;
         this.bccAddresses = bccAddresses;
+        this.replyToAddresses = replyToAddresses;
         this.subject = subject;
         this.bodyText = bodyText;
         this.bodyHtml = bodyHtml;
@@ -67,8 +70,10 @@ public class SentEmail {
     }
 
     /** Constructor for Raw content. */
-    public SentEmail(String messageId, String source, List<String> destinations, String rawData) {
+    public SentEmail(String messageId, String region, String source,
+                     List<String> destinations, String rawData) {
         this.messageId = messageId;
+        this.region = region;
         this.source = source;
         this.toAddresses = destinations;
         this.rawData = rawData;
