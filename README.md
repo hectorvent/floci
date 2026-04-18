@@ -142,6 +142,22 @@ flowchart LR
 
 **35 AWS services supported.**
 
+## Persistence & Storage Modes
+
+Floci features a flexible storage architecture designed to balance developer productivity, performance, and data durability. You can configure the storage mode globally via `FLOCI_STORAGE_MODE` or override it for specific services.
+
+| Mode | Behavior | Best for... | Durability |
+|:---:|---|---|:---:|
+| **`memory`** | Entirely in-RAM. Data is lost when the container stops. | Speed, ephemeral testing, CI pipelines. | ❌ None |
+| **`persistent`** | Data is loaded at startup and flushed to disk on graceful shutdown. | Simple local dev with state preservation. | ⚠️ Medium |
+| **`hybrid`** | **(Default)** In-memory performance with periodic async flushing (every 5s). | The perfect balance of speed and safety. | ✅ Good |
+| **`wal`** | Write-Ahead Log. Every mutation is logged to disk before responding. | Maximum durability for critical state. | 💎 Highest |
+
+> [!TIP]
+> Use **`hybrid`** (default) for a "it just works" experience that feels like production but survives container restarts. For ephemeral integration tests where state doesn't matter, switch to **`memory`** for extreme performance.
+
+For more details, visit the [Storage Configuration documentation](https://floci.io/floci/configuration/storage/).
+
 ## Quick Start
 
 ```yaml
@@ -427,12 +443,13 @@ Available compatibility test modules:
 | `sdk-test-java` | Java 17 | AWS SDK for Java v2 | 889 |
 | `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 | 360 |
 | `sdk-test-python` | Python 3 | boto3 | 264 |
-| `sdk-test-go` | Go | AWS SDK for Go v2 | 120 |
-| `sdk-test-awscli` | Bash | AWS CLI v2 | 138 |
-| `sdk-test-rust` | Rust | AWS SDK for Rust | 69 |
+| `sdk-test-go` | Go | AWS SDK for Go v2 | 136 |
+| `sdk-test-awscli` | Bash | AWS CLI v2 | 145 |
+| `sdk-test-rust` | Rust | AWS SDK for Rust | 86 |
 | `compat-terraform` | Terraform | v1.10+ | 14 |
 | `compat-opentofu` | OpenTofu | v1.9+ | 14 |
-| `compat-cdk` | AWS CDK | v2+ | 5 |
+| `compat-cdk` | AWS CDK | v2+ | 17 |
+
 
 ## Image Tags
 
