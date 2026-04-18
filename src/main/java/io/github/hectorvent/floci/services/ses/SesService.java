@@ -114,8 +114,8 @@ public class SesService {
         }
 
         String messageId = UUID.randomUUID().toString();
-        String body = bodyHtml != null ? bodyHtml : bodyText;
-        SentEmail email = new SentEmail(messageId, source, toAddresses, ccAddresses, bccAddresses, subject, body);
+        SentEmail email = new SentEmail(messageId, source, toAddresses, ccAddresses, bccAddresses,
+                subject, bodyText, bodyHtml);
         emailStore.put("email::" + region + "::" + messageId, email);
 
         LOG.infov("SES email sent: from={0}, to={1}, subject={2}, messageId={3}",
@@ -127,7 +127,7 @@ public class SesService {
         String messageId = UUID.randomUUID().toString();
         SentEmail email = new SentEmail(messageId, source,
                 destinations != null ? destinations : Collections.emptyList(),
-                null, null, "(raw)", rawMessage);
+                rawMessage);
         emailStore.put("email::" + region + "::" + messageId, email);
 
         LOG.infov("SES raw email sent: from={0}, messageId={1}", source, messageId);

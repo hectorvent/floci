@@ -51,25 +51,39 @@ public class SesInspectionController {
             node.put("Region", region);
             node.put("Source", email.getSource());
 
-            ObjectNode destination = node.putObject("Destination");
-            if (email.getToAddresses() != null) {
-                ArrayNode toArr = destination.putArray("ToAddresses");
-                email.getToAddresses().forEach(toArr::add);
-            }
-            if (email.getCcAddresses() != null) {
-                ArrayNode ccArr = destination.putArray("CcAddresses");
-                email.getCcAddresses().forEach(ccArr::add);
-            }
-            if (email.getBccAddresses() != null) {
-                ArrayNode bccArr = destination.putArray("BccAddresses");
-                email.getBccAddresses().forEach(bccArr::add);
-            }
+            if (email.isRaw()) {
+                // LocalStack returns RawData for raw emails, without
+                // Destination / Subject / Body fields.
+                node.put("RawData", email.getRawData());
+            } else {
+                ObjectNode destination = node.putObject("Destination");
+                if (email.getToAddresses() != null) {
+                    ArrayNode toArr = destination.putArray("ToAddresses");
+                    email.getToAddresses().forEach(toArr::add);
+                }
+                if (email.getCcAddresses() != null) {
+                    ArrayNode ccArr = destination.putArray("CcAddresses");
+                    email.getCcAddresses().forEach(ccArr::add);
+                }
+                if (email.getBccAddresses() != null) {
+                    ArrayNode bccArr = destination.putArray("BccAddresses");
+                    email.getBccAddresses().forEach(bccArr::add);
+                }
 
-            node.put("Subject", email.getSubject());
+                node.put("Subject", email.getSubject());
 
-            ObjectNode body = node.putObject("Body");
-            body.put("text_part", email.getBody() != null ? email.getBody() : "");
-            body.put("html_part", email.getBody() != null ? email.getBody() : "");
+                ObjectNode body = node.putObject("Body");
+                if (email.getBodyText() != null) {
+                    body.put("text_part", email.getBodyText());
+                } else {
+                    body.putNull("text_part");
+                }
+                if (email.getBodyHtml() != null) {
+                    body.put("html_part", email.getBodyHtml());
+                } else {
+                    body.putNull("html_part");
+                }
+            }
 
             if (email.getSentAt() != null) {
                 node.put("Timestamp", email.getSentAt().toString());

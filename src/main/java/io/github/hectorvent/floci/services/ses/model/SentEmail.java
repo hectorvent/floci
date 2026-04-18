@@ -29,24 +29,41 @@ public class SentEmail {
     @JsonProperty("Subject")
     private String subject;
 
-    @JsonProperty("Body")
-    private String body;
+    @JsonProperty("BodyText")
+    private String bodyText;
+
+    @JsonProperty("BodyHtml")
+    private String bodyHtml;
+
+    @JsonProperty("RawData")
+    private String rawData;
 
     @JsonProperty("SentAt")
     private Instant sentAt;
 
     public SentEmail() {}
 
+    /** Constructor for Simple / Template content. */
     public SentEmail(String messageId, String source, List<String> toAddresses,
                      List<String> ccAddresses, List<String> bccAddresses,
-                     String subject, String body) {
+                     String subject, String bodyText, String bodyHtml) {
         this.messageId = messageId;
         this.source = source;
         this.toAddresses = toAddresses;
         this.ccAddresses = ccAddresses;
         this.bccAddresses = bccAddresses;
         this.subject = subject;
-        this.body = body;
+        this.bodyText = bodyText;
+        this.bodyHtml = bodyHtml;
+        this.sentAt = Instant.now();
+    }
+
+    /** Constructor for Raw content. */
+    public SentEmail(String messageId, String source, List<String> destinations, String rawData) {
+        this.messageId = messageId;
+        this.source = source;
+        this.toAddresses = destinations;
+        this.rawData = rawData;
         this.sentAt = Instant.now();
     }
 
@@ -68,8 +85,16 @@ public class SentEmail {
     public String getSubject() { return subject; }
     public void setSubject(String subject) { this.subject = subject; }
 
-    public String getBody() { return body; }
-    public void setBody(String body) { this.body = body; }
+    public String getBodyText() { return bodyText; }
+    public void setBodyText(String bodyText) { this.bodyText = bodyText; }
+
+    public String getBodyHtml() { return bodyHtml; }
+    public void setBodyHtml(String bodyHtml) { this.bodyHtml = bodyHtml; }
+
+    public String getRawData() { return rawData; }
+    public void setRawData(String rawData) { this.rawData = rawData; }
+
+    public boolean isRaw() { return rawData != null; }
 
     public Instant getSentAt() { return sentAt; }
     public void setSentAt(Instant sentAt) { this.sentAt = sentAt; }
