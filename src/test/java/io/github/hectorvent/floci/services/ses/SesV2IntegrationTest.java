@@ -860,6 +860,78 @@ class SesV2IntegrationTest {
             .body("messages[0]", not(hasKey("Body")));
     }
 
+    @Test
+    @Order(80)
+    void inspectionEndpoint_returnsEmailsFromAllRegions() {
+        given().delete("/_aws/ses").then().statusCode(200);
+
+        // Create identity usable in both regions (domain covers all addresses)
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {"EmailIdentity": "example.com"}
+                """)
+        .when()
+            .post("/v2/email/identities")
+        .then()
+            .statusCode(200);
+
+        // Send from us-east-1
+        given()
+            .contentType("application/json")
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=AKID/20260101/us-east-1/ses/aws4_request")
+            .body("""
+                {
+                    "FromEmailAddress": "multi@example.com",
+                    "Destination": {"ToAddresses": ["to@example.com"]},
+                    "Content": {
+                        "Simple": {
+                            "Subject": {"Data": "US East"},
+                            "Body": {"Text": {"Data": "from us-east-1"}}
+                        }
+                    }
+                }
+                """)
+        .when()
+            .post("/v2/email/outbound-emails")
+        .then()
+            .statusCode(200);
+
+        // Send from ap-northeast-1
+        given()
+            .contentType("application/json")
+            .header("Authorization",
+                    "AWS4-HMAC-SHA256 Credential=AKID/20260101/ap-northeast-1/ses/aws4_request")
+            .body("""
+                {
+                    "FromEmailAddress": "multi@example.com",
+                    "Destination": {"ToAddresses": ["to@example.com"]},
+                    "Content": {
+                        "Simple": {
+                            "Subject": {"Data": "AP NE"},
+                            "Body": {"Text": {"Data": "from ap-northeast-1"}}
+                        }
+                    }
+                }
+                """)
+        .when()
+            .post("/v2/email/outbound-emails")
+        .then()
+            .statusCode(200);
+
+        // Inspection returns both, each with correct Region
+        given()
+        .when()
+            .get("/_aws/ses")
+        .then()
+            .statusCode(200)
+            .body("messages.size()", equalTo(2))
+            .body("messages.find { it.Subject == 'US East' }.Region", equalTo("us-east-1"))
+            .body("messages.find { it.Subject == 'AP NE' }.Region", equalTo("ap-northeast-1"));
+    }
+
     // ──────────────── GetEmailIdentity full response ────────────────
 
     @Test

@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.ses.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -36,6 +37,7 @@ public class SentEmail {
     private List<String> replyToAddresses;
 
     @JsonProperty("BodyText")
+    @JsonAlias("Body")
     private String bodyText;
 
     @JsonProperty("BodyHtml")
