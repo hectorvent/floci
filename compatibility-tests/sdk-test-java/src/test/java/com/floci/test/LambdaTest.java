@@ -306,6 +306,40 @@ class LambdaTest {
 
     @Test
     @Order(17)
+    void providedRuntimeInvoke() {
+        String providedFn = "sdk-test-provided-fn";
+
+        lambda.createFunction(CreateFunctionRequest.builder()
+                .functionName(providedFn)
+                .runtime(Runtime.PROVIDED_AL2023)
+                .role(ROLE)
+                .handler("bootstrap")
+                .timeout(30)
+                .code(FunctionCode.builder()
+                        .zipFile(SdkBytes.fromByteArray(LambdaUtils.providedRuntimeZip()))
+                        .build())
+                .build());
+
+        // RequestResponse invoke — the bootstrap shell script POSTs a
+        // response via the Runtime API, so we should get a real payload
+        // back rather than a timeout.
+        InvokeResponse response = lambda.invoke(InvokeRequest.builder()
+                .functionName(providedFn)
+                .invocationType(InvocationType.REQUEST_RESPONSE)
+                .payload(SdkBytes.fromUtf8String("{\"test\":true}"))
+                .build());
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.functionError()).isNull();
+        String payload = response.payload().asUtf8String();
+        assertThat(payload).contains("hello from provided runtime");
+
+        lambda.deleteFunction(DeleteFunctionRequest.builder()
+                .functionName(providedFn).build());
+    }
+
+    @Test
+    @Order(18)
     void rubyRuntimeSupport() {
         String rubyFn = "sdk-test-ruby-fn";
 
