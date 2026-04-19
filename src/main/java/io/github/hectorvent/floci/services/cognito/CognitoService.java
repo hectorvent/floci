@@ -427,6 +427,17 @@ public class CognitoService {
         LOG.infov("Disabled user {0} in pool {1}", user.getUsername(), userPoolId);
     }
 
+    public void adminResetUserPassword(String userPoolId, String username) {
+        CognitoUser user = adminGetUser(userPoolId, username);
+        user.setUserStatus("RESET_REQUIRED");
+        user.setPasswordHash(null);
+        user.setSrpVerifier(null);
+        user.setSrpSalt(null);
+        user.setLastModifiedDate(System.currentTimeMillis() / 1000L);
+        userStore.put(userKey(userPoolId, user.getUsername()), user);
+        LOG.infov("Reset password for user {0} in pool {1}", user.getUsername(), userPoolId);
+    }
+
     public List<CognitoUser> listUsers(String userPoolId, String filter) {
         String prefix = userPoolId + "::";
         List<CognitoUser> all = userStore.scan(k -> k.startsWith(prefix));
@@ -627,13 +638,20 @@ public class CognitoService {
         UserPoolClient client = describeUserPoolClient(userPoolId, clientId);
         UserPool pool = describeUserPool(userPoolId);
 
+        String username = authParameters.get("USERNAME");
+        if (username != null) {
+            CognitoUser user = adminGetUser(userPoolId, username);
+            if ("RESET_REQUIRED".equals(user.getUserStatus())) {
+                throw new AwsException("PasswordResetRequiredException", "Password reset required", 400);
+            }
+        }
+
         return switch (authFlow) {
             case "ADMIN_USER_PASSWORD_AUTH", "USER_PASSWORD_AUTH" ->
                     authenticateWithPassword(pool, authParameters, clientId);
             case "REFRESH_TOKEN_AUTH", "REFRESH_TOKEN" -> handleRefreshToken(pool, authParameters, clientId);
             case "ADMIN_USER_SRP_AUTH" -> handleUserSrpAuth(pool, client, authParameters);
             default -> {
-                String username = authParameters.get("USERNAME");
                 CognitoUser user = adminGetUser(userPoolId, username);
                 Map<String, Object> result = new HashMap<>();
                 result.put("AuthenticationResult", generateAuthResult(user, pool, clientId));
@@ -654,6 +672,10 @@ public class CognitoService {
         if (!user.isEnabled()) {
             throw new AwsException("UserNotConfirmedException", "User is disabled", 400);
         }
+        if ("RESET_REQUIRED".equals(user.getUserStatus())) {
+            throw new AwsException("PasswordResetRequiredException", "Password reset required", 400);
+        }
+
         if (user.getSrpVerifier() == null) {
             throw new AwsException("NotAuthorizedException", "User does not support SRP auth", 400);
         }
@@ -709,6 +731,10 @@ public class CognitoService {
         if (!user.isEnabled()) {
             throw new AwsException("UserNotConfirmedException", "User is disabled", 400);
         }
+        if ("RESET_REQUIRED".equals(user.getUserStatus())) {
+            throw new AwsException("PasswordResetRequiredException", "Password reset required", 400);
+        }
+
         if (user.getSrpVerifier() == null) {
             throw new AwsException("NotAuthorizedException", "User does not support SRP auth", 400);
         }
@@ -870,6 +896,10 @@ public class CognitoService {
 
         if (!user.isEnabled()) {
             throw new AwsException("UserNotConfirmedException", "User is disabled", 400);
+        }
+
+        if ("RESET_REQUIRED".equals(user.getUserStatus())) {
+            throw new AwsException("PasswordResetRequiredException", "Password reset required", 400);
         }
 
         if ("UNCONFIRMED".equals(user.getUserStatus())) {

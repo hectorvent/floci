@@ -847,6 +847,62 @@ class CognitoIntegrationTest {
         oauthToken(rotClientId, secret2Value).then().statusCode(200);
     }
 
+    @Test
+    @Order(90)
+    void adminResetUserPasswordBlocksAuth() throws Exception {
+        // 1. Reset the user's password
+        cognitoAction("AdminResetUserPassword", """
+                {
+                  "UserPoolId": "%s",
+                  "Username": "%s"
+                }
+                """.formatted(poolId, username))
+                .then()
+                .statusCode(200);
+
+        // 2. Authentication should now fail with PasswordResetRequiredException
+        cognitoAction("InitiateAuth", """
+                {
+                  "ClientId": "%s",
+                  "AuthFlow": "USER_PASSWORD_AUTH",
+                  "AuthParameters": {
+                    "USERNAME": "%s",
+                    "PASSWORD": "%s"
+                  }
+                }
+                """.formatted(clientId, username, password))
+                .then()
+                .statusCode(400)
+                .body("__type", org.hamcrest.Matchers.containsString("PasswordResetRequiredException"));
+
+        // 3. Admin sets a new password
+        String newPassword = "NewPassword123!";
+        cognitoAction("AdminSetUserPassword", """
+                {
+                  "UserPoolId": "%s",
+                  "Username": "%s",
+                  "Password": "%s",
+                  "Permanent": true
+                }
+                """.formatted(poolId, username, newPassword))
+                .then()
+                .statusCode(200);
+
+        // 4. Authentication works again with new password
+        cognitoAction("InitiateAuth", """
+                {
+                  "ClientId": "%s",
+                  "AuthFlow": "USER_PASSWORD_AUTH",
+                  "AuthParameters": {
+                    "USERNAME": "%s",
+                    "PASSWORD": "%s"
+                  }
+                }
+                """.formatted(clientId, username, newPassword))
+                .then()
+                .statusCode(200);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────
 
     private static Response oauthToken(String oauthClientId, String oauthClientSecret) {
