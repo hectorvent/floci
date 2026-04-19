@@ -3,7 +3,6 @@ package io.github.hectorvent.floci.services.lambda.launcher;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
-import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager.ContainerInfo;
 import io.github.hectorvent.floci.core.common.docker.ContainerLogStreamer;
 import io.github.hectorvent.floci.core.common.docker.ContainerSpec;
 import io.github.hectorvent.floci.core.common.docker.DockerHostResolver;
@@ -191,7 +190,7 @@ public class ContainerLauncher {
         }
 
         // Now start the container with code in place
-        ContainerInfo info = lifecycleManager.startCreated(containerId, spec);
+        lifecycleManager.startCreated(containerId, spec);
 
         ContainerHandle handle = new ContainerHandle(containerId, fn.getFunctionName(), runtimeApiServer, ContainerState.WARM);
 
