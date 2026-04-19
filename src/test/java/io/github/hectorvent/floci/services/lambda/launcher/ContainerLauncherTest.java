@@ -12,6 +12,7 @@ import io.github.hectorvent.floci.services.lambda.runtime.RuntimeApiServer;
 import io.github.hectorvent.floci.services.lambda.runtime.RuntimeApiServerFactory;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CopyArchiveToContainerCmd;
+import static org.mockito.Mockito.doAnswer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,12 +44,13 @@ class ContainerLauncherTest {
     @Mock EcrRegistryManager ecrRegistryManager;
     @Mock RuntimeApiServer runtimeApiServer;
     @Mock DockerClient dockerClient;
-    @Mock CopyArchiveToContainerCmd copyCmd;
 
     @TempDir
     Path tempDir;
 
     ContainerLauncher launcher;
+    /** Collects remote paths passed to withRemotePath across all copy mocks. */
+    final java.util.List<String> capturedRemotePaths = new java.util.ArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -78,10 +80,31 @@ class ContainerLauncherTest {
         when(lifecycleManager.getDockerClient()).thenReturn(dockerClient);
 
         // Stub the Docker copy chain so copyDirToContainer / copyFileToContainer
-        // don't throw when the mock DockerClient is used.
-        when(dockerClient.copyArchiveToContainerCmd(any())).thenReturn(copyCmd);
-        when(copyCmd.withRemotePath(any())).thenReturn(copyCmd);
-        when(copyCmd.withTarInputStream(any())).thenReturn(copyCmd);
+        // don't throw when the mock DockerClient is used. Each invocation
+        // returns a fresh mock that drains the tar InputStream on exec() to
+        // prevent the background PipedOutputStream writer thread from blocking
+        // when the pipe buffer fills.
+        capturedRemotePaths.clear();
+        when(dockerClient.copyArchiveToContainerCmd(any())).thenAnswer(inv -> {
+            CopyArchiveToContainerCmd cmd = mock(CopyArchiveToContainerCmd.class);
+            final java.io.InputStream[] captured = {null};
+            when(cmd.withRemotePath(any())).thenAnswer(pathInv -> {
+                capturedRemotePaths.add(pathInv.getArgument(0));
+                return cmd;
+            });
+            when(cmd.withTarInputStream(any())).thenAnswer(streamInv -> {
+                captured[0] = streamInv.getArgument(0);
+                return cmd;
+            });
+            doAnswer(execInv -> {
+                if (captured[0] != null) {
+                    try { captured[0].transferTo(java.io.OutputStream.nullOutputStream()); }
+                    catch (Exception ignored) {}
+                }
+                return null;
+            }).when(cmd).exec();
+            return cmd;
+        });
     }
 
     @Test
@@ -147,10 +170,10 @@ class ContainerLauncherTest {
         inOrder.verify(lifecycleManager).startCreated(eq("container-123"), any());
 
         // Verify both /var/task and /var/runtime were targeted
-        ArgumentCaptor<String> pathCaptor = ArgumentCaptor.forClass(String.class);
-        verify(copyCmd, atLeast(2)).withRemotePath(pathCaptor.capture());
-        assertTrue(pathCaptor.getAllValues().contains("/var/task"));
-        assertTrue(pathCaptor.getAllValues().contains("/var/runtime"));
+        assertTrue(capturedRemotePaths.contains("/var/task"),
+                "code should be copied to /var/task");
+        assertTrue(capturedRemotePaths.contains("/var/runtime"),
+                "bootstrap should be copied to /var/runtime");
 
         verify(lifecycleManager, never()).createAndStart(any());
     }
