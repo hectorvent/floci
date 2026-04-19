@@ -347,11 +347,11 @@ public class KinesisJsonHandler {
         byte[] data = Base64.getDecoder().decode(request.path("Data").asText());
         String partitionKey = request.path("PartitionKey").asText();
 
-        String seq = service.putRecord(streamName, data, partitionKey, region);
+        KinesisService.PutRecordResult result = service.putRecordWithShardId(streamName, data, partitionKey, region);
 
         ObjectNode response = objectMapper.createObjectNode();
-        response.put("SequenceNumber", seq);
-        response.put("ShardId", "shardId-000000000000"); // Simplified
+        response.put("SequenceNumber", result.sequenceNumber());
+        response.put("ShardId", result.shardId());
         return Response.ok(response).build();
     }
 
@@ -366,10 +366,10 @@ public class KinesisJsonHandler {
             try {
                 byte[] data = Base64.getDecoder().decode(node.path("Data").asText());
                 String partitionKey = node.path("PartitionKey").asText();
-                String seq = service.putRecord(streamName, data, partitionKey, region);
+                KinesisService.PutRecordResult result = service.putRecordWithShardId(streamName, data, partitionKey, region);
                 results.addObject()
-                        .put("SequenceNumber", seq)
-                        .put("ShardId", "shardId-000000000000");
+                        .put("SequenceNumber", result.sequenceNumber())
+                        .put("ShardId", result.shardId());
             } catch (Exception e) {
                 failed++;
                 results.addObject()

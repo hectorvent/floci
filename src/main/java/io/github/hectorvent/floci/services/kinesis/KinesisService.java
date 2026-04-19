@@ -351,17 +351,23 @@ public class KinesisService {
         return new java.math.BigInteger(val).subtract(java.math.BigInteger.ONE).toString();
     }
 
+    public record PutRecordResult(String sequenceNumber, String shardId) {}
+
     public String putRecord(String streamName, byte[] data, String partitionKey, String region) {
+        return putRecordWithShardId(streamName, data, partitionKey, region).sequenceNumber();
+    }
+
+    public PutRecordResult putRecordWithShardId(String streamName, byte[] data, String partitionKey, String region) {
         KinesisStream stream = resolveStream(streamName, region);
         KinesisShard shard = selectShard(stream, partitionKey);
-        
+
         String sequenceNumber = String.valueOf(sequenceGenerator.incrementAndGet());
         KinesisRecord record = new KinesisRecord(data, partitionKey, sequenceNumber, Instant.now());
-        
+
         shard.getRecords().add(record);
         store.put(regionKey(region, streamName), stream);
-        
-        return sequenceNumber;
+
+        return new PutRecordResult(sequenceNumber, shard.getShardId());
     }
 
     public String getShardIterator(String streamName, String shardId, String type, String sequenceNumber, String region) {

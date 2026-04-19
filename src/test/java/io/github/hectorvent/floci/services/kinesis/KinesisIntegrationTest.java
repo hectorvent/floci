@@ -601,4 +601,125 @@ class KinesisIntegrationTest {
             .statusCode(400)
             .body("__type", equalTo("InvalidArgumentException"));
     }
+
+    @Test
+    @Order(40)
+    void putRecordReturnsRealShardIdAcrossShards() {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.CreateStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "shardid-put-test", "ShardCount": 2}
+                """)
+        .when().post("/").then().statusCode(200);
+
+        java.util.Set<String> reported = new java.util.HashSet<>();
+        // Probe enough partition keys that hash(pk) % 2 hits both shards. With 50 keys the
+        // odds of single-shard routing are ~1 in 2^49, so this is effectively deterministic.
+        for (int i = 0; i < 50 && reported.size() < 2; i++) {
+            String pk = "pk-" + i;
+            String shardId = given()
+                .header("X-Amz-Target", "Kinesis_20131202.PutRecord")
+                .contentType(KINESIS_CONTENT_TYPE)
+                .body("{\"StreamName\": \"shardid-put-test\", \"Data\": \"dGVzdA==\", \"PartitionKey\": \"" + pk + "\"}")
+            .when().post("/")
+            .then().statusCode(200)
+                .body("ShardId", startsWith("shardId-"))
+                .extract().jsonPath().getString("ShardId");
+            reported.add(shardId);
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(2, reported.size(),
+                "PutRecord should report distinct ShardIds across partition keys on a 2-shard stream");
+    }
+
+    @Test
+    @Order(41)
+    void putRecordsReturnsRealShardIdPerEntry() {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.CreateStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "shardid-putrecords-test", "ShardCount": 2}
+                """)
+        .when().post("/").then().statusCode(200);
+
+        StringBuilder body = new StringBuilder("{\"StreamName\": \"shardid-putrecords-test\", \"Records\": [");
+        for (int i = 0; i < 10; i++) {
+            if (i > 0) body.append(',');
+            body.append("{\"Data\": \"dGVzdA==\", \"PartitionKey\": \"batch-pk-").append(i).append("\"}");
+        }
+        body.append("]}");
+
+        java.util.List<String> shardIds = given()
+            .header("X-Amz-Target", "Kinesis_20131202.PutRecords")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body(body.toString())
+        .when().post("/")
+        .then().statusCode(200)
+            .body("FailedRecordCount", equalTo(0))
+            .body("Records.size()", equalTo(10))
+            .extract().jsonPath().getList("Records.ShardId", String.class);
+
+        java.util.Set<String> distinct = new java.util.HashSet<>(shardIds);
+        org.junit.jupiter.api.Assertions.assertTrue(distinct.size() >= 2,
+                "PutRecords should route 10 mixed partition keys across at least 2 shards, got: " + distinct);
+        for (String sid : shardIds) {
+            org.junit.jupiter.api.Assertions.assertTrue(sid != null && sid.startsWith("shardId-"),
+                    "Each record must report a real shardId, got: " + sid);
+        }
+    }
+
+    @Test
+    @Order(42)
+    void putRecordShardIdMatchesGetRecordsShard() {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.CreateStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "shardid-roundtrip-test", "ShardCount": 2}
+                """)
+        .when().post("/").then().statusCode(200);
+
+        String putShardId = given()
+            .header("X-Amz-Target", "Kinesis_20131202.PutRecord")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamName\": \"shardid-roundtrip-test\", \"Data\": \"aGVsbG8=\", \"PartitionKey\": \"rt-pk\"}")
+        .when().post("/")
+        .then().statusCode(200)
+            .extract().jsonPath().getString("ShardId");
+
+        String iterator = given()
+            .header("X-Amz-Target", "Kinesis_20131202.GetShardIterator")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamName\": \"shardid-roundtrip-test\", \"ShardId\": \"" + putShardId + "\", \"ShardIteratorType\": \"TRIM_HORIZON\"}")
+        .when().post("/")
+        .then().statusCode(200)
+            .extract().jsonPath().getString("ShardIterator");
+
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.GetRecords")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"ShardIterator\": \"" + iterator + "\"}")
+        .when().post("/")
+        .then().statusCode(200)
+            .body("Records.size()", equalTo(1))
+            .body("Records[0].PartitionKey", equalTo("rt-pk"));
+
+        String otherShardId = putShardId.endsWith("0") ? "shardId-000000000001" : "shardId-000000000000";
+        String otherIterator = given()
+            .header("X-Amz-Target", "Kinesis_20131202.GetShardIterator")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamName\": \"shardid-roundtrip-test\", \"ShardId\": \"" + otherShardId + "\", \"ShardIteratorType\": \"TRIM_HORIZON\"}")
+        .when().post("/")
+        .then().statusCode(200)
+            .extract().jsonPath().getString("ShardIterator");
+
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.GetRecords")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"ShardIterator\": \"" + otherIterator + "\"}")
+        .when().post("/")
+        .then().statusCode(200)
+            .body("Records.size()", equalTo(0));
+    }
 }
