@@ -90,10 +90,7 @@ public class OpenSearchDomainManager {
         ContainerInfo info = lifecycleManager.createAndStart(spec);
         domain.setContainerId(info.containerId());
 
-        String hostname = config.hostname().orElse(null);
-        if (hostname != null) {
-            domain.setEndpoint("http://" + hostname + ":" + hostPort);
-        } else if (containerDetector.isRunningInContainer()) {
+        if (containerDetector.isRunningInContainer()) {
             domain.setEndpoint("http://" + containerName + ":" + OPENSEARCH_PORT);
         } else {
             domain.setEndpoint("http://localhost:" + hostPort);
