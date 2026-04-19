@@ -59,10 +59,13 @@ public class RuntimeApiServer {
         router.get(NEXT_PATH).blockingHandler(ctx -> {
             try {
                 PendingInvocation invocation = null;
-                while (invocation != null && !stopped) {
+                while (invocation == null && !stopped) {
                     invocation = pendingQueue.poll(30, TimeUnit.SECONDS);
                 }
-                if (invocation == null) return;
+                if (invocation == null) {
+                    ctx.response().setStatusCode(204).end();
+                    return;
+                }
                 inFlight.put(invocation.getRequestId(), invocation);
                 ctx.response()
                         .setStatusCode(200)
@@ -75,6 +78,7 @@ public class RuntimeApiServer {
                                 : "{}");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                ctx.response().setStatusCode(500).end();
             }
         });
 
