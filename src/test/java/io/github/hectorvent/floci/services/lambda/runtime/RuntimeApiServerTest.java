@@ -78,30 +78,30 @@ class RuntimeApiServerTest {
 
     @Test
     @Timeout(45)
-    void nextEndpoint_doesNotReturn204AfterPollCycle() throws Exception {
+    void nextEndpoint_returns204OnTimeout_thenReturns200OnRepoll() throws Exception {
+        // AWS Runtime API contract: GET /next returns 204 when no invocation arrives within
+        // the poll window. The runtime re-polls and picks up the next queued invocation.
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + "/2018-06-01/runtime/invocation/next"))
                 .GET()
                 .build();
 
-        CompletableFuture<HttpResponse<String>> asyncResponse =
-                httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        // First poll: nothing queued — should return 204 after ~30 s.
+        HttpResponse<String> emptyResponse = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(204, emptyResponse.statusCode(),
+                "GET /next should return 204 when the queue is empty after the poll timeout");
 
-        Thread.sleep(33_000);
-
-        assertFalse(asyncResponse.isDone(),
-                "GET /next must NOT return (old bug: 204 after 30s single poll)");
-
+        // Enqueue an invocation and re-poll — should be returned immediately.
         PendingInvocation invocation = new PendingInvocation(
-                "req-delayed", "{\"after_poll_cycle\":true}".getBytes(),
+                "req-after-timeout", "{\"repoll\":true}".getBytes(),
                 System.currentTimeMillis() + 60_000,
                 "arn:aws:lambda:us-east-1:000000000000:function:test",
                 new CompletableFuture<>());
         server.enqueue(invocation);
 
-        HttpResponse<String> response = asyncResponse.get(10, TimeUnit.SECONDS);
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, response.statusCode());
-        assertEquals("req-delayed",
+        assertEquals("req-after-timeout",
                 response.headers().firstValue("Lambda-Runtime-Aws-Request-Id").orElse(""));
     }
 

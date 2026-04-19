@@ -63,16 +63,20 @@ public class RuntimeApiServer {
         Router router = Router.router(vertx);
         router.route().handler(BodyHandler.create());
 
-        // GET /runtime/invocation/next — long-poll for next invocation
+        // GET /runtime/invocation/next — poll for next invocation, one request per worker thread.
+        // Returns 204 when nothing arrives within 30 s so the runtime re-polls.
+        // This matches the real AWS Runtime API contract and caps each handler to one
+        // Vert.x worker thread for at most 30 seconds, preventing worker-pool exhaustion
+        // when multiple warm containers are polling concurrently.
         router.get(NEXT_PATH).blockingHandler(ctx -> {
             try {
-                PendingInvocation invocation = null;
-                while (invocation == null && !stopped) {
-                    invocation = pendingQueue.poll(30, TimeUnit.SECONDS);
-                    if (invocation == SHUTDOWN_SENTINEL) {
-                        invocation = null;
-                        break;
-                    }
+                if (stopped) {
+                    ctx.response().setStatusCode(204).end();
+                    return;
+                }
+                PendingInvocation invocation = pendingQueue.poll(30, TimeUnit.SECONDS);
+                if (invocation == SHUTDOWN_SENTINEL) {
+                    invocation = null;
                 }
                 // If stop() ran after poll() returned a real invocation (narrow race before
                 // inFlight.put), complete it here so the caller doesn't hang.
@@ -97,7 +101,7 @@ public class RuntimeApiServer {
                                 : "{}");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                ctx.response().setStatusCode(500).end();
+                ctx.response().setStatusCode(204).end();
             }
         });
 

@@ -7,6 +7,9 @@ import io.github.hectorvent.floci.lifecycle.inithook.InitializationHook;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHooksRunner;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerManager;
 import io.github.hectorvent.floci.services.elasticache.proxy.ElastiCacheProxyManager;
+import io.github.hectorvent.floci.services.lambda.DynamoDbStreamsEventSourcePoller;
+import io.github.hectorvent.floci.services.lambda.KinesisEventSourcePoller;
+import io.github.hectorvent.floci.services.lambda.SqsEventSourcePoller;
 import io.github.hectorvent.floci.services.rds.container.RdsContainerManager;
 import io.github.hectorvent.floci.services.rds.proxy.RdsProxyManager;
 import io.quarkus.runtime.Quarkus;
@@ -36,6 +39,9 @@ public class EmulatorLifecycle {
     private final RdsContainerManager rdsContainerManager;
     private final RdsProxyManager rdsProxyManager;
     private final InitializationHooksRunner initializationHooksRunner;
+    private final SqsEventSourcePoller sqsPoller;
+    private final KinesisEventSourcePoller kinesisPoller;
+    private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
 
     @Inject
     public EmulatorLifecycle(StorageFactory storageFactory, ServiceRegistry serviceRegistry,
@@ -44,7 +50,10 @@ public class EmulatorLifecycle {
                              ElastiCacheProxyManager elastiCacheProxyManager,
                              RdsContainerManager rdsContainerManager,
                              RdsProxyManager rdsProxyManager,
-                             InitializationHooksRunner initializationHooksRunner) {
+                             InitializationHooksRunner initializationHooksRunner,
+                             SqsEventSourcePoller sqsPoller,
+                             KinesisEventSourcePoller kinesisPoller,
+                             DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller) {
         this.storageFactory = storageFactory;
         this.serviceRegistry = serviceRegistry;
         this.config = config;
@@ -53,6 +62,9 @@ public class EmulatorLifecycle {
         this.rdsContainerManager = rdsContainerManager;
         this.rdsProxyManager = rdsProxyManager;
         this.initializationHooksRunner = initializationHooksRunner;
+        this.sqsPoller = sqsPoller;
+        this.kinesisPoller = kinesisPoller;
+        this.dynamodbStreamsPoller = dynamodbStreamsPoller;
     }
 
     void onStart(@Observes StartupEvent ignored) {
@@ -62,6 +74,10 @@ public class EmulatorLifecycle {
 
         serviceRegistry.logEnabledServices();
         storageFactory.loadAll();
+
+        sqsPoller.startPersistedPollers();
+        kinesisPoller.startPersistedPollers();
+        dynamodbStreamsPoller.startPersistedPollers();
 
         if (!initializationHooksRunner.hasHooks(InitializationHook.START)) {
             LOG.info("=== AWS Local Emulator Ready ===");

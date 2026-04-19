@@ -13,7 +13,6 @@ import io.github.hectorvent.floci.services.lambda.model.InvocationType;
 import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
 import io.github.hectorvent.floci.services.lambda.model.LambdaFunction;
 import io.vertx.core.Vertx;
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -61,8 +60,7 @@ public class KinesisEventSourcePoller {
         this.objectMapper = objectMapper;
     }
 
-    @PostConstruct
-    void init() {
+    public void startPersistedPollers() {
         List<EventSourceMapping> esms = esmStore.list();
         for (EventSourceMapping esm : esms) {
             if (esm.isEnabled() && esm.getEventSourceArn().contains(":kinesis:")) {

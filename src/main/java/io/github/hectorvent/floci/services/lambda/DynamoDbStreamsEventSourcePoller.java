@@ -12,7 +12,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.vertx.core.Vertx;
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -59,8 +58,7 @@ public class DynamoDbStreamsEventSourcePoller {
         this.pollIntervalMs = config.services().lambda().pollIntervalMs();
     }
 
-    @PostConstruct
-    void init() {
+    public void startPersistedPollers() {
         for (EventSourceMapping esm : esmStore.list()) {
             if (esm.isEnabled() && esm.getEventSourceArn().contains(":dynamodb:")) {
                 startPolling(esm);
