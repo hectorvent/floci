@@ -212,22 +212,6 @@ public class ContainerLauncher {
         handle.setState(ContainerState.STOPPED);
 
         handle.getRuntimeApiServer().stop();
-
-        if (handle.getLogStream() != null) {
-            try { handle.getLogStream().close(); } catch (Exception ignored) {}
-        }
-
-        try {
-            dockerClient.stopContainerCmd(handle.getContainerId()).withTimeout(5).exec();
-        } catch (Exception e) {
-            LOG.warnv("Error stopping container {0}: {1}", handle.getContainerId(), e.getMessage());
-        }
-
-        try {
-            dockerClient.removeContainerCmd(handle.getContainerId()).withForce(true).exec();
-        } catch (Exception e) {
-            LOG.warnv("Error removing container {0}: {1}", handle.getContainerId(), e.getMessage());
-        }
         lifecycleManager.stopAndRemove(handle.getContainerId(), handle.getLogStream());
     }
 

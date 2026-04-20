@@ -59,8 +59,12 @@ public class RuntimeApiServer {
         router.get(NEXT_PATH).blockingHandler(ctx -> {
             try {
                 PendingInvocation invocation = null;
-                while (invocation != null && !stopped) {
+                while (invocation == null && !stopped) {
                     invocation = pendingQueue.poll(30, TimeUnit.SECONDS);
+                }
+                if (invocation == null) {
+                    ctx.response().setStatusCode(204).end();
+                    return;
                 }
                 if (invocation == null) return;
                 inFlight.put(invocation.getRequestId(), invocation);
