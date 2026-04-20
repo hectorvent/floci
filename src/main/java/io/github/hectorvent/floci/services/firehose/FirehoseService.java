@@ -46,7 +46,7 @@ public class FirehoseService {
 
     public void deleteDeliveryStream(String name) {
         describeDeliveryStream(name); // Checks if it exists and throws if not
-        streamStore.remove(name);
+        streamStore.delete(name);
         buffers.remove(name);
         LOG.infov("Deleted Firehose Delivery Stream: {0}", name);
     }
