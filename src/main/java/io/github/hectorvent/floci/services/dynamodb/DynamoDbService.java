@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.dynamodb.model.GlobalSecondaryIndex;
 import io.github.hectorvent.floci.services.dynamodb.model.LocalSecondaryIndex;
 import io.github.hectorvent.floci.services.dynamodb.model.KeySchemaElement;
 import io.github.hectorvent.floci.services.dynamodb.model.TableDefinition;
+import io.github.hectorvent.floci.services.dynamodb.model.ConditionalCheckFailedException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -221,17 +222,17 @@ public class DynamoDbService {
     }
 
     public void putItem(String tableName, JsonNode item) {
-        putItem(tableName, item, null, null, null, regionResolver.getDefaultRegion());
+        putItem(tableName, item, null, null, null, regionResolver.getDefaultRegion(), "NONE");
     }
 
     public void putItem(String tableName, JsonNode item, String region) {
-        putItem(tableName, item, null, null, null, region);
+        putItem(tableName, item, null, null, null, region, "NONE");
     }
 
     public void putItem(String tableName, JsonNode item,
                          String conditionExpression,
                          JsonNode exprAttrNames, JsonNode exprAttrValues,
-                         String region) {
+                         String region, String returnValuesOnConditionCheckFailure) {
         String storageKey = regionKey(region, tableName);
         TableDefinition table = tableStore.get(storageKey)
                 .orElseThrow(() -> resourceNotFoundException(tableName));
@@ -242,7 +243,7 @@ public class DynamoDbService {
         JsonNode existing = tableItems.get(itemKey);
 
         if (conditionExpression != null) {
-            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues);
+            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues, returnValuesOnConditionCheckFailure);
         }
 
         tableItems.put(itemKey, item);
@@ -276,17 +277,17 @@ public class DynamoDbService {
     }
 
     public JsonNode deleteItem(String tableName, JsonNode key) {
-        return deleteItem(tableName, key, null, null, null, regionResolver.getDefaultRegion());
+        return deleteItem(tableName, key, null, null, null, regionResolver.getDefaultRegion(), "NONE");
     }
 
     public JsonNode deleteItem(String tableName, JsonNode key, String region) {
-        return deleteItem(tableName, key, null, null, null, region);
+        return deleteItem(tableName, key, null, null, null, region, "NONE");
     }
 
     public JsonNode deleteItem(String tableName, JsonNode key,
                                 String conditionExpression,
                                 JsonNode exprAttrNames, JsonNode exprAttrValues,
-                                String region) {
+                                String region, String returnValuesOnConditionCheckFailure) {
         String storageKey = regionKey(region, tableName);
         TableDefinition table = tableStore.get(storageKey)
                 .orElseThrow(() -> resourceNotFoundException(tableName));
@@ -297,7 +298,7 @@ public class DynamoDbService {
 
         if (conditionExpression != null) {
             JsonNode existing = items.get(itemKey);
-            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues);
+            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues, returnValuesOnConditionCheckFailure);
         }
 
         JsonNode removed = items.remove(itemKey);
@@ -317,11 +318,11 @@ public class DynamoDbService {
     }
 
     public UpdateResult updateItem(String tableName, JsonNode key, JsonNode attributeUpdates,
-                                    String updateExpression,
-                                    JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                                    String returnValues) {
+                                String updateExpression,
+                                JsonNode expressionAttrNames, JsonNode expressionAttrValues,
+                                String returnValues) {
         return updateItem(tableName, key, attributeUpdates, updateExpression, expressionAttrNames,
-                          expressionAttrValues, returnValues, null, regionResolver.getDefaultRegion());
+                          expressionAttrValues, returnValues, null, regionResolver.getDefaultRegion(), "NONE");
     }
 
     public UpdateResult updateItem(String tableName, JsonNode key, JsonNode attributeUpdates,
@@ -329,13 +330,14 @@ public class DynamoDbService {
                                     JsonNode expressionAttrNames, JsonNode expressionAttrValues,
                                     String returnValues, String region) {
         return updateItem(tableName, key, attributeUpdates, updateExpression, expressionAttrNames,
-                          expressionAttrValues, returnValues, null, region);
+                          expressionAttrValues, returnValues, null, region, "NONE");
     }
 
     public UpdateResult updateItem(String tableName, JsonNode key, JsonNode attributeUpdates,
                                     String updateExpression,
                                     JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                                    String returnValues, String conditionExpression, String region) {
+                                    String returnValues, String conditionExpression, String region, 
+                                    String returnValuesOnConditionCheckFailure) {
         String storageKey = regionKey(region, tableName);
         TableDefinition table = tableStore.get(storageKey)
                 .orElseThrow(() -> resourceNotFoundException(tableName));
@@ -347,7 +349,7 @@ public class DynamoDbService {
         JsonNode existing = items.get(itemKey);
 
         if (conditionExpression != null) {
-            evaluateCondition(existing, conditionExpression, expressionAttrNames, expressionAttrValues);
+            evaluateCondition(existing, conditionExpression, expressionAttrNames, expressionAttrValues, returnValuesOnConditionCheckFailure);
         }
 
         ObjectNode item;
@@ -684,8 +686,9 @@ public class DynamoDbService {
                 String updateExpression = upd.has("UpdateExpression") ? upd.get("UpdateExpression").asText() : null;
                 JsonNode exprAttrNames = upd.has("ExpressionAttributeNames") ? upd.get("ExpressionAttributeNames") : null;
                 JsonNode exprAttrValues = upd.has("ExpressionAttributeValues") ? upd.get("ExpressionAttributeValues") : null;
+                //there is no ConditionExpression, so setting returnValuesOnConditionCheckFailure = "NONE"
                 updateItem(tableName, key, null, updateExpression, exprAttrNames, exprAttrValues,
-                           "NONE", null, region);
+                           "NONE", null, region, "NONE");
             }
             // ConditionCheck-only items are handled in the first pass only
         }
@@ -710,6 +713,8 @@ public class DynamoDbService {
         if (conditionExpression == null) {
             return null;
         }
+        String returnValuesOnConditionCheckFailure = target.has("ReturnValuesOnConditionCheckFailure")
+                ? target.get("ReturnValuesOnConditionCheckFailure").asText() : null;
 
         String tableName = target.path("TableName").asText();
         JsonNode key = transactItem.has("Put") ? target.get("Item") : target.get("Key");
@@ -725,7 +730,7 @@ public class DynamoDbService {
         JsonNode existing = tableItems != null ? tableItems.get(itemKey) : null;
 
         try {
-            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues);
+            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues, returnValuesOnConditionCheckFailure);
             return null;
         } catch (AwsException e) {
             return e.getMessage();
@@ -908,10 +913,14 @@ public class DynamoDbService {
     // --- Condition expression evaluation ---
 
     private void evaluateCondition(JsonNode existingItem, String conditionExpression,
-                                    JsonNode exprAttrNames, JsonNode exprAttrValues) {
+                                    JsonNode exprAttrNames, JsonNode exprAttrValues, String returnValuesOnConditionCheckFailure) {
         if (!matchesFilterExpression(existingItem, conditionExpression, exprAttrNames, exprAttrValues)) {
-            throw new AwsException("ConditionalCheckFailedException",
-                    "The conditional request failed", 400);
+            if ("ALL_OLD".equals(returnValuesOnConditionCheckFailure)){                
+                throw new ConditionalCheckFailedException(existingItem);
+            }
+            else {
+                throw new ConditionalCheckFailedException(null);
+            }
         }
     }
 
@@ -985,7 +994,32 @@ public class DynamoDbService {
 
 
             // Resolve the value
-            if (valuePart.startsWith("if_not_exists(")) {
+            // Check for arithmetic expressions (operand + operand, operand - operand)
+            // before handling individual expression types, since the left operand can be
+            // a function like if_not_exists(...).
+            int arithmeticIdx = findArithmeticOperator(valuePart);
+            if (arithmeticIdx >= 0) {
+                String leftExpr = valuePart.substring(0, arithmeticIdx).trim();
+                char operator = valuePart.charAt(arithmeticIdx);
+                String rightExpr = valuePart.substring(arithmeticIdx + 1).trim();
+                JsonNode leftVal = evaluateSetExpr(item, leftExpr, exprAttrNames, exprAttrValues);
+                JsonNode rightVal = evaluateSetExpr(item, rightExpr, exprAttrNames, exprAttrValues);
+                if (leftVal == null || rightVal == null || !leftVal.has("N") || !rightVal.has("N")) {
+                    throw new AwsException("ValidationException",
+                            "Invalid UpdateExpression: Incorrect operand type for operator or function", 400);
+                }
+                try {
+                    java.math.BigDecimal left = new java.math.BigDecimal(leftVal.get("N").asText());
+                    java.math.BigDecimal right = new java.math.BigDecimal(rightVal.get("N").asText());
+                    java.math.BigDecimal result = (operator == '+') ? left.add(right) : left.subtract(right);
+                    ObjectNode numNode = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+                    numNode.put("N", result.toPlainString());
+                    setValueAtPath(item, attrPath, numNode, exprAttrNames);
+                } catch (NumberFormatException e) {
+                    throw new AwsException("ValidationException",
+                            "The parameter cannot be converted to a numeric value", 400);
+                }
+            } else if (valuePart.startsWith("if_not_exists(")) {
                 // if_not_exists(attrRef, fallbackExpr) evaluates to:
                 //   attrRef's current value  — when attrRef exists in the item
                 //   fallbackExpr             — otherwise
@@ -1062,19 +1096,19 @@ public class DynamoDbService {
             if (args.length == 2) {
                 String checkAttr = resolveAttributeName(args[0].trim(), exprAttrNames);
                 String fallbackExpr = args[1].trim();
-                if (item.has(checkAttr)) {
-                    return item.get(checkAttr);
+                if (hasValueAtPath(item, checkAttr, exprAttrNames)) {
+                    return getValueAtPath(item, checkAttr, exprAttrNames);
                 } else if (fallbackExpr.startsWith(":") && exprAttrValues != null) {
                     return exprAttrValues.get(fallbackExpr);
                 } else {
-                    return item.get(resolveAttributeName(fallbackExpr, exprAttrNames));
+                    return getValueAtPath(item, resolveAttributeName(fallbackExpr, exprAttrNames), exprAttrNames);
                 }
             }
             return null;
         } else if (expr.startsWith(":") && exprAttrValues != null) {
             return exprAttrValues.get(expr);
         } else {
-            return item.get(resolveAttributeName(expr, exprAttrNames));
+            return getValueAtPath(item, resolveAttributeName(expr, exprAttrNames), exprAttrNames);
         }
     }
 
@@ -1534,6 +1568,28 @@ public class DynamoDbService {
         }
     }
 
+    /**
+     * Finds the index of an arithmetic operator (+ or -) that is outside
+     * function parentheses. Returns -1 if none found.
+     */
+    private int findArithmeticOperator(String expr) {
+        int depth = 0;
+        for (int i = 0; i < expr.length(); i++) {
+            char c = expr.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+            } else if (depth == 0 && (c == '+' || c == '-')) {
+                // Ensure this is a binary operator, not a sign at the start or after '('
+                if (i > 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
     private String[] extractFunctionArgs(String funcCall) {
         int open = funcCall.indexOf('(');
         int close = funcCall.lastIndexOf(')');
@@ -1566,9 +1622,11 @@ public class DynamoDbService {
         String skName = table.getSortKeyName();
         if (skName != null) {
             JsonNode skAttr = item.get(skName);
-            if (skAttr != null) {
-                return pk + "#" + extractScalarValue(skAttr);
+            if (skAttr == null) {
+                throw new AwsException("ValidationException",
+                        "One of the required keys was not given a value", 400);
             }
+            return pk + "#" + extractScalarValue(skAttr);
         }
         return pk;
     }

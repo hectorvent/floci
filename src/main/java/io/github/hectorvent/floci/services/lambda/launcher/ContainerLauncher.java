@@ -3,7 +3,6 @@ package io.github.hectorvent.floci.services.lambda.launcher;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
-import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager.ContainerInfo;
 import io.github.hectorvent.floci.core.common.docker.ContainerLogStreamer;
 import io.github.hectorvent.floci.core.common.docker.ContainerSpec;
 import io.github.hectorvent.floci.core.common.docker.DockerHostResolver;
@@ -150,7 +149,6 @@ public class ContainerLauncher {
         String shortId = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         String containerName = "floci-" + fn.getFunctionName() + "-" + shortId;
 
-        // Build container spec
         ContainerBuilder.Builder specBuilder = containerBuilder.newContainer(image)
                 .withName(containerName)
                 .withEnv(env)
@@ -166,9 +164,9 @@ public class ContainerLauncher {
 
         ContainerSpec spec = specBuilder.build();
 
-        // Create container (but don't start yet - need to copy code first for Zip packages)
-        ContainerInfo info = lifecycleManager.createAndStart(spec);
-        String containerId = info.containerId();
+        // Create container without starting — provided.* runtimes exec
+        // /var/runtime/bootstrap on start, so code must be copied first.
+        String containerId = lifecycleManager.create(spec);
         LOG.infov("Created container {0} for function {1}", containerId, fn.getFunctionName());
 
         // Copy code into container via Docker API tar stream (works inside Docker too)
@@ -191,6 +189,9 @@ public class ContainerLauncher {
             }
         }
 
+        // Now start the container with code in place
+        lifecycleManager.startCreated(containerId, spec);
+
         ContainerHandle handle = new ContainerHandle(containerId, fn.getFunctionName(), runtimeApiServer, ContainerState.WARM);
 
         // Determine CloudWatch Logs destination for this container instance
@@ -210,8 +211,8 @@ public class ContainerLauncher {
         LOG.infov("Stopping container {0}", handle.getContainerId());
         handle.setState(ContainerState.STOPPED);
 
-        lifecycleManager.stopAndRemove(handle.getContainerId(), handle.getLogStream());
         handle.getRuntimeApiServer().stop();
+        lifecycleManager.stopAndRemove(handle.getContainerId(), handle.getLogStream());
     }
 
     private void copyDirToContainer(DockerClient dockerClient, String containerId,

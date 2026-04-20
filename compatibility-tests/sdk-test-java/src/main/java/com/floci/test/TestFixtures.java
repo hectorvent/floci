@@ -37,6 +37,7 @@ import software.amazon.awssdk.services.acm.AcmClient;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ecr.EcrClient;
 import software.amazon.awssdk.services.ecs.EcsClient;
+import software.amazon.awssdk.services.eks.EksClient;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
 import software.amazon.awssdk.services.appconfig.AppConfigClient;
 import software.amazon.awssdk.services.appconfigdata.AppConfigDataClient;
@@ -456,6 +457,14 @@ public final class TestFixtures {
 
     public static EcsClient ecsClient() {
         return EcsClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static EksClient eksClient() {
+        return EksClient.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)

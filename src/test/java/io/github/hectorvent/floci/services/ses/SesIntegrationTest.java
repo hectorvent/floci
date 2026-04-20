@@ -357,6 +357,34 @@ class SesIntegrationTest {
 
     @Test
     @Order(20)
+    void sendEmailV1_replyToAddressesStoredInInspection() {
+        given().delete("/_aws/ses").then().statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", "AWS4-HMAC-SHA256 Credential=AKID/20260101/us-east-1/email/aws4_request")
+            .formParam("Action", "SendEmail")
+            .formParam("Source", "sender@example.com")
+            .formParam("Destination.ToAddresses.member.1", "recipient@example.com")
+            .formParam("ReplyToAddresses.member.1", "reply@example.com")
+            .formParam("Message.Subject.Data", "V1 ReplyTo")
+            .formParam("Message.Body.Text.Data", "body")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<MessageId>"));
+
+        given()
+        .when()
+            .get("/_aws/ses")
+        .then()
+            .statusCode(200)
+            .body("messages[0].ReplyToAddresses", hasItem("reply@example.com"));
+    }
+
+    @Test
+    @Order(21)
     void deleteDomainIdentity() {
         given()
             .contentType("application/x-www-form-urlencoded")
@@ -381,7 +409,7 @@ class SesIntegrationTest {
     }
 
     @Test
-    @Order(21)
+    @Order(22)
     void verifyEmailIdentity_rejectsLeadingTrailingWhitespace() {
         given()
             .contentType("application/x-www-form-urlencoded")
@@ -397,7 +425,7 @@ class SesIntegrationTest {
     }
 
     @Test
-    @Order(22)
+    @Order(23)
     void verifyDomainIdentity_rejectsLeadingTrailingWhitespace() {
         given()
             .contentType("application/x-www-form-urlencoded")
@@ -413,7 +441,7 @@ class SesIntegrationTest {
     }
 
     @Test
-    @Order(23)
+    @Order(24)
     void unsupportedAction_returns400() {
         given()
             .contentType("application/x-www-form-urlencoded")

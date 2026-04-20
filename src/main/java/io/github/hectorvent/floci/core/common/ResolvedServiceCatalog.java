@@ -6,6 +6,7 @@ import io.github.hectorvent.floci.services.appconfig.AppConfigDataController;
 import io.github.hectorvent.floci.services.bedrockruntime.BedrockRuntimeController;
 import io.github.hectorvent.floci.services.cognito.CognitoOAuthController;
 import io.github.hectorvent.floci.services.cognito.CognitoWellKnownController;
+import io.github.hectorvent.floci.services.eks.EksController;
 import io.github.hectorvent.floci.services.lambda.LambdaController;
 import io.github.hectorvent.floci.services.opensearch.OpenSearchController;
 import io.github.hectorvent.floci.services.ses.SesController;
@@ -193,7 +194,11 @@ public class ResolvedServiceCatalog {
                         // id too as a safety net (catalog lookup is exact-match).
                         Set.of("bedrock", "bedrock-runtime"),
                         Set.of(),
-                        Set.of(BedrockRuntimeController.class))
+                        Set.of(BedrockRuntimeController.class)),
+                descriptor("eks", "eks", config.services().eks().enabled(), true,
+                        "eks", config.storage().mode(), 5000L, null, ServiceProtocol.REST_JSON,
+                        protocols(ServiceProtocol.REST_JSON),
+                        Set.of(), Set.of("eks"), Set.of(), Set.of(EksController.class))
         ));
     }
 

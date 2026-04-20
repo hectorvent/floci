@@ -235,6 +235,7 @@ public interface EmulatorConfig {
         EcrServiceConfig ecr();
         ResourceGroupsTaggingServiceConfig tagging();
         BedrockRuntimeServiceConfig bedrockRuntime();
+        EksServiceConfig eks();
     }
 
     interface SsmServiceConfig {
@@ -432,8 +433,9 @@ public interface EmulatorConfig {
         @WithDefault("true")
         boolean enabled();
 
-        @WithDefault("mock")
-        String mode();
+        /** When true, domains are simulated in-memory without real Docker containers. */
+        @WithDefault("false")
+        boolean mock();
 
         @WithDefault("opensearchproject/opensearch:2")
         String defaultImage();
@@ -444,7 +446,11 @@ public interface EmulatorConfig {
         @WithDefault("9499")
         int proxyMaxPort();
 
-        Optional<String> dockerNetwork();
+        @WithDefault("${floci.storage.persistent-path}/opensearch")
+        String dataPath();
+
+        @WithDefault("false")
+        boolean keepRunningOnShutdown();
     }
 
     interface EcsServiceConfig {
@@ -572,6 +578,36 @@ public interface EmulatorConfig {
     interface AppConfigDataServiceConfig {
         @WithDefault("true")
         boolean enabled();
+    }
+
+    interface EksServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /** When true, clusters go straight to ACTIVE without starting real Docker containers. */
+        @WithDefault("false")
+        boolean mock();
+
+        @WithDefault("k3s")
+        String provider();
+
+        @WithDefault("rancher/k3s:latest")
+        String defaultImage();
+
+        @WithDefault("6500")
+        int apiServerBasePort();
+
+        @WithDefault("6599")
+        int apiServerMaxPort();
+
+        @WithDefault("./data/eks")
+        String dataPath();
+
+        /** Docker network to attach k3s containers to. Empty = default bridge. */
+        Optional<String> dockerNetwork();
+
+        @WithDefault("false")
+        boolean keepRunningOnShutdown();
     }
 
     interface InitHooksConfig {

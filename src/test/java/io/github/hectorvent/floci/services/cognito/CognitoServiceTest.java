@@ -709,4 +709,78 @@ class CognitoServiceTest {
 
         assertEquals(0, groupStore.scan(k -> k.startsWith(prefix)).size());
     }
+
+    // =========================================================================
+    // Issue #433 — AdminEnableUser / AdminDisableUser
+    // =========================================================================
+
+    @Test
+    void adminDisableUserSetsEnabledFalse() {
+        UserPool pool = createPoolAndUser();
+
+        CognitoUser before = service.adminGetUser(pool.getId(), "alice");
+        assertTrue(before.isEnabled(), "User should be enabled by default");
+
+        service.adminDisableUser(pool.getId(), "alice");
+
+        CognitoUser after = service.adminGetUser(pool.getId(), "alice");
+        assertFalse(after.isEnabled(), "User should be disabled after adminDisableUser");
+    }
+
+    @Test
+    void adminEnableUserSetsEnabledTrue() {
+        UserPool pool = createPoolAndUser();
+        service.adminDisableUser(pool.getId(), "alice");
+
+        service.adminEnableUser(pool.getId(), "alice");
+
+        CognitoUser user = service.adminGetUser(pool.getId(), "alice");
+        assertTrue(user.isEnabled(), "User should be enabled after adminEnableUser");
+    }
+
+    @Test
+    void disabledUserCannotAuthenticate() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        service.adminDisableUser(pool.getId(), "alice");
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                        Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!")));
+        assertEquals("UserNotConfirmedException", ex.getErrorCode());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void reEnabledUserCanAuthenticate() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        service.adminDisableUser(pool.getId(), "alice");
+        service.adminEnableUser(pool.getId(), "alice");
+
+        Map<String, Object> result = service.initiateAuth(
+                client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+        assertNotNull(((Map<String, Object>) result.get("AuthenticationResult")).get("AccessToken"));
+    }
+
+    @Test
+    void adminDisableUserNonexistentThrows() {
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
+
+        assertThrows(AwsException.class, () ->
+                service.adminDisableUser(pool.getId(), "ghost"));
+    }
+
+    @Test
+    void adminEnableUserNonexistentThrows() {
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
+
+        assertThrows(AwsException.class, () ->
+                service.adminEnableUser(pool.getId(), "ghost"));
+    }
 }

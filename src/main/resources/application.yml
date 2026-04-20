@@ -4,6 +4,10 @@ quarkus:
     host: 0.0.0.0
     limits:
       max-body-size: ${floci.max-request-size}M
+  shutdown:
+    # Enables the pre-shutdown phase so stop hooks run before the HTTP server stops.
+    # No 'delay' value is set - observers run synchronously, no artificial sleep is introduced.
+    delay-enabled: true
   native:
     additional-build-args: >-
       --initialize-at-run-time=org.apache.hc.client5.http.impl.auth.NTLMEngineImpl,
@@ -12,6 +16,7 @@ quarkus:
       --initialize-at-run-time=org.bouncycastle.jcajce.provider.drbg.DRBG$NonceAndIV,
       --initialize-at-run-time=org.bouncycastle.crypto.prng.SP800SecureRandom,
       --initialize-at-run-time=org.bouncycastle.jce.provider.BouncyCastleProvider,
+      --initialize-at-run-time=io.github.hectorvent.floci.core.common.BouncyCastleInitializer,
       --initialize-at-run-time=io.github.hectorvent.floci.services.acm.AcmService,
       --initialize-at-run-time=io.github.hectorvent.floci.services.acm.CertificateGenerator,
       --initialize-at-run-time=io.github.hectorvent.floci.services.cognito.CognitoSrpHelper
@@ -144,10 +149,11 @@ floci:
       enabled: true
     opensearch:
       enabled: true
-      mode: mock
+      mock: false
       default-image: "opensearchproject/opensearch:2"
       proxy-base-port: 9400
       proxy-max-port: 9499
+      keep-running-on-shutdown: false
     ec2:
       enabled: true
     ecs:
@@ -169,3 +175,12 @@ floci:
       uri-style: hostname
     bedrock-runtime:
       enabled: true
+    eks:
+      enabled: true
+      mock: false
+      provider: k3s
+      default-image: "rancher/k3s:latest"
+      api-server-base-port: 6500
+      api-server-max-port: 6599
+      data-path: ./data/eks
+      keep-running-on-shutdown: false

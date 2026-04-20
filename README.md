@@ -55,6 +55,7 @@
 | Kinesis (streams, shards, fan-out) | ✅ | ⚠️ Partial |
 | KMS (sign, verify, re-encrypt) | ✅ | ⚠️ Partial |
 | ECS (clusters, services, tasks) | ✅ | ❌ |
+| EKS (clusters, mock + real k3s) | ✅ | ❌ |
 | EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
@@ -78,7 +79,7 @@ flowchart LR
         end
 
         subgraph Containers ["Container Services  🐳"]
-            C["Lambda\nElastiCache\nRDS\nECS\nMSK"]
+            C["Lambda\nElastiCache\nRDS\nECS\nMSK\nEKS"]
         end
 
         Router --> Stateless
@@ -129,16 +130,17 @@ flowchart LR
 | **ECR** | In-process + **real OCI registry** | Repositories, image push / pull via stock `docker`, image-backed Lambda functions |
 | **SES** | In-process | Send email / raw email, identity verification, DKIM attributes |
 | **SES v2 (HTTP)** | In-process | REST JSON API, identities, DKIM, feedback attributes, account sending |
-| **OpenSearch** | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
+| **OpenSearch** | **Real Docker containers** | Domain CRUD, tags, versions, instance types, upgrade stubs |
 | **AppConfig** | In-process | Applications, environments, profiles, hosted configuration versions, deployments |
 | **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
 | **Bedrock Runtime** | In-process (stub) | Dummy Converse and InvokeModel responses for local development; streaming returns 501 |
+| **EKS** | **Real Docker containers** (mock mode available) | Clusters, tagging; real mode starts k3s per cluster with a live Kubernetes API server |
 
-> **Lambda, ElastiCache, RDS, MSK, and ECS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
+> **Lambda, ElastiCache, RDS, MSK, ECS, EKS, and OpenSearch** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**34 AWS services supported.**
+**35 AWS services supported.**
 
 ## Persistence & Storage Modes
 

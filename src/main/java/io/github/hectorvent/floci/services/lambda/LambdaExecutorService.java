@@ -107,17 +107,17 @@ public class LambdaExecutorService {
 
         } catch (TimeoutException e) {
             LOG.warnv("Function {0} timed out after {1}s", fn.getFunctionName(), fn.getTimeout());
-            warmPool.drainFunction(fn.getFunctionName());
+            warmPool.destroyHandle(handle);
             return new InvokeResult(200, "Unhandled",
                     buildErrorPayload("Task timed out after " + fn.getTimeout() + " seconds", "Function.TimedOut"),
                     null, requestId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            warmPool.release(handle);
+            warmPool.destroyHandle(handle);
             return new InvokeResult(200, "Unhandled", buildErrorPayload("Invocation interrupted", "Interrupted"), null, requestId);
         } catch (Exception e) {
             LOG.warnv("Invocation error for function {0}: {1}", fn.getFunctionName(), e.getMessage());
-            warmPool.release(handle);
+            warmPool.destroyHandle(handle);
             return new InvokeResult(200, "Unhandled", buildErrorPayload(e.getMessage(), "InvocationError"), null, requestId);
         }
     }

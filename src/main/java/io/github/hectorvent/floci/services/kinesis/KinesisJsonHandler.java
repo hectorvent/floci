@@ -347,11 +347,11 @@ public class KinesisJsonHandler {
         byte[] data = Base64.getDecoder().decode(request.path("Data").asText());
         String partitionKey = request.path("PartitionKey").asText();
 
-        String seq = service.putRecord(streamName, data, partitionKey, region);
+        KinesisService.PutRecordResult result = service.putRecordWithShardId(streamName, data, partitionKey, region);
 
         ObjectNode response = objectMapper.createObjectNode();
-        response.put("SequenceNumber", seq);
-        response.put("ShardId", "shardId-000000000000"); // Simplified
+        response.put("SequenceNumber", result.sequenceNumber());
+        response.put("ShardId", result.shardId());
         return Response.ok(response).build();
     }
 
@@ -366,10 +366,10 @@ public class KinesisJsonHandler {
             try {
                 byte[] data = Base64.getDecoder().decode(node.path("Data").asText());
                 String partitionKey = node.path("PartitionKey").asText();
-                String seq = service.putRecord(streamName, data, partitionKey, region);
+                KinesisService.PutRecordResult result = service.putRecordWithShardId(streamName, data, partitionKey, region);
                 results.addObject()
-                        .put("SequenceNumber", seq)
-                        .put("ShardId", "shardId-000000000000");
+                        .put("SequenceNumber", result.sequenceNumber())
+                        .put("ShardId", result.shardId());
             } catch (Exception e) {
                 failed++;
                 results.addObject()
@@ -386,8 +386,24 @@ public class KinesisJsonHandler {
         String shardId = request.path("ShardId").asText();
         String type = request.path("ShardIteratorType").asText();
         String seq = request.has("StartingSequenceNumber") ? request.path("StartingSequenceNumber").asText() : null;
+        // AWS sends Timestamp as epoch seconds (double with fractional ms).
+        // Convert to long millis at the boundary; the emulator stores time in ms everywhere.
+        // Use Math.round to avoid 1ms drift from FP multiplication (e.g. X.999...).
+        Long timestampMillis = null;
+        if (request.has("Timestamp") && !request.path("Timestamp").isNull()) {
+            JsonNode tsNode = request.path("Timestamp");
+            if (!tsNode.isNumber()) {
+                throw new io.github.hectorvent.floci.core.common.AwsException("InvalidArgumentException",
+                        "Timestamp must be a number (epoch seconds)", 400);
+            }
+            timestampMillis = Math.round(tsNode.asDouble() * 1000);
+        }
+        if ("AT_TIMESTAMP".equals(type) && timestampMillis == null) {
+            throw new io.github.hectorvent.floci.core.common.AwsException("InvalidArgumentException",
+                    "ShardIteratorType AT_TIMESTAMP requires a Timestamp", 400);
+        }
 
-        String iterator = service.getShardIterator(streamName, shardId, type, seq, region);
+        String iterator = service.getShardIterator(streamName, shardId, type, seq, timestampMillis, region);
 
         ObjectNode response = objectMapper.createObjectNode();
         response.put("ShardIterator", iterator);

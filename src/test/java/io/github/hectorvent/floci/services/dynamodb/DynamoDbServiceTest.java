@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.dynamodb;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.dynamodb.model.AttributeDefinition;
+import io.github.hectorvent.floci.services.dynamodb.model.ConditionalCheckFailedException;
 import io.github.hectorvent.floci.services.dynamodb.model.KeySchemaElement;
 import io.github.hectorvent.floci.services.dynamodb.model.TableDefinition;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -558,6 +559,140 @@ class DynamoDbServiceTest {
     }
 
     @Test
+    void updateItemSetArithmeticIncrement() {
+        createUsersTable();
+
+        // Put an item with counter = 100
+        ObjectNode existing = mapper.createObjectNode();
+        existing.set("userId", attributeValue("S", "u1"));
+        ObjectNode counterVal = mapper.createObjectNode();
+        counterVal.put("N", "100");
+        existing.set("counter", counterVal);
+        service.putItem("Users", existing);
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":inc", incVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = counter + :inc",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("101", stored.get("counter").get("N").asText(),
+                "counter should be incremented from 100 to 101");
+    }
+
+    @Test
+    void updateItemSetArithmeticDecrement() {
+        createUsersTable();
+
+        ObjectNode existing = mapper.createObjectNode();
+        existing.set("userId", attributeValue("S", "u1"));
+        ObjectNode counterVal = mapper.createObjectNode();
+        counterVal.put("N", "50");
+        existing.set("counter", counterVal);
+        service.putItem("Users", existing);
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode decVal = mapper.createObjectNode();
+        decVal.put("N", "3");
+        exprValues.set(":dec", decVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = counter - :dec",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("47", stored.get("counter").get("N").asText(),
+                "counter should be decremented from 50 to 47");
+    }
+
+    @Test
+    void updateItemSetIfNotExistsWithArithmeticOnNewItem() {
+        createUsersTable();
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode startVal = mapper.createObjectNode();
+        startVal.put("N", "60000000");
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":start", startVal);
+        exprValues.set(":inc", incVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = if_not_exists(counter, :start) + :inc",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("60000001", stored.get("counter").get("N").asText(),
+                "counter should be if_not_exists default (60000000) + 1 = 60000001");
+    }
+
+    @Test
+    void updateItemSetIfNotExistsWithArithmeticOnExistingItem() {
+        createUsersTable();
+
+        ObjectNode existing = mapper.createObjectNode();
+        existing.set("userId", attributeValue("S", "u1"));
+        ObjectNode counterVal = mapper.createObjectNode();
+        counterVal.put("N", "60000005");
+        existing.set("counter", counterVal);
+        service.putItem("Users", existing);
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode startVal = mapper.createObjectNode();
+        startVal.put("N", "60000000");
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":start", startVal);
+        exprValues.set(":inc", incVal);
+
+        service.updateItem("Users", key, null,
+                "SET counter = if_not_exists(counter, :start) + :inc",
+                null, exprValues, null);
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("60000006", stored.get("counter").get("N").asText(),
+                "counter should be existing (60000005) + 1 = 60000006");
+    }
+
+    @Test
+    void updateItemSetArithmeticConsecutiveIncrements() {
+        createUsersTable();
+
+        ObjectNode key = item("userId", "u1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode startVal = mapper.createObjectNode();
+        startVal.put("N", "0");
+        ObjectNode incVal = mapper.createObjectNode();
+        incVal.put("N", "1");
+        exprValues.set(":start", startVal);
+        exprValues.set(":inc", incVal);
+
+        // Three consecutive increments
+        for (int i = 0; i < 3; i++) {
+            service.updateItem("Users", key, null,
+                    "SET counter = if_not_exists(counter, :start) + :inc",
+                    null, exprValues, null);
+        }
+
+        JsonNode stored = service.getItem("Users", key);
+        assertNotNull(stored);
+        assertEquals("3", stored.get("counter").get("N").asText(),
+                "counter should be 3 after three increments starting from 0");
+    }
+
+    @Test
     void scanWithBoolFilterExpression() {
         createUsersTable();
         ObjectNode u1 = item("userId", "u1");
@@ -1081,6 +1216,83 @@ class DynamoDbServiceTest {
     }
 
     @Test
+    void updateItemWithDifferentSortKeysCreatesSeparateItems() {
+        createOrdersTable();
+
+        ObjectNode key1 = item("customerId", "c1", "orderId", "app1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":owner", attributeValue("S", "owner-1"));
+
+        service.updateItem("Orders", key1, null,
+                "SET owner = :owner", null, exprValues, null);
+
+        ObjectNode key2 = item("customerId", "c1", "orderId", "app2");
+        exprValues = mapper.createObjectNode();
+        exprValues.set(":owner", attributeValue("S", "owner-2"));
+
+        service.updateItem("Orders", key2, null,
+                "SET owner = :owner", null, exprValues, null);
+
+        DynamoDbService.ScanResult scanResult = service.scan("Orders", null, null, null, null, null, null);
+        assertEquals(2, scanResult.items().size(),
+                "two items with same partition key but different sort keys must be stored separately");
+
+        JsonNode item1 = service.getItem("Orders", key1);
+        assertNotNull(item1);
+        assertEquals("owner-1", item1.get("owner").get("S").asText());
+
+        JsonNode item2 = service.getItem("Orders", key2);
+        assertNotNull(item2);
+        assertEquals("owner-2", item2.get("owner").get("S").asText());
+    }
+
+    @Test
+    void updateItemMissingSortKeyThrowsValidationException() {
+        createOrdersTable();
+
+        ObjectNode keyMissingSk = item("customerId", "c1");
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":val", attributeValue("S", "test"));
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.updateItem("Orders", keyMissingSk, null,
+                        "SET name = :val", null, exprValues, null));
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void getItemMissingSortKeyThrowsValidationException() {
+        createOrdersTable();
+        service.putItem("Orders", item("customerId", "c1", "orderId", "o1", "total", "100"));
+
+        ObjectNode keyMissingSk = item("customerId", "c1");
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.getItem("Orders", keyMissingSk));
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void deleteItemMissingSortKeyThrowsValidationException() {
+        createOrdersTable();
+        service.putItem("Orders", item("customerId", "c1", "orderId", "o1", "total", "100"));
+
+        ObjectNode keyMissingSk = item("customerId", "c1");
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.deleteItem("Orders", keyMissingSk));
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void putItemMissingSortKeyThrowsValidationException() {
+        createOrdersTable();
+
+        ObjectNode itemMissingSk = item("customerId", "c1", "total", "100");
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.putItem("Orders", itemMissingSk));
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
     void updateExpressionAcceptsNewlineBetweenSetAndAdd() {
         // "SET ... \n ADD ..." — previously both clauses were silently dropped:
         // applySetClause greedily consumed ":newName\nADD counter :inc" as the
@@ -1446,7 +1658,7 @@ class DynamoDbServiceTest {
         key.set("orderId", attributeValue("S", "o1"));
 
         var result = service.updateItem("Orders", key, null,
-                "SET #details.subkey = :val, #status = :s", exprNames, exprValues, "ALL_NEW", null, "us-east-1");
+                "SET #details.subkey = :val, #status = :s", exprNames, exprValues, "ALL_NEW", null, "us-east-1", "NONE");
 
         JsonNode updated = result.newItem();
         assertNotNull(updated);
@@ -1459,7 +1671,7 @@ class DynamoDbServiceTest {
 
         // Now REMOVE the nested field
         result = service.updateItem("Orders", key, null,
-                "REMOVE #details.subkey", exprNames, null, "ALL_NEW", null, "us-east-1");
+                "REMOVE #details.subkey", exprNames, null, "ALL_NEW", null, "us-east-1", "NONE");
 
         updated = result.newItem();
         // The subkey should be removed from the nested map
@@ -1491,11 +1703,11 @@ class DynamoDbServiceTest {
 
         // First, set all four fields
         service.updateItem("Orders", key, null,
-                "SET #a = :v1, #b = :v1, #c = :v1, #d = :v1", exprNames, exprValues, "NONE", null, "us-east-1");
+                "SET #a = :v1, #b = :v1, #c = :v1, #d = :v1", exprNames, exprValues, "NONE", null, "us-east-1", "NONE");
 
         // SET last two assignments, then REMOVE two fields (comma-separated)
         var result = service.updateItem("Orders", key, null,
-                "SET #a = :v1, #b = :v2 REMOVE #c, #d", exprNames, exprValues, "ALL_NEW", null, "us-east-1");
+                "SET #a = :v1, #b = :v2 REMOVE #c, #d", exprNames, exprValues, "ALL_NEW", null, "us-east-1", "NONE");
 
         JsonNode updated = result.newItem();
         assertNotNull(updated);
@@ -1503,5 +1715,174 @@ class DynamoDbServiceTest {
         assertEquals("val2", updated.get("fieldB").get("S").asText(), "fieldB should be set (last SET before REMOVE)");
         assertNull(updated.get("fieldC"), "fieldC should be removed");
         assertNull(updated.get("fieldD"), "fieldD should be removed");
+    }
+
+    @Test
+    void updateItemConditionFailedReturnValuesNone() {
+        createOrdersTable();
+    
+        ObjectNode order = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+        service.putItem("Orders", order);
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode newVal = attributeValue("S", "newVal");
+        ObjectNode conditionVal = attributeValue("S", "testVal");
+        exprValues.set(":val", newVal);
+        exprValues.set(":test", conditionVal);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> service.updateItem("Orders", key, null,
+                "SET newAttr = :val",
+                null, exprValues, "NONE", "testAttr <> :test", "us-east-1", "NONE"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+        assertFalse(stored.has("newAttr"), "new attribute should not have been added");
+
+        assertNull(ex.getItem());
+    }
+
+    @Test
+    void updateItemConditionFailedReturnValuesAllOld() {
+        createOrdersTable();
+
+        ObjectNode order = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+        service.putItem("Orders", order);
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        ObjectNode newVal = attributeValue("S", "newVal");
+        ObjectNode conditionVal = attributeValue("S", "testVal");
+        exprValues.set(":val", newVal);
+        exprValues.set(":test", conditionVal);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> service.updateItem("Orders", key, null,
+                "SET newAttr = :val",
+                null, exprValues, "NONE", "testAttr <> :test", "us-east-1", "ALL_OLD"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+        assertFalse(stored.has("newAttr"), "new attribute should not have been added");
+
+        JsonNode returnedItem = ex.getItem();
+        assertNotNull(returnedItem);
+        assertTrue(returnedItem.has("testAttr"), "returned item should have testAttr");
+        assertEquals("testVal", returnedItem.get("testAttr").get("S").asText());
+    }
+
+    @Test
+    void putItemNetNewConditionFailedReturnValuesNone() {
+        createOrdersTable();
+    
+        ObjectNode order = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order, "attribute_exists(customerId)", null, null, "us-east-1", "NONE"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNull(stored, "item should not exist");
+
+        assertNull(ex.getItem());
+    }
+
+    @Test
+    void putItemNetNewConditionFailedReturnValuesAllOld() {
+        createOrdersTable();
+    
+        ObjectNode order = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order, "attribute_exists(customerId)", null, null, "us-east-1", "ALL_OLD"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNull(stored, "item should not exist");
+
+        assertNull(ex.getItem());
+    }
+    
+    @Test
+    void putItemExistingConditionFailedReturnValuesNone() {
+        createOrdersTable();
+    
+        ObjectNode order1 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode order2 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal1");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        service.putItem("Orders", order1);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order2, "attribute_exists(someAttr)", null, null, "us-east-1", "NONE"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+        assertTrue(stored.has("testAttr"), "item should have testAttr");
+        assertEquals("testVal", stored.get("testAttr").get("S").asText());
+
+        assertNull(ex.getItem());
+    }
+
+    @Test
+    void putItemExistingConditionFailedReturnValuesAllOld() {
+        createOrdersTable();
+
+        ObjectNode order1 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal");
+        ObjectNode order2 = item("customerId", "1", "orderId", "sort1", "testAttr", "testVal1");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        service.putItem("Orders", order1);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.putItem("Orders", order2, "attribute_exists(someAttr)", null, null, "us-east-1", "ALL_OLD"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+        assertTrue(stored.has("testAttr"), "item should have testAttr");
+        assertEquals("testVal", stored.get("testAttr").get("S").asText());
+
+        JsonNode returnedItem = ex.getItem();
+        assertNotNull(returnedItem);
+        assertTrue(returnedItem.has("testAttr"), "returned item should have testAttr");
+        assertEquals("testVal", returnedItem.get("testAttr").get("S").asText());
+    }
+
+    
+    
+    @Test
+    void deleteItemConditionFailedReturnValuesNone() {
+        createOrdersTable();
+    
+        ObjectNode order = item("customerId", "1", "orderId", "sort1");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        service.putItem("Orders", order);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.deleteItem("Orders", key, "attribute_exists(someAttr)", null, null, "us-east-1", "NONE"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+
+        assertNull(ex.getItem());
+    }
+
+    @Test
+    void deleteItemConditionFailedReturnValuesAllOld() {
+        createOrdersTable();
+
+        ObjectNode order = item("customerId", "1", "orderId", "sort1");
+        ObjectNode key = item("customerId", "1", "orderId", "sort1");
+
+        service.putItem("Orders", order);
+
+        ConditionalCheckFailedException ex = assertThrows(ConditionalCheckFailedException.class, () -> 
+            service.deleteItem("Orders", key, "attribute_exists(someAttr)", null, null, "us-east-1", "ALL_OLD"));
+
+        JsonNode stored = service.getItem("Orders", key);
+        assertNotNull(stored, "item should exist");
+
+        JsonNode returnedItem = ex.getItem();
+        assertNotNull(returnedItem);
+        assertTrue(returnedItem.has("customerId"), "returned item should have customerId");
+        assertEquals("1", returnedItem.get("customerId").get("S").asText());
     }
 }

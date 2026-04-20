@@ -38,6 +38,7 @@ public class RuntimeApiServer {
     private final ConcurrentHashMap<String, PendingInvocation> inFlight = new ConcurrentHashMap<>();
 
     private volatile HttpServer httpServer;
+    private volatile boolean stopped;
 
     RuntimeApiServer(Vertx vertx, int port) {
         this.vertx = vertx;
@@ -57,7 +58,10 @@ public class RuntimeApiServer {
         // GET /runtime/invocation/next — long-poll for next invocation
         router.get(NEXT_PATH).blockingHandler(ctx -> {
             try {
-                PendingInvocation invocation = pendingQueue.poll(30, TimeUnit.SECONDS);
+                PendingInvocation invocation = null;
+                while (invocation == null && !stopped) {
+                    invocation = pendingQueue.poll(30, TimeUnit.SECONDS);
+                }
                 if (invocation == null) {
                     ctx.response().setStatusCode(204).end();
                     return;
@@ -124,6 +128,7 @@ public class RuntimeApiServer {
     }
 
     public void stop() {
+        stopped = true;
         if (httpServer != null) {
             httpServer.close();
         }

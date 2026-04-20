@@ -48,22 +48,33 @@ public class ContainerLifecycleManager {
     }
 
     /**
-     * Creates and starts a container from the given specification.
-     * Automatically pulls the image if not present locally.
+     * Creates and immediately starts a container. Delegates to
+     * {@link #create} and {@link #startCreated}. Suitable when no
+     * filesystem modifications are needed between creation and start.
      *
      * @param spec the container specification
      * @return information about the created container including resolved endpoints
      */
     public ContainerInfo createAndStart(ContainerSpec spec) {
+        String containerId = create(spec);
+        return startCreated(containerId, spec);
+    }
+
+    /**
+     * Creates a container without starting it. Use {@link #startCreated} to
+     * start it after any pre-start setup (e.g. copying files into the
+     * container filesystem).
+     *
+     * @param spec the container specification
+     * @return the container ID
+     */
+    public String create(ContainerSpec spec) {
         LOG.debugv("Creating container from spec: image={0}, name={1}", spec.image(), spec.name());
 
-        // Ensure image is available
         imageCacheService.ensureImageExists(spec.image());
 
-        // Build HostConfig
         HostConfig hostConfig = buildHostConfig(spec);
 
-        // Create container command
         CreateContainerCmd createCmd = dockerClient.createContainerCmd(spec.image())
                 .withHostConfig(hostConfig);
 
@@ -86,18 +97,23 @@ public class ContainerLifecycleManager {
             createCmd.withExposedPorts(exposed);
         }
 
-        // Create the container
         CreateContainerResponse response = createCmd.exec();
         String containerId = response.getId();
-        LOG.infov("Created container {0} (name={1})", containerId, spec.name());
+        LOG.infov("Created container {0} (name={1}, not yet started)", containerId, spec.name());
+        return containerId;
+    }
 
-        // Start the container
+    /**
+     * Starts a previously created container and resolves its endpoints.
+     *
+     * @param containerId the container ID returned by {@link #create}
+     * @param spec the original spec (needed for network and endpoint resolution)
+     * @return information about the running container including resolved endpoints
+     */
+    public ContainerInfo startCreated(String containerId, ContainerSpec spec) {
         dockerClient.startContainerCmd(containerId).exec();
         LOG.infov("Started container {0}", containerId);
 
-        // For containers with port bindings, withNetworkMode was skipped during creation
-        // (it suppresses port publishing on macOS Docker Desktop). Connect to the
-        // configured network now, after the host port bindings are established.
         if (spec.networkMode() != null && !spec.networkMode().isBlank() && spec.hasPortBindings()) {
             try {
                 dockerClient.connectToNetworkCmd()
@@ -111,9 +127,7 @@ public class ContainerLifecycleManager {
             }
         }
 
-        // Resolve endpoints
         Map<Integer, EndpointInfo> endpoints = resolveEndpoints(containerId, spec);
-
         return new ContainerInfo(containerId, endpoints);
     }
 
@@ -253,6 +267,11 @@ public class ContainerLifecycleManager {
 
     private HostConfig buildHostConfig(ContainerSpec spec) {
         HostConfig hostConfig = HostConfig.newHostConfig();
+
+        // Privileged mode (required for e.g. k3s containers)
+        if (spec.privileged()) {
+            hostConfig.withPrivileged(true);
+        }
 
         // Memory limit
         if (spec.hasMemoryLimit()) {

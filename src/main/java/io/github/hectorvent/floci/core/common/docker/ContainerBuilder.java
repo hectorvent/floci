@@ -72,6 +72,7 @@ public class ContainerBuilder {
         private final List<Bind> binds = new ArrayList<>();
         private final List<String> extraHosts = new ArrayList<>();
         private LogConfig logConfig;
+        private boolean privileged;
 
         Builder(String image, EmulatorConfig config, DockerHostResolver dockerHostResolver) {
             this.image = image;
@@ -269,6 +270,15 @@ public class ContainerBuilder {
         }
 
         /**
+         * Runs the container in privileged mode (required for k3s and similar containers
+         * that need full system access).
+         */
+        public Builder withPrivileged(boolean privileged) {
+            this.privileged = privileged;
+            return this;
+        }
+
+        /**
          * Builds the immutable ContainerSpec.
          */
         public ContainerSpec build() {
@@ -285,7 +295,8 @@ public class ContainerBuilder {
                     List.copyOf(mounts),
                     List.copyOf(binds),
                     List.copyOf(extraHosts),
-                    logConfig
+                    logConfig,
+                    privileged
             );
         }
     }

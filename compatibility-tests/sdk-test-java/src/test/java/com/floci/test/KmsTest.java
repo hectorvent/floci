@@ -12,6 +12,7 @@ import software.amazon.awssdk.services.kms.model.EncryptResponse;
 import software.amazon.awssdk.services.kms.model.GenerateDataKeyResponse;
 import software.amazon.awssdk.services.kms.model.GenerateDataKeyWithoutPlaintextResponse;
 import software.amazon.awssdk.services.kms.model.GetPublicKeyResponse;
+import software.amazon.awssdk.services.kms.model.KeySpec;
 import software.amazon.awssdk.services.kms.model.KeyState;
 import software.amazon.awssdk.services.kms.model.KeyUsageType;
 import software.amazon.awssdk.services.kms.model.ListAliasesResponse;
@@ -278,5 +279,33 @@ class KmsTest {
     void deleteAlias() {
         kms.deleteAlias(b -> b.aliasName(aliasName));
         // No exception means success
+    }
+
+    @Test
+    @Order(18)
+    void signAndVerifySecp256k1() {
+        CreateKeyResponse createResponse = kms.createKey(b -> b
+                .description("secp256k1-sign-key")
+                .keyUsage(KeyUsageType.SIGN_VERIFY)
+                .keySpec(KeySpec.ECC_SECG_P256_K1));
+
+        String eccKeyId = createResponse.keyMetadata().keyId();
+
+        SdkBytes msg = SdkBytes.fromString("message to sign", StandardCharsets.UTF_8);
+
+        SignResponse signResponse = kms.sign(b -> b
+                .keyId(eccKeyId)
+                .message(msg)
+                .signingAlgorithm(SigningAlgorithmSpec.ECDSA_SHA_256));
+
+        assertThat(signResponse.signature()).isNotNull();
+
+        VerifyResponse verifyResponse = kms.verify(b -> b
+                .keyId(eccKeyId)
+                .message(msg)
+                .signature(signResponse.signature())
+                .signingAlgorithm(SigningAlgorithmSpec.ECDSA_SHA_256));
+
+        assertThat(verifyResponse.signatureValid()).isTrue();
     }
 }

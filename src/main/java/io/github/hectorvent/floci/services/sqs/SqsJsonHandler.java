@@ -307,6 +307,9 @@ public class SqsJsonHandler {
                     success.put("Id", id);
                     success.put("MessageId", msg.getMessageId());
                     success.put("MD5OfMessageBody", msg.getMd5OfBody());
+                    if (msg.getMd5OfMessageAttributes() != null) {
+                        success.put("MD5OfMessageAttributes", msg.getMd5OfMessageAttributes());
+                    }
                     if (msg.getSequenceNumber() > 0) {
                         success.put("SequenceNumber", String.valueOf(msg.getSequenceNumber()));
                     }

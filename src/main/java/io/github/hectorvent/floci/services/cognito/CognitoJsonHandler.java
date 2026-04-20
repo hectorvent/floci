@@ -49,12 +49,15 @@ public class CognitoJsonHandler {
             case "ListResourceServers" -> handleListResourceServers(request);
             case "UpdateResourceServer" -> handleUpdateResourceServer(request);
             case "DeleteResourceServer" -> handleDeleteResourceServer(request);
+            case "AdminResetUserPassword" -> handleAdminResetUserPassword(request);
             case "AdminCreateUser" -> handleAdminCreateUser(request);
             case "AdminGetUser" -> handleAdminGetUser(request);
             case "AdminDeleteUser" -> handleAdminDeleteUser(request);
             case "AdminSetUserPassword" -> handleAdminSetUserPassword(request);
             case "AdminUpdateUserAttributes" -> handleAdminUpdateUserAttributes(request);
             case "AdminUserGlobalSignOut" -> handleAdminUserGlobalSignOut(request);
+            case "AdminEnableUser" -> handleAdminEnableUser(request);
+            case "AdminDisableUser" -> handleAdminDisableUser(request);
             case "ListUsers" -> handleListUsers(request);
             case "InitiateAuth" -> handleInitiateAuth(request);
             case "AdminInitiateAuth" -> handleAdminInitiateAuth(request);
@@ -255,6 +258,11 @@ public class CognitoJsonHandler {
         return Response.ok(response).build();
     }
 
+    private Response handleAdminResetUserPassword(JsonNode request) {
+        service.adminResetUserPassword(request.path("UserPoolId").asText(), request.path("Username").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
     private Response handleAdminDeleteUser(JsonNode request) {
         service.adminDeleteUser(request.path("UserPoolId").asText(), request.path("Username").asText());
         return Response.ok(objectMapper.createObjectNode()).build();
@@ -286,6 +294,16 @@ public class CognitoJsonHandler {
                 request.path("UserPoolId").asText(),
                 request.path("Username").asText()
         );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminEnableUser(JsonNode request) {
+        service.adminEnableUser(request.path("UserPoolId").asText(), request.path("Username").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminDisableUser(JsonNode request) {
+        service.adminDisableUser(request.path("UserPoolId").asText(), request.path("Username").asText());
         return Response.ok(objectMapper.createObjectNode()).build();
     }
 

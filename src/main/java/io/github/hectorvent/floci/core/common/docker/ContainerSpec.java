@@ -24,6 +24,7 @@ import java.util.Map;
  * @param binds Legacy bind mounts (prefer mounts for new code)
  * @param extraHosts Extra /etc/hosts entries as "hostname:ip" strings
  * @param logConfig Docker log driver configuration (null = daemon default)
+ * @param privileged Whether to run the container in privileged mode (required for k3s)
  */
 public record ContainerSpec(
         String image,
@@ -38,14 +39,15 @@ public record ContainerSpec(
         List<Mount> mounts,
         List<Bind> binds,
         List<String> extraHosts,
-        LogConfig logConfig
+        LogConfig logConfig,
+        boolean privileged
 ) {
     /**
      * Creates a minimal spec with just the image name.
      * All other fields will be null or empty lists.
      */
     public ContainerSpec(String image) {
-        this(image, null, List.of(), null, null, null, Map.of(), List.of(), null, List.of(), List.of(), List.of(), null);
+        this(image, null, List.of(), null, null, null, Map.of(), List.of(), null, List.of(), List.of(), List.of(), null, false);
     }
 
     /**
