@@ -1,6 +1,11 @@
 ## [Unreleased]
 
 
+### Features
+
+* **bedrock-runtime:** add stub for Converse and InvokeModel ([#87](https://github.com/floci-io/floci/issues/87))
+
+
 ### Bug Fixes
 
 * unify service metadata behind a descriptor-backed catalog for enablement, routing, and storage lookups

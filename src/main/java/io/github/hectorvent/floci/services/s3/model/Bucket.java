@@ -26,6 +26,7 @@ public class Bucket {
     private String publicAccessBlockConfiguration; // XML string
     private String ownershipControlsConfiguration; // XML string
     private String region;
+    private WebsiteConfiguration websiteConfiguration;
 
     public Bucket() {
         this.tags = new HashMap<>();
@@ -90,4 +91,7 @@ public class Bucket {
 
     public String getRegion() { return region; }
     public void setRegion(String region) { this.region = region; }
+
+    public WebsiteConfiguration getWebsiteConfiguration() { return websiteConfiguration; }
+    public void setWebsiteConfiguration(WebsiteConfiguration websiteConfiguration) { this.websiteConfiguration = websiteConfiguration; }
 }

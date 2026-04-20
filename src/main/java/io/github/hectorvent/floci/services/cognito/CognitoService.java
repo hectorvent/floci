@@ -411,6 +411,22 @@ public class CognitoService {
         userStore.put(userKey(userPoolId, user.getUsername()), user);
     }
 
+    public void adminEnableUser(String userPoolId, String username) {
+        CognitoUser user = adminGetUser(userPoolId, username);
+        user.setEnabled(true);
+        user.setLastModifiedDate(System.currentTimeMillis() / 1000L);
+        userStore.put(userKey(userPoolId, user.getUsername()), user);
+        LOG.infov("Enabled user {0} in pool {1}", user.getUsername(), userPoolId);
+    }
+
+    public void adminDisableUser(String userPoolId, String username) {
+        CognitoUser user = adminGetUser(userPoolId, username);
+        user.setEnabled(false);
+        user.setLastModifiedDate(System.currentTimeMillis() / 1000L);
+        userStore.put(userKey(userPoolId, user.getUsername()), user);
+        LOG.infov("Disabled user {0} in pool {1}", user.getUsername(), userPoolId);
+    }
+
     public List<CognitoUser> listUsers(String userPoolId, String filter) {
         String prefix = userPoolId + "::";
         List<CognitoUser> all = userStore.scan(k -> k.startsWith(prefix));
@@ -635,6 +651,9 @@ public class CognitoService {
         }
 
         CognitoUser user = adminGetUser(pool.getId(), username);
+        if (!user.isEnabled()) {
+            throw new AwsException("UserNotConfirmedException", "User is disabled", 400);
+        }
         if (user.getSrpVerifier() == null) {
             throw new AwsException("NotAuthorizedException", "User does not support SRP auth", 400);
         }
@@ -687,6 +706,9 @@ public class CognitoService {
         }
 
         CognitoUser user = adminGetUser(pool.getId(), username);
+        if (!user.isEnabled()) {
+            throw new AwsException("UserNotConfirmedException", "User is disabled", 400);
+        }
         if (user.getSrpVerifier() == null) {
             throw new AwsException("NotAuthorizedException", "User does not support SRP auth", 400);
         }

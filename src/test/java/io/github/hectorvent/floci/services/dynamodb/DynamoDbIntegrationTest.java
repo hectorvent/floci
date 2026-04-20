@@ -1196,6 +1196,139 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
+    void updateItemConditionalCheckFailedNoReturnValues() {
+        // Create a table for this test
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable1",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    
+    given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable1",
+                    "Item": {"pk": {"S": "k1"}, "testAttr": {"S": "abc"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable1",
+                    "Key": {"pk": {"S": "k1"}},
+                    "UpdateExpression": "SET testAttr = :val",
+                    "ExpressionAttributeValues": {":val": {"S": "123"}},
+                    "ConditionExpression": "attribute_exists(nonExistent)"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ConditionalCheckFailedException"))
+            .body("message", equalTo("The conditional request failed"))
+            .body("Item", is(nullValue()));
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ConditionCheckTable1"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    
+
+    @Test
+    void updateItemConditionalCheckFailedAllOldReturnValues() {
+                // Create a table for this test
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable2",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable2",
+                    "Item": {"pk": {"S": "k1"}, "testAttr": {"S": "abc"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ConditionCheckTable2",
+                    "Key": {"pk": {"S": "k1"}},
+                    "UpdateExpression": "SET testAttr = :val",
+                    "ExpressionAttributeValues": {":val": {"S": "123"}},
+                    "ConditionExpression": "attribute_exists(nonExistent)",
+                    "ReturnValuesOnConditionCheckFailure" : "ALL_OLD"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .body("__type", equalTo("ConditionalCheckFailedException"))
+            .body("message", equalTo("The conditional request failed"))
+            .body("Item.testAttr.S", equalTo("abc"));
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ConditionCheckTable2"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     void updateAndDescribeContinuousBackups() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
@@ -1324,6 +1457,111 @@ class DynamoDbIntegrationTest {
     }
 
     @Test
+    @Order(31)
+    void updateItemSetArithmeticIncrement() {
+        // Create table
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "KeySchema": [{"AttributeName": "PK", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "PK", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST"
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // First call: if_not_exists(counter, :start) + :inc → 60000001
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}},
+                    "UpdateExpression": "SET customerId = if_not_exists(customerId, :start) + :inc",
+                    "ExpressionAttributeValues": {
+                        ":start": {"N": "60000000"},
+                        ":inc": {"N": "1"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify first increment
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.customerId.N", equalTo("60000001"));
+
+        // Second call: existing (60000001) + 1 → 60000002
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}},
+                    "UpdateExpression": "SET customerId = if_not_exists(customerId, :start) + :inc",
+                    "ExpressionAttributeValues": {
+                        ":start": {"N": "60000000"},
+                        ":inc": {"N": "1"}
+                    }
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify second increment
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "ArithmeticTable",
+                    "Key": {"PK": {"S": "LastId"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.customerId.N", equalTo("60000002"));
+
+        // Cleanup
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "ArithmeticTable"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     void unsupportedOperation() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateGlobalTable")
@@ -1365,6 +1603,83 @@ class DynamoDbIntegrationTest {
         String errorCrc = errorResponse.getHeader("X-Amz-Crc32");
         assertNotNull(errorCrc, "Error response must carry X-Amz-Crc32");
         assertEquals(Long.toString(crc32Of(errorResponse.asByteArray())), errorCrc);
+    }
+
+    @Test
+    void updateItemWithSamePartitionKeyButDifferentSortKeyCreatesSeparateItems() {
+        // Reproduces GitHub issue #498: UpdateItem on a table with a sort key
+        // overwrites the existing row instead of creating a new one when the
+        // partition key matches but the sort key differs.
+        String tableName = "CoordinationTable";
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "%s",
+                    "KeySchema": [
+                        {"AttributeName": "GroupKey", "KeyType": "HASH"},
+                        {"AttributeName": "Id", "KeyType": "RANGE"}
+                    ],
+                    "AttributeDefinitions": [
+                        {"AttributeName": "GroupKey", "AttributeType": "S"},
+                        {"AttributeName": "Id", "AttributeType": "S"}
+                    ],
+                    "ProvisionedThroughput": {"ReadCapacityUnits": 1, "WriteCapacityUnits": 1}
+                }
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "%s",
+                    "Key": {"GroupKey": {"S": "leader"}, "Id": {"S": "app1"}},
+                    "UpdateExpression": "SET Owner = :1",
+                    "ExpressionAttributeValues": {":1": {"S": "owner-app1"}}
+                }
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "%s",
+                    "Key": {"GroupKey": {"S": "leader"}, "Id": {"S": "app2"}},
+                    "UpdateExpression": "SET Owner = :1",
+                    "ExpressionAttributeValues": {":1": {"S": "owner-app2"}}
+                }
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.Scan")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "%s"}
+                """.formatted(tableName))
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .body("Count", equalTo(2))
+            .body("ScannedCount", equalTo(2));
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "%s"}
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
     }
 
     private static long crc32Of(byte[] bytes) {

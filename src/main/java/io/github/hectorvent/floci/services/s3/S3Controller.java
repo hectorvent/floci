@@ -19,6 +19,7 @@ import io.github.hectorvent.floci.services.s3.model.Part;
 import io.github.hectorvent.floci.services.s3.model.S3Checksum;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.s3.model.TopicNotification;
+import io.github.hectorvent.floci.services.s3.model.WebsiteConfiguration;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
@@ -143,6 +144,9 @@ public class S3Controller {
             if (hasQueryParam(uriInfo, "object-lock")) {
                 return handlePutObjectLockConfiguration(bucket, body);
             }
+            if (hasQueryParam(uriInfo, "website")) {
+                return handlePutBucketWebsite(bucket, body);
+            }
             if (hasQueryParam(uriInfo, "policy")) {
                 s3Service.putBucketPolicy(bucket, new String(body, StandardCharsets.UTF_8));
                 return Response.ok().build();
@@ -210,6 +214,10 @@ public class S3Controller {
                 s3Service.deleteBucketTagging(bucket);
                 return Response.noContent().build();
             }
+            if (hasQueryParam(uriInfo, "website")) {
+                s3Service.deleteBucketWebsite(bucket);
+                return Response.noContent().build();
+            }
             if (hasQueryParam(uriInfo, "policy")) {
                 s3Service.deleteBucketPolicy(bucket);
                 return Response.noContent().build();
@@ -254,6 +262,7 @@ public class S3Controller {
                                 @QueryParam("encoding-type") String encodingType,
                                 @QueryParam("key-marker") String keyMarker,
                                 @Context UriInfo uriInfo) {
+        validateRawUri();
         try {
             if (hasQueryParam(uriInfo, "uploads")) {
                 return handleListMultipartUploads(bucket);
@@ -276,6 +285,9 @@ public class S3Controller {
             if (hasQueryParam(uriInfo, "object-lock")) {
                 return handleGetObjectLockConfiguration(bucket);
             }
+            if (hasQueryParam(uriInfo, "website")) {
+                return handleGetBucketWebsite(bucket);
+            }
             if (hasQueryParam(uriInfo, "policy")) {
                 return Response.ok(s3Service.getBucketPolicy(bucket)).build();
             }
@@ -296,6 +308,28 @@ public class S3Controller {
             }
             if (hasQueryParam(uriInfo, "ownershipControls")) {
                 return Response.ok(s3Service.getBucketOwnershipControls(bucket)).build();
+            }
+
+            // --- Website Hosting Redirection Logic ---
+            if (uriInfo.getQueryParameters().isEmpty() || (uriInfo.getQueryParameters().size() == 1 && hasQueryParam(uriInfo, "list-type"))) {
+                try {
+                    WebsiteConfiguration webConfig = s3Service.getBucketWebsite(bucket);
+                    if (webConfig.getIndexDocument() != null) {
+                        try {
+                            S3Object indexObj = s3Service.getObject(bucket, webConfig.getIndexDocument());
+                            return Response.ok(indexObj.getData())
+                                    .type(indexObj.getContentType())
+                                    .header("Content-Length", indexObj.getSize())
+                                    .header("ETag", indexObj.getETag())
+                                    .header("x-amz-website-redirect-location", "index")
+                                    .build();
+                        } catch (AwsException e) {
+                            // If index.html is missing, we could serve ErrorDocument, but for now we fall back to listObjects
+                        }
+                    }
+                } catch (AwsException e) {
+                    // Bucket is not a website, continue to listObjects
+                }
             }
 
             int max = (maxKeys != null && maxKeys > 0) ? maxKeys : 1000;
@@ -1681,6 +1715,7 @@ public class S3Controller {
             throw new AwsException("InvalidArgument",
                     "Bucket POST must contain a field named 'key'.", 400);
         }
+        validateKeyNoTraversal(key);
 
         if (fileData == null) {
             throw new AwsException("InvalidArgument",
@@ -1955,6 +1990,62 @@ public class S3Controller {
             return uriInfo.getPathParameters().getFirst("key");
         }
         String rawKey = rawPath.substring(prefixIndex + bucketPrefix.length());
-        return URLDecoder.decode(rawKey, StandardCharsets.UTF_8);
+        String key = URLDecoder.decode(rawKey, StandardCharsets.UTF_8);
+        validateKeyNoTraversal(key);
+        return key;
+    }
+
+    private void validateKeyNoTraversal(String key) {
+        if (key == null) return;
+        try {
+            // Use a dummy root to mirror the service pattern, allowing leading slashes but keeping them in sandbox
+            java.nio.file.Path dummyRoot = java.nio.file.Path.of("/s3-sandbox");
+            String safeKey = key;
+            while (safeKey.startsWith("/")) {
+                safeKey = safeKey.substring(1);
+            }
+            java.nio.file.Path resolved = dummyRoot.resolve(safeKey).normalize();
+            if (!resolved.startsWith(dummyRoot)) {
+                throw new AwsException("InvalidKey", "The specified key is invalid.", 400);
+            }
+        } catch (java.nio.file.InvalidPathException e) {
+            throw new AwsException("InvalidKey", "The specified key contains invalid characters.", 400);
+        }
+    }
+
+    private void validateRawUri() {
+        String rawUri = currentVertxRequest.getCurrent().request().uri();
+        String lower = rawUri.toLowerCase();
+        if (lower.contains("/..") || lower.contains("../") || lower.contains("%2e%2e") || lower.contains("%2e.") || lower.contains(".%2e")) {
+            throw new AwsException("InvalidKey", "The specified key is invalid.", 400);
+        }
+    }
+
+    private Response handleGetBucketWebsite(String bucket) {
+        WebsiteConfiguration config = s3Service.getBucketWebsite(bucket);
+        XmlBuilder xml = new XmlBuilder()
+                .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                .start("WebsiteConfiguration", AwsNamespaces.S3)
+                .start("IndexDocument")
+                .elem("Suffix", config.getIndexDocument())
+                .end("IndexDocument");
+        if (config.getErrorDocument() != null) {
+            xml.start("ErrorDocument")
+               .elem("Key", config.getErrorDocument())
+               .end("ErrorDocument");
+        }
+        xml.end("WebsiteConfiguration");
+        return Response.ok(xml.build()).build();
+    }
+
+    private Response handlePutBucketWebsite(String bucket, byte[] body) {
+        String xml = new String(body, StandardCharsets.UTF_8);
+        String indexDoc = XmlParser.extractFirst(xml, "Suffix", null);
+        String errorDoc = XmlParser.extractFirst(xml, "Key", null);
+        if (indexDoc == null) {
+            throw new AwsException("MalformedXML", "IndexDocument.Suffix is required.", 400);
+        }
+        s3Service.putBucketWebsite(bucket, new WebsiteConfiguration(indexDoc, errorDoc));
+        return Response.ok().build();
     }
 }

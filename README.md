@@ -55,6 +55,7 @@
 | Kinesis (streams, shards, fan-out) | ✅ | ⚠️ Partial |
 | KMS (sign, verify, re-encrypt) | ✅ | ⚠️ Partial |
 | ECS (clusters, services, tasks) | ✅ | ❌ |
+| EKS (clusters, mock + real k3s) | ✅ | ❌ |
 | EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
@@ -78,7 +79,7 @@ flowchart LR
         end
 
         subgraph Containers ["Container Services  🐳"]
-            C["Lambda\nElastiCache\nRDS\nECS\nMSK"]
+            C["Lambda\nElastiCache\nRDS\nECS\nMSK\nEKS"]
         end
 
         Router --> Stateless
@@ -132,12 +133,30 @@ flowchart LR
 | **OpenSearch** | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
 | **AppConfig** | In-process | Applications, environments, profiles, hosted configuration versions, deployments |
 | **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
+| **Bedrock Runtime** | In-process (stub) | Dummy Converse and InvokeModel responses for local development; streaming returns 501 |
+| **EKS** | **Real Docker containers** (mock mode available) | Clusters, tagging; real mode starts k3s per cluster with a live Kubernetes API server |
 
-> **Lambda, ElastiCache, RDS, MSK, and ECS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
+> **Lambda, ElastiCache, RDS, MSK, ECS, and EKS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**33 AWS services supported.**
+**35 AWS services supported.**
+
+## Persistence & Storage Modes
+
+Floci features a flexible storage architecture designed to balance developer productivity, performance, and data durability. You can configure the storage mode globally via `FLOCI_STORAGE_MODE` or override it for specific services.
+
+| Mode | Behavior | Best for... | Durability |
+|:---:|---|---|:---:|
+| **`memory`** | Entirely in-RAM. Data is lost when the container stops. | Speed, ephemeral testing, CI pipelines. | ❌ None |
+| **`persistent`** | Data is loaded at startup and flushed to disk on graceful shutdown. | Simple local dev with state preservation. | ⚠️ Medium |
+| **`hybrid`** | **(Default)** In-memory performance with periodic async flushing (every 5s). | The perfect balance of speed and safety. | ✅ Good |
+| **`wal`** | Write-Ahead Log. Every mutation is logged to disk before responding. | Maximum durability for critical state. | 💎 Highest |
+
+> [!TIP]
+> Use **`hybrid`** (default) for a "it just works" experience that feels like production but survives container restarts. For ephemeral integration tests where state doesn't matter, switch to **`memory`** for extreme performance.
+
+For more details, visit the [Storage Configuration documentation](https://floci.io/floci/configuration/storage/).
 
 ## Quick Start
 
@@ -163,6 +182,18 @@ services:
 docker compose up
 ```
 
+Or run Floci directly with Docker:
+
+```bash
+docker run -d --name floci \
+  -p 4566:4566 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e FLOCI_DEFAULT_REGION=us-east-1 \
+  -e FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK=bridge \
+  -u root \
+  hectorvent/floci:latest
+```
+
 All services are available at `http://localhost:4566`. Use any AWS region — credentials can be anything.
 
 ```bash
@@ -183,34 +214,220 @@ Point your existing AWS SDK at `http://localhost:4566` — no other changes need
 
 ```java
 // Java (AWS SDK v2)
-DynamoDbClient client = DynamoDbClient.builder()
+var client = DynamoDbClient.builder()
     .endpointOverride(URI.create("http://localhost:4566"))
     .region(Region.US_EAST_1)
     .credentialsProvider(StaticCredentialsProvider.create(
         AwsBasicCredentials.create("test", "test")))
     .build();
+
+client.createTable(b -> b
+    .tableName("demo-table")
+    .billingMode(BillingMode.PAY_PER_REQUEST)
+    .attributeDefinitions(
+        AttributeDefinition.builder().attributeName("pk").attributeType(ScalarAttributeType.S).build())
+    .keySchema(
+        KeySchemaElement.builder().attributeName("pk").keyType(KeyType.HASH).build()));
+
+client.putItem(b -> b
+    .tableName("demo-table")
+    .item(Map.of("pk", AttributeValue.fromS("item-1"))));
+
+System.out.println(client.listTables().tableNames());
 ```
 
 ```python
 # Python (boto3)
 import boto3
-client = boto3.client("s3",
+client = boto3.client("ssm",
     endpoint_url="http://localhost:4566",
     region_name="us-east-1",
     aws_access_key_id="test",
     aws_secret_access_key="test")
+
+client.put_parameter(
+    Name="/demo/app/message",
+    Value="hello from floci",
+    Type="String",
+    Overwrite=True,
+)
+
+response = client.get_parameter(Name="/demo/app/message")
+print(response["Parameter"]["Value"])
 ```
 
 ```javascript
+// consumer.mjs
 // Node.js (AWS SDK v3)
-import { S3Client } from "@aws-sdk/client-s3";
+import {DeleteMessageCommand, ReceiveMessageCommand, SQSClient,} from "@aws-sdk/client-sqs";
 
-const client = new S3Client({
+const client = new SQSClient({
     endpoint: "http://localhost:4566",
     region: "us-east-1",
-    credentials: { accessKeyId: "test", secretAccessKey: "test" },
-    forcePathStyle: true,
+    credentials: {accessKeyId: "test", secretAccessKey: "test"},
 });
+
+const QUEUE_URL = "http://localhost:4566/000000000000/demo-queue";
+
+const response = await client.send(
+    new ReceiveMessageCommand({
+        QueueUrl: QUEUE_URL,
+        MaxNumberOfMessages: 1,
+        WaitTimeSeconds: 5,
+    }),
+);
+
+if (response.Messages) {
+    for (const msg of response.Messages) {
+        console.log("Message received:", msg.Body);
+
+        await client.send(
+            new DeleteMessageCommand({
+                QueueUrl: QUEUE_URL,
+                ReceiptHandle: msg.ReceiptHandle,
+            }),
+        );
+    }
+}
+
+```
+```javascript
+// producer.mjs
+// Node.js (AWS SDK v3)
+import {SendMessageCommand, SQSClient} from "@aws-sdk/client-sqs";
+
+const client = new SQSClient({
+    endpoint: "http://localhost:4566",
+    region: "us-east-1",
+    credentials: {accessKeyId: "test", secretAccessKey: "test"},
+});
+
+const QUEUE_URL = "http://localhost:4566/000000000000/demo-queue";
+
+await client.send(
+    new SendMessageCommand({
+        QueueUrl: QUEUE_URL,
+        MessageBody: "hello from producer",
+    }),
+);
+
+console.log("Message sent");
+
+```
+
+```go
+// Go (AWS SDK v2)
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+func main() {
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider("test", "test", ""),
+		),
+		config.WithBaseEndpoint("http://localhost:4566"),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.UsePathStyle = true
+	})
+
+	_, err = client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String("demo-bucket"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: aws.String("demo-bucket"),
+		Key:    aws.String("demo.txt"),
+		Body:   strings.NewReader("hello from floci"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	out, err := client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		Bucket: aws.String("demo-bucket"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(out.Contents) > 0 {
+		fmt.Println(*out.Contents[0].Key)
+	}
+}
+
+```
+
+```rust
+// Rust (AWS SDK)
+use aws_sdk_secretsmanager::config::{Credentials, Region};
+use aws_sdk_secretsmanager::Client;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new("test", "test", None, None, "floci"))
+        .endpoint_url("http://localhost:4566")
+        .load()
+        .await;
+
+    let client = Client::new(&config);
+
+    client
+        .create_secret()
+        .name("demo/secret")
+        .secret_string("hello from floci")
+        .send()
+        .await?;
+
+    let secret = client
+        .get_secret_value()
+        .secret_id("demo/secret")
+        .send()
+        .await?;
+
+    println!("{}", secret.secret_string().unwrap());
+
+    Ok(())
+}
+```
+
+```bash
+# Bash (AWS CLI)
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_DEFAULT_REGION=us-east-1
+
+tmp_file="$(mktemp)"
+echo "hello from floci" > "$tmp_file"
+
+aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
+aws --endpoint-url http://localhost:4566 s3 cp "$tmp_file" s3://my-bucket/demo.txt
+aws --endpoint-url http://localhost:4566 s3 ls s3://my-bucket
+
+# Cleanup
+aws --endpoint-url http://localhost:4566 s3 rm s3://my-bucket/demo.txt
+rm -f "$tmp_file"
 ```
 
 ## Compatibility Testing
@@ -226,12 +443,13 @@ Available compatibility test modules:
 | `sdk-test-java` | Java 17 | AWS SDK for Java v2 | 889 |
 | `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 | 360 |
 | `sdk-test-python` | Python 3 | boto3 | 264 |
-| `sdk-test-go` | Go | AWS SDK for Go v2 | 120 |
-| `sdk-test-awscli` | Bash | AWS CLI v2 | 138 |
-| `sdk-test-rust` | Rust | AWS SDK for Rust | 69 |
+| `sdk-test-go` | Go | AWS SDK for Go v2 | 136 |
+| `sdk-test-awscli` | Bash | AWS CLI v2 | 145 |
+| `sdk-test-rust` | Rust | AWS SDK for Rust | 86 |
 | `compat-terraform` | Terraform | v1.10+ | 14 |
 | `compat-opentofu` | OpenTofu | v1.9+ | 14 |
-| `compat-cdk` | AWS CDK | v2+ | 5 |
+| `compat-cdk` | AWS CDK | v2+ | 17 |
+
 
 ## Image Tags
 

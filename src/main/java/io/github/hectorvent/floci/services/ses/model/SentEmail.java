@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.ses.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -13,6 +14,9 @@ public class SentEmail {
 
     @JsonProperty("MessageId")
     private String messageId;
+
+    @JsonProperty("Region")
+    private String region;
 
     @JsonProperty("Source")
     private String source;
@@ -29,29 +33,58 @@ public class SentEmail {
     @JsonProperty("Subject")
     private String subject;
 
-    @JsonProperty("Body")
-    private String body;
+    @JsonProperty("ReplyToAddresses")
+    private List<String> replyToAddresses;
+
+    @JsonProperty("BodyText")
+    @JsonAlias("Body")
+    private String bodyText;
+
+    @JsonProperty("BodyHtml")
+    private String bodyHtml;
+
+    @JsonProperty("RawData")
+    private String rawData;
 
     @JsonProperty("SentAt")
     private Instant sentAt;
 
     public SentEmail() {}
 
-    public SentEmail(String messageId, String source, List<String> toAddresses,
-                     List<String> ccAddresses, List<String> bccAddresses,
-                     String subject, String body) {
+    /** Constructor for Simple / Template content. */
+    public SentEmail(String messageId, String region, String source,
+                     List<String> toAddresses, List<String> ccAddresses,
+                     List<String> bccAddresses, List<String> replyToAddresses,
+                     String subject, String bodyText, String bodyHtml) {
         this.messageId = messageId;
+        this.region = region;
         this.source = source;
         this.toAddresses = toAddresses;
         this.ccAddresses = ccAddresses;
         this.bccAddresses = bccAddresses;
+        this.replyToAddresses = replyToAddresses;
         this.subject = subject;
-        this.body = body;
+        this.bodyText = bodyText;
+        this.bodyHtml = bodyHtml;
+        this.sentAt = Instant.now();
+    }
+
+    /** Constructor for Raw content. */
+    public SentEmail(String messageId, String region, String source,
+                     List<String> destinations, String rawData) {
+        this.messageId = messageId;
+        this.region = region;
+        this.source = source;
+        this.toAddresses = destinations;
+        this.rawData = rawData;
         this.sentAt = Instant.now();
     }
 
     public String getMessageId() { return messageId; }
     public void setMessageId(String messageId) { this.messageId = messageId; }
+
+    public String getRegion() { return region; }
+    public void setRegion(String region) { this.region = region; }
 
     public String getSource() { return source; }
     public void setSource(String source) { this.source = source; }
@@ -68,8 +101,19 @@ public class SentEmail {
     public String getSubject() { return subject; }
     public void setSubject(String subject) { this.subject = subject; }
 
-    public String getBody() { return body; }
-    public void setBody(String body) { this.body = body; }
+    public List<String> getReplyToAddresses() { return replyToAddresses; }
+    public void setReplyToAddresses(List<String> replyToAddresses) { this.replyToAddresses = replyToAddresses; }
+
+    public String getBodyText() { return bodyText; }
+    public void setBodyText(String bodyText) { this.bodyText = bodyText; }
+
+    public String getBodyHtml() { return bodyHtml; }
+    public void setBodyHtml(String bodyHtml) { this.bodyHtml = bodyHtml; }
+
+    public String getRawData() { return rawData; }
+    public void setRawData(String rawData) { this.rawData = rawData; }
+
+    public boolean isRaw() { return rawData != null; }
 
     public Instant getSentAt() { return sentAt; }
     public void setSentAt(Instant sentAt) { this.sentAt = sentAt; }

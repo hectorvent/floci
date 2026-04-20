@@ -53,6 +53,8 @@ public interface EmulatorConfig {
 
     ServicesConfig services();
 
+    DockerConfig docker();
+
     InitHooksConfig initHooks();
 
     interface StorageConfig {
@@ -232,6 +234,8 @@ public interface EmulatorConfig {
         AppConfigDataServiceConfig appconfigdata();
         EcrServiceConfig ecr();
         ResourceGroupsTaggingServiceConfig tagging();
+        BedrockRuntimeServiceConfig bedrockRuntime();
+        EksServiceConfig eks();
     }
 
     interface SsmServiceConfig {
@@ -466,6 +470,11 @@ public interface EmulatorConfig {
         boolean enabled();
     }
 
+    interface BedrockRuntimeServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
     interface EcrServiceConfig {
         @WithDefault("true")
         boolean enabled();
@@ -566,6 +575,36 @@ public interface EmulatorConfig {
         boolean enabled();
     }
 
+    interface EksServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /** When true, clusters go straight to ACTIVE without starting real Docker containers. */
+        @WithDefault("false")
+        boolean mock();
+
+        @WithDefault("k3s")
+        String provider();
+
+        @WithDefault("rancher/k3s:latest")
+        String defaultImage();
+
+        @WithDefault("6500")
+        int apiServerBasePort();
+
+        @WithDefault("6599")
+        int apiServerMaxPort();
+
+        @WithDefault("./data/eks")
+        String dataPath();
+
+        /** Docker network to attach k3s containers to. Empty = default bridge. */
+        Optional<String> dockerNetwork();
+
+        @WithDefault("false")
+        boolean keepRunningOnShutdown();
+    }
+
     interface InitHooksConfig {
         @WithDefault("/bin/sh")
         String shellExecutable();
@@ -575,5 +614,25 @@ public interface EmulatorConfig {
 
         @WithDefault("30")
         long timeoutSeconds();
+    }
+
+    /**
+     * Configuration for Docker container management shared across all services
+     * that spawn Docker containers (Lambda, RDS, ElastiCache, ECS, ECR, MSK).
+     */
+    interface DockerConfig {
+        /**
+         * Maximum size of each container log file before rotation.
+         * Uses Docker's json-file log driver max-size option format (e.g., "10m", "100k", "1g").
+         */
+        @WithDefault("10m")
+        String logMaxSize();
+
+        /**
+         * Maximum number of rotated log files to retain per container.
+         * When this limit is reached, the oldest log file is deleted.
+         */
+        @WithDefault("3")
+        String logMaxFile();
     }
 }

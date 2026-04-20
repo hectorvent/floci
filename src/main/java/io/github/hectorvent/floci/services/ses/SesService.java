@@ -1,8 +1,6 @@
 package io.github.hectorvent.floci.services.ses;
 
-import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
-import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.ses.model.Identity;
@@ -26,28 +24,23 @@ public class SesService {
     private final StorageBackend<String, Identity> identityStore;
     private final StorageBackend<String, SentEmail> emailStore;
     private final StorageBackend<String, Boolean> accountSettingsStore;
-    private final RegionResolver regionResolver;
 
     @Inject
-    public SesService(StorageFactory storageFactory, EmulatorConfig config,
-                      RegionResolver regionResolver) {
+    public SesService(StorageFactory storageFactory) {
         this.identityStore = storageFactory.create("ses", "ses-identities.json",
                 new TypeReference<Map<String, Identity>>() {});
         this.emailStore = storageFactory.create("ses", "ses-emails.json",
                 new TypeReference<Map<String, SentEmail>>() {});
         this.accountSettingsStore = storageFactory.create("ses", "ses-account-settings.json",
                 new TypeReference<Map<String, Boolean>>() {});
-        this.regionResolver = regionResolver;
     }
 
     SesService(StorageBackend<String, Identity> identityStore,
                StorageBackend<String, SentEmail> emailStore,
-               StorageBackend<String, Boolean> accountSettingsStore,
-               RegionResolver regionResolver) {
+               StorageBackend<String, Boolean> accountSettingsStore) {
         this.identityStore = identityStore;
         this.emailStore = emailStore;
         this.accountSettingsStore = accountSettingsStore;
-        this.regionResolver = regionResolver;
     }
 
     public Identity verifyEmailIdentity(String emailAddress, String region) {
@@ -101,8 +94,8 @@ public class SesService {
     }
 
     public String sendEmail(String source, List<String> toAddresses, List<String> ccAddresses,
-                            List<String> bccAddresses, String subject, String bodyText,
-                            String bodyHtml, String region) {
+                            List<String> bccAddresses, List<String> replyToAddresses,
+                            String subject, String bodyText, String bodyHtml, String region) {
         if (source == null || source.isBlank()) {
             throw new AwsException("InvalidParameterValue", "Source email is required.", 400);
         }
@@ -114,8 +107,8 @@ public class SesService {
         }
 
         String messageId = UUID.randomUUID().toString();
-        String body = bodyHtml != null ? bodyHtml : bodyText;
-        SentEmail email = new SentEmail(messageId, source, toAddresses, ccAddresses, bccAddresses, subject, body);
+        SentEmail email = new SentEmail(messageId, region, source, toAddresses, ccAddresses,
+                bccAddresses, replyToAddresses, subject, bodyText, bodyHtml);
         emailStore.put("email::" + region + "::" + messageId, email);
 
         LOG.infov("SES email sent: from={0}, to={1}, subject={2}, messageId={3}",
@@ -124,10 +117,16 @@ public class SesService {
     }
 
     public String sendRawEmail(String source, List<String> destinations, String rawMessage, String region) {
+        if (source == null || source.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "Source email is required.", 400);
+        }
+        if (rawMessage == null || rawMessage.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "RawMessage.Data is required.", 400);
+        }
         String messageId = UUID.randomUUID().toString();
-        SentEmail email = new SentEmail(messageId, source,
+        SentEmail email = new SentEmail(messageId, region, source,
                 destinations != null ? destinations : Collections.emptyList(),
-                null, null, "(raw)", rawMessage);
+                rawMessage);
         emailStore.put("email::" + region + "::" + messageId, email);
 
         LOG.infov("SES raw email sent: from={0}, messageId={1}", source, messageId);
@@ -196,18 +195,13 @@ public class SesService {
         return emails;
     }
 
-    public List<SentEmail> getEmails(String region) {
-        String prefix = "email::" + region + "::";
-        return emailStore.scan(k -> k.startsWith(prefix));
+    public List<SentEmail> getEmails() {
+        return emailStore.scan(k -> k.startsWith("email::"));
     }
 
-    public void clearEmails(String region) {
-        String prefix = "email::" + region + "::";
-        List<String> keys = new ArrayList<>(emailStore.keys().stream()
-                .filter(k -> k.startsWith(prefix))
-                .toList());
-        keys.forEach(emailStore::delete);
-        LOG.infov("Cleared all SES emails in region {0}", region);
+    public void clearEmails() {
+        emailStore.clear();
+        LOG.info("Cleared all SES emails");
     }
 
     public boolean isAccountSendingEnabled(String region) {

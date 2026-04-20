@@ -18,6 +18,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Event;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -63,6 +64,7 @@ public class S3Service {
     private final Instance<LambdaService> lambdaServiceProvider;
     private final LambdaInvoker lambdaInvoker;
     private final EventBridgeService eventBridgeService;
+    private final Event<S3ObjectUpdatedEvent> s3UpdatedEvent;
     private final RegionResolver regionResolver;
     private final String baseUrl;
     private final ObjectMapper objectMapper;
@@ -72,6 +74,7 @@ public class S3Service {
                      SqsService sqsService, SnsService snsService,
                      Instance<LambdaService> lambdaServiceProvider,
                      EventBridgeService eventBridgeService,
+                     Event<S3ObjectUpdatedEvent> s3UpdatedEvent,
                      RegionResolver regionResolver,
                      ObjectMapper objectMapper) {
         this(
@@ -84,7 +87,7 @@ public class S3Service {
                 Path.of(config.storage().persistentPath()).resolve("s3"),
                 "memory".equals(config.storage().services().s3().mode().orElse(config.storage().mode())),
                 sqsService, snsService, null, lambdaServiceProvider, null,
-                eventBridgeService,
+                eventBridgeService, s3UpdatedEvent,
                 regionResolver,
                 config.effectiveBaseUrl(), objectMapper
         );
@@ -97,7 +100,7 @@ public class S3Service {
               StorageBackend<String, S3Object> objectStore,
               Path dataRoot, boolean inMemory) {
         this(bucketStore, objectStore, dataRoot, inMemory, null, null, null, null, null, null, null,
-                "http://localhost:4566", new ObjectMapper());
+                null, "http://localhost:4566", new ObjectMapper());
     }
 
     S3Service(StorageBackend<String, Bucket> bucketStore,
@@ -105,8 +108,8 @@ public class S3Service {
               Path dataRoot, boolean inMemory,
               LambdaService lambdaService,
               RegionResolver regionResolver) {
-        this(bucketStore, objectStore, dataRoot, inMemory, null, null, lambdaService, null, null, null, regionResolver,
-                "http://localhost:4566", new ObjectMapper());
+        this(bucketStore, objectStore, dataRoot, inMemory, null, null, lambdaService, null, null, null, null,
+                regionResolver, "http://localhost:4566", new ObjectMapper());
     }
 
     S3Service(StorageBackend<String, Bucket> bucketStore,
@@ -114,8 +117,8 @@ public class S3Service {
               Path dataRoot, boolean inMemory,
               LambdaInvoker lambdaInvoker,
               RegionResolver regionResolver) {
-        this(bucketStore, objectStore, dataRoot, inMemory, null, null, null, null, lambdaInvoker, null, regionResolver,
-                "http://localhost:4566", new ObjectMapper());
+        this(bucketStore, objectStore, dataRoot, inMemory, null, null, null, null, lambdaInvoker, null, null,
+                regionResolver, "http://localhost:4566", new ObjectMapper());
     }
 
     private S3Service(StorageBackend<String, Bucket> bucketStore,
@@ -125,6 +128,7 @@ public class S3Service {
                       Instance<LambdaService> lambdaServiceProvider,
                       LambdaInvoker lambdaInvoker,
                       EventBridgeService eventBridgeService,
+                      Event<S3ObjectUpdatedEvent> s3UpdatedEvent,
                       RegionResolver regionResolver, String baseUrl, ObjectMapper objectMapper) {
         this.bucketStore = bucketStore;
         this.objectStore = objectStore;
@@ -136,6 +140,7 @@ public class S3Service {
         this.lambdaServiceProvider = lambdaServiceProvider;
         this.lambdaInvoker = lambdaInvoker;
         this.eventBridgeService = eventBridgeService;
+        this.s3UpdatedEvent = s3UpdatedEvent;
         this.regionResolver = regionResolver;
         this.baseUrl = baseUrl;
         this.objectMapper = objectMapper;
@@ -804,6 +809,34 @@ public class S3Service {
         return bucket.getTags() != null ? bucket.getTags() : Map.of();
     }
 
+    public void putBucketWebsite(String bucketName, WebsiteConfiguration config) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket",
+                        "The specified bucket does not exist.", 404));
+        bucket.setWebsiteConfiguration(config);
+        bucketStore.put(bucketName, bucket);
+        LOG.infov("Set website configuration for bucket: {0}", bucketName);
+    }
+
+    public WebsiteConfiguration getBucketWebsite(String bucketName) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket",
+                        "The specified bucket does not exist.", 404));
+        if (bucket.getWebsiteConfiguration() == null) {
+            throw new AwsException("NoSuchWebsiteConfiguration", "The specified bucket does not have a website configuration.", 404);
+        }
+        return bucket.getWebsiteConfiguration();
+    }
+
+    public void deleteBucketWebsite(String bucketName) {
+        Bucket bucket = bucketStore.get(bucketName)
+                .orElseThrow(() -> new AwsException("NoSuchBucket",
+                        "The specified bucket does not exist.", 404));
+        bucket.setWebsiteConfiguration(null);
+        bucketStore.put(bucketName, bucket);
+        LOG.infov("Deleted website configuration for bucket: {0}", bucketName);
+    }
+
     public void deleteBucketTagging(String bucketName) {
         Bucket bucket = bucketStore.get(bucketName)
                 .orElseThrow(() -> new AwsException("NoSuchBucket",
@@ -1462,6 +1495,9 @@ public class S3Service {
     }
 
     private void fireNotifications(String bucketName, String key, String eventName, S3Object obj) {
+        if (s3UpdatedEvent != null && eventName.startsWith("ObjectCreated")) {
+            s3UpdatedEvent.fire(new S3ObjectUpdatedEvent(bucketName, key));
+        }
         if (sqsService == null && snsService == null && lambdaService == null
                 && lambdaServiceProvider == null && lambdaInvoker == null && eventBridgeService == null) {
             return;
@@ -1775,11 +1811,33 @@ public class S3Service {
     private static final String DATA_SUFFIX = ".s3data";
 
     private Path resolveObjectPath(String bucketName, String key) {
-        return dataRoot.resolve(bucketName).resolve(key + DATA_SUFFIX);
+        Path bucketDir = dataRoot.resolve(bucketName).normalize();
+        
+        String safeKey = key;
+        while (safeKey.startsWith("/")) {
+            safeKey = safeKey.substring(1);
+        }
+        
+        Path resolved = bucketDir.resolve(safeKey + DATA_SUFFIX).normalize();
+        if (!resolved.startsWith(bucketDir)) {
+            throw new AwsException("InvalidKey", "The specified key is invalid.", 400);
+        }
+        return resolved;
     }
 
     private Path resolveVersionedPath(String bucketName, String key, String versionId) {
-        return dataRoot.resolve(".versions").resolve(bucketName).resolve(key).resolve(versionId + DATA_SUFFIX);
+        Path baseDir = dataRoot.resolve(".versions").resolve(bucketName).normalize();
+        
+        String safeKey = key;
+        while (safeKey.startsWith("/")) {
+            safeKey = safeKey.substring(1);
+        }
+        
+        Path resolved = baseDir.resolve(safeKey).resolve(versionId + DATA_SUFFIX).normalize();
+        if (!resolved.startsWith(baseDir)) {
+            throw new AwsException("InvalidKey", "The specified key is invalid.", 400);
+        }
+        return resolved;
     }
 
     private void writeVersionedFile(String bucketName, String key, String versionId, byte[] data) {

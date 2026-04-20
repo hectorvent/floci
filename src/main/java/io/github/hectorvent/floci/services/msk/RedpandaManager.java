@@ -1,30 +1,29 @@
 package io.github.hectorvent.floci.services.msk;
 
-import com.github.dockerjava.api.DockerClient;
-import com.github.dockerjava.api.command.CreateContainerResponse;
-import com.github.dockerjava.api.model.Bind;
-import com.github.dockerjava.api.model.ExposedPort;
-import com.github.dockerjava.api.model.HostConfig;
-import com.github.dockerjava.api.model.Ports;
-import com.github.dockerjava.api.model.Volume;
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
 import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
-import io.github.hectorvent.floci.services.lambda.launcher.ImageCacheService;
+import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
+import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager.ContainerInfo;
+import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager.EndpointInfo;
+import io.github.hectorvent.floci.core.common.docker.ContainerLogStreamer;
+import io.github.hectorvent.floci.core.common.docker.ContainerSpec;
 import io.github.hectorvent.floci.services.msk.model.MskCluster;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.net.HttpURLConnection;
-import java.net.ServerSocket;
 import java.net.URI;
-import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @ApplicationScoped
 public class RedpandaManager {
@@ -33,26 +32,32 @@ public class RedpandaManager {
     private static final int KAFKA_PORT = 9092;
     private static final int ADMIN_PORT = 9644;
 
-    private final DockerClient dockerClient;
-    private final ImageCacheService imageCacheService;
+    private final ContainerBuilder containerBuilder;
+    private final ContainerLifecycleManager lifecycleManager;
+    private final ContainerLogStreamer logStreamer;
     private final ContainerDetector containerDetector;
     private final EmulatorConfig config;
+    private final RegionResolver regionResolver;
+    private final Map<String, Closeable> logStreams = new ConcurrentHashMap<>();
 
     @Inject
-    public RedpandaManager(DockerClient dockerClient,
-                           ImageCacheService imageCacheService,
+    public RedpandaManager(ContainerBuilder containerBuilder,
+                           ContainerLifecycleManager lifecycleManager,
+                           ContainerLogStreamer logStreamer,
                            ContainerDetector containerDetector,
-                           EmulatorConfig config) {
-        this.dockerClient = dockerClient;
-        this.imageCacheService = imageCacheService;
+                           EmulatorConfig config,
+                           RegionResolver regionResolver) {
+        this.containerBuilder = containerBuilder;
+        this.lifecycleManager = lifecycleManager;
+        this.logStreamer = logStreamer;
         this.containerDetector = containerDetector;
         this.config = config;
+        this.regionResolver = regionResolver;
     }
 
     public void startContainer(MskCluster cluster) {
         String image = config.services().msk().defaultImage();
         LOG.infov("Starting Redpanda container for MSK cluster: {0} using image {1}", cluster.getClusterName(), image);
-        imageCacheService.ensureImageExists(image);
 
         String containerName = "floci-msk-" + cluster.getClusterName();
 
@@ -64,107 +69,86 @@ public class RedpandaManager {
             LOG.errorv("Failed to create MSK data directory: {0}", dataPath, e);
         }
 
+        // Cleanup stale container
+        lifecycleManager.removeIfExists(containerName);
+
+        // Build command
+        List<String> cmd = new ArrayList<>(List.of(
+                "redpanda", "start", "--overprovisioned", "--smp", "1",
+                "--memory", "512M", "--reserve-memory", "0M"));
+
+        // Build container spec. Publish Kafka/admin ports to the host only in
+        // native mode; in Docker mode producers/consumers reach the broker via
+        // the docker network IP resolved from container inspect.
+        ContainerBuilder.Builder specBuilder = containerBuilder.newContainer(image)
+                .withName(containerName)
+                .withDockerNetwork(config.services().dockerNetwork())
+                .withLogRotation();
+
+        if (!containerDetector.isRunningInContainer()) {
+            specBuilder.withDynamicPort(KAFKA_PORT).withDynamicPort(ADMIN_PORT);
+        } else {
+            specBuilder.withExposedPort(KAFKA_PORT).withExposedPort(ADMIN_PORT);
+        }
+
+        // Handle persistence mounting
         String hostPersistentPath = config.storage().hostPersistentPath();
         boolean isVolume = !hostPersistentPath.startsWith("/") && !hostPersistentPath.startsWith(".");
-
-        HostConfig hostConfig = HostConfig.newHostConfig();
-        List<String> cmd = new java.util.ArrayList<>(List.of("redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "512M", "--reserve-memory", "0M"));
 
         if (isVolume) {
             // Volume mode: mount the whole volume and point Redpanda to the subdirectory
             String internalMountPath = "/app/data";
-            hostConfig.withBinds(new Bind(hostPersistentPath, new Volume(internalMountPath)));
+            specBuilder.withBind(hostPersistentPath, internalMountPath);
             cmd.add("--data-dir");
             cmd.add(internalMountPath + "/msk/" + cluster.getClusterName());
         } else {
             // Directory mode: mount the specific subdirectory directly
             String hostDataPath = Path.of(hostPersistentPath, "msk", cluster.getClusterName())
                     .toAbsolutePath().toString();
-            hostConfig.withBinds(new Bind(hostDataPath, new Volume("/var/lib/redpanda/data")));
+            specBuilder.withBind(hostDataPath, "/var/lib/redpanda/data");
         }
 
-        config.services().dockerNetwork()
-                .or(() -> config.services().dockerNetwork())
-                .ifPresent(network -> {
-                    if (!network.isBlank()) {
-                        hostConfig.withNetworkMode(network);
-                    }
-                });
+        specBuilder.withCmd(cmd);
+        ContainerSpec spec = specBuilder.build();
 
-        Ports portBindings = new Ports();
-        int hostKafkaPort = KAFKA_PORT;
-        int hostAdminPort = ADMIN_PORT;
+        // Create and start container
+        ContainerInfo info = lifecycleManager.createAndStart(spec);
+        cluster.setContainerId(info.containerId());
 
-        if (!containerDetector.isRunningInContainer()) {
-            hostKafkaPort = findFreePort();
-            hostAdminPort = findFreePort();
-            portBindings.bind(ExposedPort.tcp(KAFKA_PORT), Ports.Binding.bindPort(hostKafkaPort));
-            portBindings.bind(ExposedPort.tcp(ADMIN_PORT), Ports.Binding.bindPort(hostAdminPort));
-            hostConfig.withPortBindings(portBindings);
+        // Resolve endpoints
+        EndpointInfo kafkaEndpoint = info.getEndpoint(KAFKA_PORT);
+
+        cluster.setBootstrapBrokers(kafkaEndpoint.host() + ":" + kafkaEndpoint.port());
+        LOG.infov("Redpanda container {0} started. Bootstrap: {1}", info.containerId(), cluster.getBootstrapBrokers());
+
+        // Attach log streaming (new feature)
+        String shortId = info.containerId().length() >= 8
+                ? info.containerId().substring(0, 8)
+                : info.containerId();
+        String logGroup = "/aws/msk/cluster/" + cluster.getClusterName();
+        String logStream = logStreamer.generateLogStreamName(shortId);
+        String region = regionResolver.getDefaultRegion();
+
+        Closeable logHandle = logStreamer.attach(
+                info.containerId(), logGroup, logStream, region, "msk:" + cluster.getClusterName());
+        if (logHandle != null) {
+            logStreams.put(cluster.getClusterName(), logHandle);
         }
-
-        // Cleanup stale container
-        try {
-            dockerClient.removeContainerCmd(containerName).withForce(true).exec();
-        } catch (Exception ignored) {}
-
-        CreateContainerResponse container = dockerClient.createContainerCmd(image)
-                .withName(containerName)
-                .withExposedPorts(ExposedPort.tcp(KAFKA_PORT), ExposedPort.tcp(ADMIN_PORT))
-                .withHostConfig(hostConfig)
-                .withCmd(cmd)
-                .exec();
-
-        String containerId = container.getId();
-        cluster.setContainerId(containerId);
-        dockerClient.startContainerCmd(containerId).exec();
-
-        String bootstrapHost;
-        int bootstrapPort;
-        String adminHost;
-        int adminPort;
-
-        if (!containerDetector.isRunningInContainer()) {
-            bootstrapHost = "localhost";
-            bootstrapPort = hostKafkaPort;
-            adminHost = "localhost";
-            adminPort = hostAdminPort;
-        } else {
-            var inspect = dockerClient.inspectContainerCmd(containerId).exec();
-            String containerIp = inspect.getNetworkSettings().getNetworks().values().stream()
-                    .map(com.github.dockerjava.api.model.ContainerNetwork::getIpAddress)
-                    .filter(ip -> ip != null && !ip.isBlank())
-                    .findFirst()
-                    .orElse(inspect.getNetworkSettings().getIpAddress());
-            bootstrapHost = containerIp;
-            bootstrapPort = KAFKA_PORT;
-            adminHost = containerIp;
-            adminPort = ADMIN_PORT;
-        }
-
-        cluster.setBootstrapBrokers(bootstrapHost + ":" + bootstrapPort);
-        LOG.infov("Redpanda container {0} started. Bootstrap: {1}", containerId, cluster.getBootstrapBrokers());
-
-        // Wait for readiness in a separate thread or return and let the service handle state?
-        // Service should handle the polling to CREATING -> ACTIVE transition.
     }
 
     public boolean isReady(MskCluster cluster) {
         String bootstrap = cluster.getBootstrapBrokers();
-        if (bootstrap == null) return false;
-        
-        // We need the admin API to check readiness properly as per design doc (/ready endpoint)
-        // For now, let's derive the admin URL. 
-        // In native mode it's localhost:hostAdminPort. In container mode it's containerIp:9644.
-        
+        if (bootstrap == null) {
+            return false;
+        }
+
+        // Derive admin URL from the container
         String adminUrl;
         if (!containerDetector.isRunningInContainer()) {
-            // We didn't store adminPort in cluster object, let's inspect again or store it.
-            // Let's store it in cluster for simplicity during development.
-            // Actually, let's just inspect the container to find the binding for 9644.
+            var dockerClient = lifecycleManager.getDockerClient();
             var inspect = dockerClient.inspectContainerCmd(cluster.getContainerId()).exec();
             var bindings = inspect.getNetworkSettings().getPorts().getBindings();
-            var binding = bindings.get(ExposedPort.tcp(ADMIN_PORT));
+            var binding = bindings.get(com.github.dockerjava.api.model.ExposedPort.tcp(ADMIN_PORT));
             if (binding != null && binding.length > 0) {
                 adminUrl = "http://localhost:" + binding[0].getHostPortSpec() + "/ready";
             } else {
@@ -187,22 +171,14 @@ public class RedpandaManager {
     }
 
     public void stopContainer(MskCluster cluster) {
-        if (cluster.getContainerId() == null) return;
-        try {
-            dockerClient.stopContainerCmd(cluster.getContainerId()).withTimeout(5).exec();
-            dockerClient.removeContainerCmd(cluster.getContainerId()).withForce(true).exec();
-            LOG.infov("Redpanda container {0} stopped and removed", cluster.getContainerId());
-        } catch (Exception e) {
-            LOG.warnv("Failed to stop Redpanda container {0}: {1}", cluster.getContainerId(), e.getMessage());
+        if (cluster.getContainerId() == null) {
+            return;
         }
-    }
 
-    private static int findFreePort() {
-        try (ServerSocket s = new ServerSocket(0)) {
-            s.setReuseAddress(true);
-            return s.getLocalPort();
-        } catch (IOException e) {
-            throw new RuntimeException("Could not find a free port for Redpanda", e);
-        }
+        // Close log stream
+        Closeable logHandle = logStreams.remove(cluster.getClusterName());
+
+        lifecycleManager.stopAndRemove(cluster.getContainerId(), logHandle);
+        LOG.infov("Redpanda container {0} stopped and removed", cluster.getContainerId());
     }
 }

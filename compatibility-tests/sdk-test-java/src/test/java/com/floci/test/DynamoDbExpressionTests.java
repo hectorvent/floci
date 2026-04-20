@@ -315,8 +315,74 @@ class DynamoDbExpressionTests {
         assertThat(resp.count()).isEqualTo(3);
     }
 
+    // ---- SET arithmetic ----
+
     @Test
     @Order(14)
+    @DisplayName("UpdateExpression: SET with if_not_exists + arithmetic increment")
+    void updateSetIfNotExistsPlusIncrement() {
+        String table = "expr-arith-test";
+        ddb.createTable(CreateTableRequest.builder()
+                .tableName(table)
+                .keySchema(KeySchemaElement.builder().attributeName("pk").keyType(KeyType.HASH).build())
+                .attributeDefinitions(AttributeDefinition.builder().attributeName("pk").attributeType(ScalarAttributeType.S).build())
+                .billingMode(BillingMode.PAY_PER_REQUEST)
+                .build());
+
+        try {
+            // First increment on non-existent item: if_not_exists(counter, 0) + 1 = 1
+            ddb.updateItem(UpdateItemRequest.builder()
+                    .tableName(table)
+                    .key(Map.of("pk", AttributeValue.fromS("k1")))
+                    .updateExpression("SET counter = if_not_exists(counter, :start) + :inc")
+                    .expressionAttributeValues(Map.of(
+                            ":start", AttributeValue.builder().n("0").build(),
+                            ":inc", AttributeValue.builder().n("1").build()))
+                    .build());
+
+            GetItemResponse r1 = ddb.getItem(GetItemRequest.builder()
+                    .tableName(table)
+                    .key(Map.of("pk", AttributeValue.fromS("k1")))
+                    .build());
+            assertThat(r1.item().get("counter").n()).isEqualTo("1");
+
+            // Second increment: existing (1) + 1 = 2
+            ddb.updateItem(UpdateItemRequest.builder()
+                    .tableName(table)
+                    .key(Map.of("pk", AttributeValue.fromS("k1")))
+                    .updateExpression("SET counter = if_not_exists(counter, :start) + :inc")
+                    .expressionAttributeValues(Map.of(
+                            ":start", AttributeValue.builder().n("0").build(),
+                            ":inc", AttributeValue.builder().n("1").build()))
+                    .build());
+
+            GetItemResponse r2 = ddb.getItem(GetItemRequest.builder()
+                    .tableName(table)
+                    .key(Map.of("pk", AttributeValue.fromS("k1")))
+                    .build());
+            assertThat(r2.item().get("counter").n()).isEqualTo("2");
+
+            // Subtraction: existing (2) - 1 = 1
+            ddb.updateItem(UpdateItemRequest.builder()
+                    .tableName(table)
+                    .key(Map.of("pk", AttributeValue.fromS("k1")))
+                    .updateExpression("SET counter = counter - :dec")
+                    .expressionAttributeValues(Map.of(
+                            ":dec", AttributeValue.builder().n("1").build()))
+                    .build());
+
+            GetItemResponse r3 = ddb.getItem(GetItemRequest.builder()
+                    .tableName(table)
+                    .key(Map.of("pk", AttributeValue.fromS("k1")))
+                    .build());
+            assertThat(r3.item().get("counter").n()).isEqualTo("1");
+        } finally {
+            ddb.deleteTable(DeleteTableRequest.builder().tableName(table).build());
+        }
+    }
+
+    @Test
+    @Order(15)
     @DisplayName("Query: compact format BETWEEN — no spaces around AND")
     void queryCompactBetween() {
         QueryResponse resp = ddb.query(QueryRequest.builder()

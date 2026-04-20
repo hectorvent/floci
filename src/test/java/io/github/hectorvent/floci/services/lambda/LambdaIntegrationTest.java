@@ -152,8 +152,68 @@ class LambdaIntegrationTest {
             .statusCode(400);
     }
 
+    // ── Issue #439: LastUpdateStatus in responses ─────────────────────
+
     @Test
     @Order(9)
+    void getFunctionIncludesLastUpdateStatus() {
+        given()
+        .when()
+            .get(BASE_PATH + "/functions/hello-world")
+        .then()
+            .statusCode(200)
+            .body("Configuration.LastUpdateStatus", equalTo("Successful"));
+    }
+
+    @Test
+    @Order(10)
+    void updateFunctionConfiguration() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "Timeout": 60,
+                    "MemorySize": 512,
+                    "Description": "Updated description",
+                    "Environment": {
+                        "Variables": {
+                            "MY_KEY": "my-value",
+                            "ANOTHER_KEY": "another-value"
+                        }
+                    }
+                }
+                """)
+        .when()
+            .put(BASE_PATH + "/functions/hello-world/configuration")
+        .then()
+            .statusCode(200)
+            .body("FunctionName", equalTo("hello-world"))
+            .body("Timeout", equalTo(60))
+            .body("MemorySize", equalTo(512))
+            .body("Description", equalTo("Updated description"))
+            .body("Environment.Variables.MY_KEY", equalTo("my-value"))
+            .body("Environment.Variables.ANOTHER_KEY", equalTo("another-value"))
+            .body("RevisionId", notNullValue());
+    }
+
+    @Test
+    @Order(11)
+    void updateFunctionConfiguration_notFound_returns404() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "Timeout": 30
+                }
+                """)
+        .when()
+            .put(BASE_PATH + "/functions/nonexistent-function/configuration")
+        .then()
+            .statusCode(404);
+    }
+
+    @Test
+    @Order(12)
     void deleteFunction() {
         given()
         .when()
@@ -163,7 +223,7 @@ class LambdaIntegrationTest {
     }
 
     @Test
-    @Order(10)
+    @Order(13)
     void deletedFunctionNotFound() {
         given()
         .when()
@@ -173,7 +233,7 @@ class LambdaIntegrationTest {
     }
 
     @Test
-    @Order(11)
+    @Order(14)
     void createFunctionWithLargeInlineZip() throws Exception {
         // Build a valid zip with a handler file + 16 MB padding so the base64
         // encoding exceeds Jackson's former 20 MB maxStringLength default.
