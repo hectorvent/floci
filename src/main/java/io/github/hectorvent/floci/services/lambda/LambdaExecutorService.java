@@ -113,11 +113,11 @@ public class LambdaExecutorService {
                     null, requestId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            warmPool.release(handle);
+            warmPool.destroyHandle(handle);
             return new InvokeResult(200, "Unhandled", buildErrorPayload("Invocation interrupted", "Interrupted"), null, requestId);
         } catch (Exception e) {
             LOG.warnv("Invocation error for function {0}: {1}", fn.getFunctionName(), e.getMessage());
-            warmPool.release(handle);
+            warmPool.destroyHandle(handle);
             return new InvokeResult(200, "Unhandled", buildErrorPayload(e.getMessage(), "InvocationError"), null, requestId);
         }
     }

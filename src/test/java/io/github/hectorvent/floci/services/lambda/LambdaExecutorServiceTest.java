@@ -17,6 +17,9 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -117,5 +120,58 @@ class LambdaExecutorServiceTest {
         verify(warmPool, never()).release(any());
         verify(warmPool, never()).destroyHandle(any());
         assertEquals(204, result.getStatusCode());
+    }
+
+    @Test
+    void interruptedInvocation_destroysHandle_doesNotRelease() throws Exception {
+        fn.setTimeout(30);
+        RuntimeApiServer rtas = mock(RuntimeApiServer.class);
+        ContainerHandle handle = new ContainerHandle("cid-int", "test-fn", rtas, ContainerState.WARM);
+
+        when(warmPool.acquire(any())).thenReturn(handle);
+        CountDownLatch enqueued = new CountDownLatch(1);
+        doAnswer(inv -> {
+            PendingInvocation pi = inv.getArgument(0);
+            enqueued.countDown();
+            return pi.getResultFuture();
+        }).when(rtas).enqueue(any(PendingInvocation.class));
+
+        AtomicReference<InvokeResult> resultRef = new AtomicReference<>();
+        Thread worker = new Thread(() -> resultRef.set(
+                executor.invoke(fn, "{}".getBytes(), InvocationType.RequestResponse)));
+        worker.start();
+
+        assertTrue(enqueued.await(5, TimeUnit.SECONDS), "enqueue never called");
+        worker.interrupt();
+        worker.join(5_000);
+
+        InvokeResult result = resultRef.get();
+        assertNotNull(result, "invoke did not return");
+        verify(warmPool).destroyHandle(handle);
+        verify(warmPool, never()).release(handle);
+        assertEquals(200, result.getStatusCode());
+        assertEquals("Unhandled", result.getFunctionError());
+        assertTrue(new String(result.getPayload()).contains("Interrupted"));
+    }
+
+    @Test
+    void exceptionDuringInvocation_destroysHandle_doesNotRelease() {
+        RuntimeApiServer rtas = mock(RuntimeApiServer.class);
+        ContainerHandle handle = new ContainerHandle("cid-exc", "test-fn", rtas, ContainerState.WARM);
+
+        when(warmPool.acquire(any())).thenReturn(handle);
+        doAnswer(inv -> {
+            PendingInvocation pi = inv.getArgument(0);
+            pi.getResultFuture().completeExceptionally(new RuntimeException("runtime crash"));
+            return pi.getResultFuture();
+        }).when(rtas).enqueue(any(PendingInvocation.class));
+
+        InvokeResult result = executor.invoke(fn, "{}".getBytes(), InvocationType.RequestResponse);
+
+        verify(warmPool).destroyHandle(handle);
+        verify(warmPool, never()).release(handle);
+        assertEquals(200, result.getStatusCode());
+        assertEquals("Unhandled", result.getFunctionError());
+        assertTrue(new String(result.getPayload()).contains("InvocationError"));
     }
 }
