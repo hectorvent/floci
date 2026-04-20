@@ -33,7 +33,70 @@ floci:
   services:
     ses:
       enabled: true
+      # smtp-host: mailpit        # SMTP server for email relay (empty = store only)
+      # smtp-port: 1025
+      # smtp-user: ""
+      # smtp-pass: ""
+      # smtp-starttls: DISABLED   # DISABLED, OPTIONAL, or REQUIRED
 ```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_SES_ENABLED` | `true` | Enable or disable the SES service |
+| `FLOCI_SERVICES_SES_SMTP_HOST` | *(unset)* | SMTP server host for email relay (empty = store only) |
+| `FLOCI_SERVICES_SES_SMTP_PORT` | `25` | SMTP server port |
+| `FLOCI_SERVICES_SES_SMTP_USER` | *(unset)* | SMTP authentication username |
+| `FLOCI_SERVICES_SES_SMTP_PASS` | *(unset)* | SMTP authentication password |
+| `FLOCI_SERVICES_SES_SMTP_STARTTLS` | `DISABLED` | STARTTLS mode: `DISABLED`, `OPTIONAL`, or `REQUIRED` |
+
+### SMTP Relay
+
+When `smtp-host` is configured, `SendEmail` and `SendRawEmail` forward
+emails to the specified SMTP server in addition to storing them in the
+local inspection endpoint. This enables integration testing with tools
+like [Mailpit](https://mailpit.axllent.org/) or any standard SMTP server.
+
+```yaml
+# docker-compose.yml
+services:
+  floci:
+    image: hectorvent/floci:latest
+    ports: ["4566:4566"]
+    environment:
+      FLOCI_SERVICES_SES_SMTP_HOST: mailpit
+      FLOCI_SERVICES_SES_SMTP_PORT: 1025
+    networks: [floci]
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"   # Web UI
+      - "1025:1025"   # SMTP
+    networks: [floci]
+
+networks:
+  floci:
+```
+
+- Emails are always stored locally regardless of relay — the
+  `/_aws/ses` inspection endpoint works with or without SMTP.
+- Relay failures are logged but do not affect the API response.
+- Raw MIME messages are parsed with Apache Mime4j to extract common
+  fields (From, To, Cc, Subject, text/plain and text/html parts) and
+  relayed as a reconstructed message. Arbitrary headers, attachments,
+  and complex multipart structures are not preserved in the relay.
+
+## Local Inspection Endpoint
+
+For test assertions and debugging, Floci exposes a LocalStack-compatible mailbox endpoint:
+
+- `GET /_aws/ses` lists captured messages
+- `GET /_aws/ses?id=<message-id>` returns a specific captured message
+- `DELETE /_aws/ses` clears the captured mailbox
+
+Messages are stored locally by Floci and can be persisted when SES storage is backed by persistent or hybrid storage.
 
 ## Examples
 
@@ -76,23 +139,13 @@ aws ses send-raw-email \
 curl $AWS_ENDPOINT_URL/_aws/ses
 ```
 
-## Local Inspection Endpoint
-
-For test assertions and debugging, Floci exposes a LocalStack-compatible mailbox endpoint:
-
-- `GET /_aws/ses` lists captured messages
-- `GET /_aws/ses?id=<message-id>` returns a specific captured message
-- `DELETE /_aws/ses` clears the captured mailbox
-
-Messages are stored locally by Floci and can be persisted when SES storage is backed by persistent or hybrid storage.
-
 ## Current Behavior
 
 - Identity verification succeeds immediately; no real DNS or inbox verification flow is required.
 - `SendEmail` stores the text body or the HTML body as the captured message body.
 - `SetIdentityNotificationTopic` stores SNS topic ARNs and returns them via `GetIdentityNotificationAttributes`.
 - Notification topics are configuration metadata only; SES delivery, bounce, or complaint events are not emitted automatically.
-- SMTP submission is not implemented. For the REST JSON API see [SES v2](#v2) below.
+- For the REST JSON API see [SES v2](#v2) below.
 
 ## SES v2 (REST JSON) {#v2}
 

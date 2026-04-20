@@ -189,6 +189,36 @@ class SmtpRelayTest {
     }
 
     @Test
+    void relayRaw_nestedMultipart_extractsTextAndHtml() {
+        SmtpRelay relay = enabledRelay();
+
+        String rawMime = "From: s@example.com\r\n"
+                + "To: t@example.com\r\n"
+                + "Subject: Nested\r\n"
+                + "Content-Type: multipart/mixed; boundary=\"outer\"\r\n"
+                + "\r\n"
+                + "--outer\r\n"
+                + "Content-Type: multipart/alternative; boundary=\"inner\"\r\n"
+                + "\r\n"
+                + "--inner\r\n"
+                + "Content-Type: text/plain; charset=UTF-8\r\n"
+                + "\r\n"
+                + "plain text\r\n"
+                + "--inner\r\n"
+                + "Content-Type: text/html; charset=UTF-8\r\n"
+                + "\r\n"
+                + "<p>html</p>\r\n"
+                + "--inner--\r\n"
+                + "--outer--";
+        relay.relayRaw("from@example.com", List.of("to@example.com"), rawMime);
+
+        ArgumentCaptor<MailMessage> captor = ArgumentCaptor.forClass(MailMessage.class);
+        verify(mailClient).sendMail(captor.capture());
+        assertEquals("plain text", captor.getValue().getText().trim());
+        assertEquals("<p>html</p>", captor.getValue().getHtml().trim());
+    }
+
+    @Test
     void relayRaw_mailClientThrows_doesNotPropagate() {
         SmtpRelay relay = new SmtpRelay(mailClient, true);
         when(mailClient.sendMail(any(MailMessage.class)))

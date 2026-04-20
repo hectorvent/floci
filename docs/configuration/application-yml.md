@@ -164,6 +164,11 @@ floci:
 
     ses:
       enabled: true
+      # smtp-host: mailpit                       # SMTP server for email relay (empty = store only)
+      # smtp-port: 1025
+      # smtp-user: ""
+      # smtp-pass: ""
+      # smtp-starttls: DISABLED                  # DISABLED, OPTIONAL, or REQUIRED
 
     opensearch:
       enabled: true
@@ -226,6 +231,11 @@ All keys in this table are declared on `EmulatorConfig` and accept environment v
 | `FLOCI_SERVICES_IAM_ENFORCEMENT_ENABLED`           | `false`          | Enforce IAM identity-based policies on every request when `true` |
 | `FLOCI_SERVICES_OPENSEARCH_MOCK`                   | `false`          | Skip Docker; domains appear active immediately (useful for CI)   |
 | `FLOCI_SERVICES_OPENSEARCH_KEEP_RUNNING_ON_SHUTDOWN` | `false`        | Leave OpenSearch containers running after Floci stops            |
+| `FLOCI_SERVICES_SES_SMTP_HOST`                     | *(unset)*        | SMTP server host for SES email relay (empty = store only)     |
+| `FLOCI_SERVICES_SES_SMTP_PORT`                     | `25`             | SMTP server port                                              |
+| `FLOCI_SERVICES_SES_SMTP_USER`                     | *(unset)*        | SMTP authentication username                                  |
+| `FLOCI_SERVICES_SES_SMTP_PASS`                     | *(unset)*        | SMTP authentication password                                  |
+| `FLOCI_SERVICES_SES_SMTP_STARTTLS`                 | `DISABLED`       | STARTTLS mode: `DISABLED`, `OPTIONAL`, or `REQUIRED`          |
 
 Per-queue SQS redrive policy (`maxReceiveCount`) is configured at queue creation time via `SetQueueAttributes` / `CreateQueue`, not as a global default.
 

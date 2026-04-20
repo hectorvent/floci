@@ -226,7 +226,7 @@ public class SmtpRelay {
             mail.setSubject(message.getSubject() != null ? message.getSubject() : "");
 
             // Body
-            extractBody(message, mail);
+            extractBodyFromEntity(message, mail);
 
             mailClient.sendMail(mail).toCompletionStage().toCompletableFuture().get(RELAY_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
             LOG.debugv("SMTP relay: sent raw from={0}, destinations={1}", from, destinations);
@@ -240,26 +240,18 @@ public class SmtpRelay {
         }
     }
 
-    private static void extractBody(org.apache.james.mime4j.dom.Message message, MailMessage mail) {
-        Body body = message.getBody();
+    private static void extractBodyFromEntity(Entity entity, MailMessage mail) {
+        Body body = entity.getBody();
         if (body instanceof TextBody textBody) {
             String text = readTextBody(textBody);
-            String mimeType = message.getMimeType();
-            if ("text/html".equalsIgnoreCase(mimeType)) {
+            if ("text/html".equalsIgnoreCase(entity.getMimeType())) {
                 mail.setHtml(text);
-            } else {
+            } else if ("text/plain".equalsIgnoreCase(entity.getMimeType())) {
                 mail.setText(text);
             }
         } else if (body instanceof Multipart multipart) {
             for (Entity part : multipart.getBodyParts()) {
-                if (part.getBody() instanceof TextBody textBody) {
-                    String text = readTextBody(textBody);
-                    if ("text/html".equalsIgnoreCase(part.getMimeType())) {
-                        mail.setHtml(text);
-                    } else if ("text/plain".equalsIgnoreCase(part.getMimeType())) {
-                        mail.setText(text);
-                    }
-                }
+                extractBodyFromEntity(part, mail);
             }
         }
     }
