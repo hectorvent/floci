@@ -153,7 +153,40 @@ public class AppConfigService {
     }
 
     public DeploymentStrategy getDeploymentStrategy(String id) {
+        // AWS predefined built-in strategies
+        DeploymentStrategy builtin = builtinStrategy(id);
+        if (builtin != null) return builtin;
         return strategyStore.get(id).orElseThrow(() -> new AwsException("ResourceNotFoundException", "Deployment strategy not found", 404));
+    }
+
+    private static DeploymentStrategy builtinStrategy(String id) {
+        return switch (id) {
+            case "AppConfig.AllAtOnce" -> {
+                DeploymentStrategy s = new DeploymentStrategy();
+                s.setId(id); s.setName(id);
+                s.setDeploymentDurationInMinutes(0); s.setGrowthFactor(100f);
+                s.setFinalBakeTimeInMinutes(0); s.setGrowthType("LINEAR");
+                s.setReplicateTo("NONE");
+                yield s;
+            }
+            case "AppConfig.Linear50PercentEvery30Seconds" -> {
+                DeploymentStrategy s = new DeploymentStrategy();
+                s.setId(id); s.setName(id);
+                s.setDeploymentDurationInMinutes(1); s.setGrowthFactor(50f);
+                s.setFinalBakeTimeInMinutes(0); s.setGrowthType("LINEAR");
+                s.setReplicateTo("NONE");
+                yield s;
+            }
+            case "AppConfig.Canary10Percent20Minutes" -> {
+                DeploymentStrategy s = new DeploymentStrategy();
+                s.setId(id); s.setName(id);
+                s.setDeploymentDurationInMinutes(20); s.setGrowthFactor(10f);
+                s.setFinalBakeTimeInMinutes(10); s.setGrowthType("EXPONENTIAL");
+                s.setReplicateTo("NONE");
+                yield s;
+            }
+            default -> null;
+        };
     }
 
     // ──────────────────────────── Deployment ────────────────────────────
@@ -193,6 +226,24 @@ public class AppConfigService {
 
     public String getActiveVersion(String envId, String profileId) {
         return activeConfigStore.get(envId + "::" + profileId).orElse(null);
+    }
+
+    // ──────────────────────────── Tags ────────────────────────────
+
+    public Map<String, String> getApplicationTags(String appId) {
+        return getApplication(appId).getTags();
+    }
+
+    public void tagApplication(String appId, Map<String, String> tags) {
+        Application app = getApplication(appId);
+        app.getTags().putAll(tags);
+        applicationStore.put(appId, app);
+    }
+
+    public void untagApplication(String appId, List<String> tagKeys) {
+        Application app = getApplication(appId);
+        tagKeys.forEach(app.getTags()::remove);
+        applicationStore.put(appId, app);
     }
 
     private static String shortId(int length) {

@@ -210,7 +210,97 @@ class AppConfigIntegrationTest {
                 .header("Next-Poll-Configuration-Token", notNullValue());
     }
 
+    // ──────────────────────────── Builtin deployment strategies ────────────────────────────
+
     @Test @Order(13)
+    void builtinStrategyAllAtOnceCanBeUsedWithoutCreating() {
+        given()
+                .contentType(ContentType.JSON)
+                .body("{\"ConfigurationProfileId\": \"" + profileId + "\", \"ConfigurationVersion\": \"1\", \"DeploymentStrategyId\": \"AppConfig.AllAtOnce\"}")
+                .when().post("/applications/" + appId + "/environments/" + envId + "/deployments")
+                .then()
+                .statusCode(201)
+                .body("State", equalTo("COMPLETE"))
+                .body("DeploymentStrategyId", equalTo("AppConfig.AllAtOnce"));
+    }
+
+    // ──────────────────────────── Application tagging ────────────────────────────
+
+    @Test @Order(14)
+    void listTagsOnNewApplicationIsEmpty() {
+        String arn = "arn:aws:appconfig:us-east-1:000000000000:application/" + appId;
+        given()
+                .when().get("/tags/" + arn)
+                .then()
+                .statusCode(200)
+                .body("tags", anEmptyMap());
+    }
+
+    @Test @Order(15)
+    void tagApplication() {
+        String arn = "arn:aws:appconfig:us-east-1:000000000000:application/" + appId;
+        given()
+                .contentType(ContentType.JSON)
+                .body("{\"tags\": {\"env\": \"local\", \"team\": \"platform\"}}")
+                .when().put("/tags/" + arn)
+                .then()
+                .statusCode(204);
+    }
+
+    @Test @Order(16)
+    void listTagsAfterTagging() {
+        String arn = "arn:aws:appconfig:us-east-1:000000000000:application/" + appId;
+        given()
+                .when().get("/tags/" + arn)
+                .then()
+                .statusCode(200)
+                .body("tags.env", equalTo("local"))
+                .body("tags.team", equalTo("platform"));
+    }
+
+    @Test @Order(17)
+    void untagApplication() {
+        String arn = "arn:aws:appconfig:us-east-1:000000000000:application/" + appId;
+        given()
+                .when().delete("/tags/" + arn + "?tagKeys=env")
+                .then()
+                .statusCode(204);
+    }
+
+    @Test @Order(18)
+    void listTagsAfterUntagging() {
+        String arn = "arn:aws:appconfig:us-east-1:000000000000:application/" + appId;
+        given()
+                .when().get("/tags/" + arn)
+                .then()
+                .statusCode(200)
+                .body("tags", not(hasKey("env")))
+                .body("tags.team", equalTo("platform"));
+    }
+
+    // ──────────────────────────── Tags on non-application resources (no-op) ────────────────────────────
+
+    @Test @Order(19)
+    void listTagsForEnvironmentArnReturnsEmpty() {
+        String arn = "arn:aws:appconfig:us-east-1:000000000000:application/" + appId + "/environment/" + envId;
+        given()
+                .when().get("/tags/" + arn)
+                .then()
+                .statusCode(200)
+                .body("tags", anEmptyMap());
+    }
+
+    @Test @Order(20)
+    void listTagsForDeploymentArnReturnsEmpty() {
+        String arn = "arn:aws:appconfig:us-east-1:000000000000:application/" + appId + "/environment/" + envId + "/deployment/1";
+        given()
+                .when().get("/tags/" + arn)
+                .then()
+                .statusCode(200)
+                .body("tags", anEmptyMap());
+    }
+
+    @Test @Order(22)
     void emptyConfigurationReturnsEmptyPayload() {
         emptyAppId = given()
                 .contentType(ContentType.JSON)
