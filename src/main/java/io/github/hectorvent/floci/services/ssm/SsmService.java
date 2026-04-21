@@ -281,7 +281,7 @@ public class SsmService {
         history.add(new ParameterHistory(parameter));
 
         while (history.size() > maxParameterHistory) {
-            history.removeFirst();
+            history.remove(0);
         }
 
         historyStore.put(storageKey, history);

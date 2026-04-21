@@ -486,10 +486,10 @@ public class PostgresProtocolHandler {
             closeQuietly(backend);
             return;
         }
-        Thread t1 = Thread.ofVirtual().name("rds-pg-c2b")
-                .start(() -> relay(clientIn, backendOut));
-        Thread t2 = Thread.ofVirtual().name("rds-pg-b2c")
-                .start(() -> relay(backendIn, clientOut));
+        Thread t1 = new Thread(() -> relay(clientIn, backendOut), "rds-pg-c2b");
+        t1.start();
+        Thread t2 = new Thread(() -> relay(backendIn, clientOut), "rds-pg-b2c");
+        t2.start();
         try {
             t1.join();
             t2.join();

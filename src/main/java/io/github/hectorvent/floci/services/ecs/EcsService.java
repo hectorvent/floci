@@ -988,7 +988,7 @@ public class EcsService {
                     List<EcsTask> launched = runTask(clusterName, svc.getTaskDefinition(), 1,
                             svc.getLaunchType(), svc.getServiceName(), "ecs-svc", region);
                     LOG.infov("Service reconciler started task {0} for service {1}",
-                            launched.getFirst().getTaskArn(), svc.getServiceName());
+                            launched.get(0).getTaskArn(), svc.getServiceName());
                 } catch (Exception e) {
                     LOG.warnv("Service reconciler failed to start task for {0}: {1}",
                             svc.getServiceName(), e.getMessage());

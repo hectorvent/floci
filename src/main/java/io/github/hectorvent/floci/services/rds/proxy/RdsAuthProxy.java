@@ -49,7 +49,7 @@ public class RdsAuthProxy {
     public void start(int proxyPort) throws IOException {
         serverSocket = new ServerSocket(proxyPort);
         running = true;
-        Thread.ofVirtual().name("rds-proxy-accept-" + instanceId).start(this::acceptLoop);
+        new Thread(this::acceptLoop, "rds-proxy-accept-" + instanceId).start();
         LOG.infov("RDS proxy started for instance {0} on port {1} → {2}:{3}",
                 instanceId, proxyPort, backendHost, backendPort);
     }
@@ -70,9 +70,7 @@ public class RdsAuthProxy {
         while (running) {
             try {
                 Socket client = serverSocket.accept();
-                Thread.ofVirtual().name("rds-proxy-conn-" + instanceId)
-                        .start(() -> handleConnection(client));
-            } catch (IOException e) {
+                new Thread(() -> handleConnection(client), "rds-proxy-conn-" + instanceId).start();            } catch (IOException e) {
                 if (running) {
                     LOG.warnv("Accept error for RDS instance {0}: {1}", instanceId, e.getMessage());
                 }

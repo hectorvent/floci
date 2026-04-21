@@ -202,6 +202,28 @@ public class CognitoService {
         clientStore.delete(clientId);
     }
 
+    public UserPoolClient updateUserPoolClient(String userPoolId, String clientId, String clientName,
+                                               Boolean allowedOAuthFlowsUserPoolClient,
+                                               List<String> allowedOAuthFlows,
+                                               List<String> allowedOAuthScopes) {
+        UserPoolClient client = describeUserPoolClient(userPoolId, clientId);
+        if (clientName != null) client.setClientName(clientName);
+        if (allowedOAuthFlowsUserPoolClient != null) {
+            client.setAllowedOAuthFlowsUserPoolClient(allowedOAuthFlowsUserPoolClient);
+        }
+        if (allowedOAuthFlows != null) {
+            client.setAllowedOAuthFlows(normalizeStringList(allowedOAuthFlows));
+        }
+        if (allowedOAuthScopes != null) {
+            client.setAllowedOAuthScopes(normalizeStringList(allowedOAuthScopes));
+        }
+
+        client.setLastModifiedDate(System.currentTimeMillis() / 1000L);
+        clientStore.put(clientId, client);
+        LOG.infov("Updated User Pool Client: {0} for pool {1}", clientId, userPoolId);
+        return client;
+    }
+
     public List<UserPoolClientSecret> listUserPoolClientSecrets(String userPoolId, String clientId) {
         UserPoolClient client = clientStore.get(clientId)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException", "User pool client not found", 404));

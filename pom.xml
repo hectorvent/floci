@@ -13,7 +13,7 @@
     <description>Fast, free, open-source local AWS emulator supporting SSM, SQS, SNS, SES, S3, DynamoDB, Lambda, API Gateway, Cognito, KMS, Kinesis, Secrets Manager, CloudFormation, Step Functions, IAM, STS, ElastiCache, RDS, EventBridge, and CloudWatch</description>
 
     <properties>
-        <maven.compiler.release>25</maven.compiler.release>
+        <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.platform.version>3.34.3</quarkus.platform.version>
     </properties>
@@ -196,16 +196,22 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.15.0</version>
+                <version>3.13.0</version>
                 <configuration>
-                    <release>${maven.compiler.release}</release>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                    </compilerArgs>
+                    <testIncludes>
+                        <testInclude>**/cognito/*Test.java</testInclude>
+                    </testIncludes>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.5</version>
+                <version>3.2.5</version>
                 <configuration>
+                    <argLine>--enable-preview</argLine>
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                     </systemPropertyVariables>
@@ -224,8 +230,7 @@
             </activation>
             <properties>
                 <skipITs>true</skipITs>
-                <quarkus.native.enabled>true</quarkus.native.enabled>
-                <maven.compiler.release>24</maven.compiler.release>
+                <quarkus.package.type>native</quarkus.package.type>
             </properties>
         </profile>
     </profiles>

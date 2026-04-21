@@ -221,6 +221,59 @@ public class SecretsManagerService {
         return secret;
     }
 
+    public Secret updateSecretVersionStage(String secretId, String versionStage,
+                                           String removeFromVersionId, String moveToVersionId, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        if (secret.getDeletedDate() != null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Secrets Manager can't find the specified secret.", 400);
+        }
+
+        if (moveToVersionId == null && removeFromVersionId == null) {
+            throw new AwsException("InvalidParameterValueException",
+                    "You must specify either MoveToVersionId or RemoveFromVersionId", 400);
+        }
+
+        // Remove from the specified version (if any)
+        if (removeFromVersionId != null) {
+            SecretVersion removeVersion = secret.getVersions().get(removeFromVersionId);
+            if (removeVersion != null && removeVersion.getVersionStages() != null) {
+                List<String> newStages = new ArrayList<>(removeVersion.getVersionStages());
+                newStages.remove(versionStage);
+                removeVersion.setVersionStages(newStages);
+            }
+        }
+
+        // Move to the specified version (if any)
+        if (moveToVersionId != null) {
+            SecretVersion moveVersion = secret.getVersions().get(moveToVersionId);
+            if (moveVersion == null) {
+                throw new AwsException("ResourceNotFoundException",
+                        "Secrets Manager can't find the specified secret version.", 400);
+            }
+
+            // Remove stage from whatever version currently has it
+            SecretVersion currentHolder = findVersionByStage(secret, versionStage);
+            if (currentHolder != null && !currentHolder.getVersionId().equals(moveToVersionId)) {
+                List<String> newStages = new ArrayList<>(currentHolder.getVersionStages());
+                newStages.remove(versionStage);
+                currentHolder.setVersionStages(newStages);
+            }
+
+            List<String> mStages = moveVersion.getVersionStages() != null ? new ArrayList<>(moveVersion.getVersionStages()) : new ArrayList<>();
+            if (!mStages.contains(versionStage)) {
+                mStages.add(versionStage);
+            }
+            moveVersion.setVersionStages(mStages);
+        }
+
+        secret.setLastChangedDate(Instant.now());
+        store.put(regionKey(region, secret.getName()), secret);
+        LOG.infov("Updated secret version stage: {0} for secret {1}", versionStage, secret.getName());
+        return secret;
+    }
+
     public Secret describeSecret(String secretId, String region) {
         Secret secret = resolveSecret(secretId, region);
         return secret;
@@ -356,7 +409,7 @@ public class SecretsManagerService {
                 return s != null && secretId.equals(s.getArn());
             });
             if (!found.isEmpty()) {
-                return found.getFirst();
+                return found.get(0);
             }
 
             // 2. Partial-ARN fallback: extract region + name and do a name-based lookup.

@@ -498,7 +498,6 @@ public class S3Controller {
                               @HeaderParam("If-None-Match") String ifNoneMatch,
                               @HeaderParam("If-Modified-Since") String ifModifiedSince,
                               @HeaderParam("If-Unmodified-Since") String ifUnmodifiedSince,
-                              @HeaderParam("Range") String rangeHeader,
                               @Context UriInfo uriInfo,
                               @Context HttpHeaders httpHeaders) {
         try {
@@ -536,6 +535,7 @@ public class S3Controller {
             }
             S3Object obj = s3Service.getObject(bucket, key, versionId);
 
+            String rangeHeader = httpHeaders.getHeaderString("Range");
             if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
                 return handleRangeRequest(obj, rangeHeader);
             }
@@ -907,11 +907,11 @@ public class S3Controller {
                 .filter(e -> e.getKey() > marker)
                 .limit(maxPartsLimit + 1L)
                 .map(Map.Entry::getValue)
-                .toList();
+                .collect(java.util.stream.Collectors.toList());
 
         boolean truncated = sortedParts.size() > maxPartsLimit;
         List<Part> page = truncated ? sortedParts.subList(0, maxPartsLimit) : sortedParts;
-        String nextMarker = truncated ? String.valueOf(page.getLast().getPartNumber()) : null;
+        String nextMarker = truncated ? String.valueOf(page.get(page.size() - 1).getPartNumber()) : null;
 
         XmlBuilder xml = new XmlBuilder()
                 .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
@@ -969,7 +969,7 @@ public class S3Controller {
             throw new AwsException("MalformedXML",
                     "The XML you provided was not well-formed.", 400);
         }
-        return parts.stream().map(Integer::parseInt).toList();
+        return parts.stream().map(Integer::parseInt).collect(java.util.stream.Collectors.toList());
     }
 
     // --- Versioning Operations ---
@@ -1229,13 +1229,13 @@ public class S3Controller {
         for (String token : tokens) {
             String trimmed = token.trim();
             if (!trimmed.equalsIgnoreCase("aws-chunked")) {
-                if (!result.isEmpty()) {
+                if (result.length() > 0) {
                     result.append(",");
                 }
                 result.append(trimmed);
             }
         }
-        return result.isEmpty() ? null : result.toString();
+        return result.length() == 0 ? null : result.toString();
     }
 
     // --- AWS Chunked Decoding ---

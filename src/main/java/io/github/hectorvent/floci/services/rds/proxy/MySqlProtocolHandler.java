@@ -315,10 +315,10 @@ public class MySqlProtocolHandler {
             return;
         }
 
-        Thread t1 = Thread.ofVirtual().name("rds-mysql-c2b")
-                .start(() -> relay(clientIn, backendOut));
-        Thread t2 = Thread.ofVirtual().name("rds-mysql-b2c")
-                .start(() -> relay(backendIn, clientOut));
+        Thread t1 = new Thread(() -> relay(clientIn, backendOut), "rds-mysql-c2b");
+        t1.start();
+        Thread t2 = new Thread(() -> relay(backendIn, clientOut), "rds-mysql-b2c");
+        t2.start();
         try {
             t1.join();
             t2.join();

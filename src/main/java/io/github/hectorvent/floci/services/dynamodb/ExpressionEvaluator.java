@@ -196,7 +196,7 @@ final class ExpressionEvaluator {
                 advance(); // consume OR
                 operands.add(parseAndExpr());
             }
-            return operands.size() == 1 ? operands.getFirst() : new OrExpr(operands);
+            return operands.size() == 1 ? operands.get(0) : new OrExpr(operands);
         }
 
         private Expr parseAndExpr() {
@@ -206,7 +206,7 @@ final class ExpressionEvaluator {
                 advance(); // consume AND
                 operands.add(parseNotExpr());
             }
-            return operands.size() == 1 ? operands.getFirst() : new AndExpr(operands);
+            return operands.size() == 1 ? operands.get(0) : new AndExpr(operands);
         }
 
         private Expr parseNotExpr() {
@@ -495,12 +495,12 @@ final class ExpressionEvaluator {
         return switch (funcLower) {
             case "attribute_exists" -> {
                 if (func.args().isEmpty()) yield false;
-                String path = resolveAttributePath(func.args().getFirst(), exprAttrNames);
+                String path = resolveAttributePath(func.args().get(0), exprAttrNames);
                 yield item != null && resolveNestedAttribute(item, path) != null;
             }
             case "attribute_not_exists" -> {
                 if (func.args().isEmpty()) yield false;
-                String path = resolveAttributePath(func.args().getFirst(), exprAttrNames);
+                String path = resolveAttributePath(func.args().get(0), exprAttrNames);
                 yield item == null || resolveNestedAttribute(item, path) == null;
             }
             case "begins_with" -> {
@@ -595,7 +595,7 @@ final class ExpressionEvaluator {
             case FunctionOperand func -> {
                 // size() returns a number
                 if ("size".equalsIgnoreCase(func.functionName()) && !func.args().isEmpty()) {
-                    String path = resolveAttributePath(func.args().getFirst(), exprAttrNames);
+                    String path = resolveAttributePath(func.args().get(0), exprAttrNames);
                     JsonNode attrNode = item != null ? resolveNestedAttribute(item, path) : null;
                     yield attrNode != null ? String.valueOf(computeSize(attrNode)) : null;
                 }
@@ -615,7 +615,7 @@ final class ExpressionEvaluator {
                 String resolvedPath = resolvePathString(path, exprAttrNames);
                 yield item != null ? resolveNestedAttribute(item, resolvedPath) : null;
             }
-            case FunctionOperand _ -> null;
+            case FunctionOperand funcOp -> null;
         };
     }
 

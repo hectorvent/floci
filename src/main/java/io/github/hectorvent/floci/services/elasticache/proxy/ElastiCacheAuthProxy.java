@@ -56,7 +56,7 @@ public class ElastiCacheAuthProxy {
     public void start(int proxyPort) throws IOException {
         serverSocket = new ServerSocket(proxyPort);
         running = true;
-        Thread.ofVirtual().name("ec-proxy-accept-" + groupId).start(this::acceptLoop);
+        new Thread(this::acceptLoop, "ec-proxy-accept-" + groupId).start();
         LOG.infov("ElastiCache proxy started for group {0} on port {1} → {2}:{3}",
                 groupId, proxyPort, backendHost, backendPort);
     }
@@ -76,7 +76,7 @@ public class ElastiCacheAuthProxy {
         while (running) {
             try {
                 Socket client = serverSocket.accept();
-                Thread.ofVirtual().name("ec-proxy-conn-" + groupId).start(() -> handleConnection(client));
+                new Thread(() -> handleConnection(client), "ec-proxy-conn-" + groupId).start();
             } catch (IOException e) {
                 if (running) {
                     LOG.warnv("Accept error for group {0}: {1}", groupId, e.getMessage());
@@ -160,10 +160,10 @@ public class ElastiCacheAuthProxy {
     }
 
     private void bridge(Socket client, Socket backend) {
-        Thread t1 = Thread.ofVirtual().name("ec-relay-c2b-" + groupId)
-                .start(() -> relay(client, backend));
-        Thread t2 = Thread.ofVirtual().name("ec-relay-b2c-" + groupId)
-                .start(() -> relay(backend, client));
+        Thread t1 = new Thread(() -> relay(client, backend), "ec-relay-c2b-" + groupId);
+        t1.start();
+        Thread t2 = new Thread(() -> relay(backend, client), "ec-relay-b2c-" + groupId);
+        t2.start();
         try {
             t1.join();
             t2.join();

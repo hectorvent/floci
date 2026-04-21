@@ -43,6 +43,7 @@ public class CognitoJsonHandler {
             case "CreateUserPoolClient" -> handleCreateUserPoolClient(request);
             case "DescribeUserPoolClient" -> handleDescribeUserPoolClient(request);
             case "ListUserPoolClients" -> handleListUserPoolClients(request);
+            case "UpdateUserPoolClient" -> handleUpdateUserPoolClient(request);
             case "DeleteUserPoolClient" -> handleDeleteUserPoolClient(request);
             case "CreateResourceServer" -> handleCreateResourceServer(request);
             case "DescribeResourceServer" -> handleDescribeResourceServer(request);
@@ -160,6 +161,20 @@ public class CognitoJsonHandler {
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode items = response.putArray("UserPoolClients");
         clients.forEach(c -> items.add(clientToDescriptionNode(c)));
+        return Response.ok(response).build();
+    }
+
+    private Response handleUpdateUserPoolClient(JsonNode request) {
+        UserPoolClient client = service.updateUserPoolClient(
+                request.path("UserPoolId").asText(),
+                request.path("ClientId").asText(),
+                request.path("ClientName").isMissingNode() ? null : request.path("ClientName").asText(),
+                request.path("AllowedOAuthFlowsUserPoolClient").isMissingNode() ? null : request.path("AllowedOAuthFlowsUserPoolClient").asBoolean(),
+                request.path("AllowedOAuthFlows").isMissingNode() ? null : readStringList(request.path("AllowedOAuthFlows")),
+                request.path("AllowedOAuthScopes").isMissingNode() ? null : readStringList(request.path("AllowedOAuthScopes"))
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("UserPoolClient", clientToNode(client));
         return Response.ok(response).build();
     }
 
