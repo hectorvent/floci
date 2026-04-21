@@ -120,3 +120,107 @@ teardown() {
     found=$(echo "$output" | jq '.Tags // [] | any(.Key == "Environment")')
     [ "$found" = "false" ]
 }
+
+# --- Secrets Manager Version Stage Tests ---
+
+@test "Secrets Manager: add custom stage to version" {
+    out=$(aws_cmd secretsmanager create-secret \
+        --name "$SECRET_NAME" \
+        --secret-string '{"key":"value"}')
+    v1=$(json_get "$out" '.VersionId')
+
+    run aws_cmd secretsmanager update-secret-version-stage \
+        --secret-id "$SECRET_NAME" \
+        --version-stage MYSTAGE \
+        --move-to-version-id "$v1"
+    assert_success
+
+    run aws_cmd secretsmanager describe-secret --secret-id "$SECRET_NAME"
+    assert_success
+    has_mystage=$(echo "$output" | jq --arg vid "$v1" '.VersionIdsToStages[$vid] | any(. == "MYSTAGE")')
+    [ "$has_mystage" = "true" ]
+    has_current=$(echo "$output" | jq --arg vid "$v1" '.VersionIdsToStages[$vid] | any(. == "AWSCURRENT")')
+    [ "$has_current" = "true" ]
+}
+
+@test "Secrets Manager: move custom stage between versions" {
+    out=$(aws_cmd secretsmanager create-secret \
+        --name "$SECRET_NAME" \
+        --secret-string '{"key":"v1"}')
+    v1=$(json_get "$out" '.VersionId')
+
+    out=$(aws_cmd secretsmanager update-secret \
+        --secret-id "$SECRET_NAME" \
+        --secret-string '{"key":"v2"}')
+    v2=$(json_get "$out" '.VersionId')
+
+    aws_cmd secretsmanager update-secret-version-stage \
+        --secret-id "$SECRET_NAME" \
+        --version-stage MYSTAGE \
+        --move-to-version-id "$v1" >/dev/null
+
+    run aws_cmd secretsmanager update-secret-version-stage \
+        --secret-id "$SECRET_NAME" \
+        --version-stage MYSTAGE \
+        --move-to-version-id "$v2" \
+        --remove-from-version-id "$v1"
+    assert_success
+
+    run aws_cmd secretsmanager describe-secret --secret-id "$SECRET_NAME"
+    assert_success
+    on_v2=$(echo "$output" | jq --arg vid "$v2" '.VersionIdsToStages[$vid] | any(. == "MYSTAGE")')
+    [ "$on_v2" = "true" ]
+    on_v1=$(echo "$output" | jq --arg vid "$v1" '(.VersionIdsToStages[$vid] // []) | any(. == "MYSTAGE")')
+    [ "$on_v1" = "false" ]
+}
+
+@test "Secrets Manager: move AWSCURRENT updates AWSPREVIOUS" {
+    out=$(aws_cmd secretsmanager create-secret \
+        --name "$SECRET_NAME" \
+        --secret-string '{"key":"v1"}')
+    v1=$(json_get "$out" '.VersionId')
+
+    out=$(aws_cmd secretsmanager update-secret \
+        --secret-id "$SECRET_NAME" \
+        --secret-string '{"key":"v2"}')
+    v2=$(json_get "$out" '.VersionId')
+
+    run aws_cmd secretsmanager update-secret-version-stage \
+        --secret-id "$SECRET_NAME" \
+        --version-stage AWSCURRENT \
+        --move-to-version-id "$v1" \
+        --remove-from-version-id "$v2"
+    assert_success
+
+    run aws_cmd secretsmanager describe-secret --secret-id "$SECRET_NAME"
+    assert_success
+    v1_current=$(echo "$output" | jq --arg vid "$v1" '.VersionIdsToStages[$vid] | any(. == "AWSCURRENT")')
+    [ "$v1_current" = "true" ]
+    v2_previous=$(echo "$output" | jq --arg vid "$v2" '.VersionIdsToStages[$vid] | any(. == "AWSPREVIOUS")')
+    [ "$v2_previous" = "true" ]
+}
+
+@test "Secrets Manager: remove custom stage from version" {
+    out=$(aws_cmd secretsmanager create-secret \
+        --name "$SECRET_NAME" \
+        --secret-string '{"key":"value"}')
+    v1=$(json_get "$out" '.VersionId')
+
+    aws_cmd secretsmanager update-secret-version-stage \
+        --secret-id "$SECRET_NAME" \
+        --version-stage MYSTAGE \
+        --move-to-version-id "$v1" >/dev/null
+
+    run aws_cmd secretsmanager update-secret-version-stage \
+        --secret-id "$SECRET_NAME" \
+        --version-stage MYSTAGE \
+        --remove-from-version-id "$v1"
+    assert_success
+
+    run aws_cmd secretsmanager describe-secret --secret-id "$SECRET_NAME"
+    assert_success
+    has_mystage=$(echo "$output" | jq --arg vid "$v1" '(.VersionIdsToStages[$vid] // []) | any(. == "MYSTAGE")')
+    [ "$has_mystage" = "false" ]
+    has_current=$(echo "$output" | jq --arg vid "$v1" '.VersionIdsToStages[$vid] | any(. == "AWSCURRENT")')
+    [ "$has_current" = "true" ]
+}
