@@ -231,6 +231,15 @@ public class SchedulerService {
         LOG.infov("Deleted schedule: {0} in group {1}", name, effectiveGroup);
     }
 
+    /**
+     * Return every persisted schedule across all regions and groups. Used by
+     * {@link ScheduleDispatcher} to evaluate due schedules; other callers should
+     * prefer {@link #listSchedules}.
+     */
+    public List<Schedule> listAllSchedules() {
+        return scheduleStore.scan(k -> k.startsWith("schedule:"));
+    }
+
     public List<Schedule> listSchedules(String groupName, String namePrefix, String state, String region) {
         String storagePrefix;
         if (groupName != null && !groupName.isBlank()) {

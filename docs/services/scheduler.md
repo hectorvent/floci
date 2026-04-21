@@ -17,10 +17,28 @@
 | `DeleteSchedule` | `DELETE` | `/schedules/{Name}` | Delete a schedule |
 | `ListSchedules` | `GET` | `/schedules` | List schedules |
 
+## Schedule Invocation
+
+When `floci.services.scheduler.invocation-enabled` is `true` (the default), a
+background dispatcher fires schedule targets on time. Supported expressions:
+
+- `at(YYYY-MM-DDTHH:mm:ss)` — one-time fire; honors `ScheduleExpressionTimezone`
+  (default UTC) and `ActionAfterCompletion=DELETE`.
+- `rate(N unit)` — repeating fire (`minutes`, `hours`, `days`, `weeks`).
+- `cron(minute hour day-of-month month day-of-week year)` — AWS 6-field cron;
+  honors `ScheduleExpressionTimezone`.
+
+`State=DISABLED` schedules and schedules outside their `StartDate`/`EndDate`
+window are skipped. The dispatcher ticks every
+`floci.services.scheduler.tick-interval-seconds` (default `10`).
+
+Supported target types: SQS, Lambda, SNS, EventBridge `PutEvents`.
+
 ## Not Yet Supported
 
 - `TagResource` / `UntagResource` / `ListTagsForResource`
-- Schedule invocation (triggering targets on schedule)
+- `RetryPolicy` and `DeadLetterConfig` on failed invocations (stored but not honored)
+- `FlexibleTimeWindow` jitter (fires deterministically at the scheduled time)
 - `NextToken`-based pagination for List operations
 
 ## Examples

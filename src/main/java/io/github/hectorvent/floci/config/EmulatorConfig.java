@@ -350,6 +350,21 @@ public interface EmulatorConfig {
     interface SchedulerServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        /**
+         * Run the background dispatcher that fires schedule targets. Setting this
+         * to {@code false} keeps the scheduler API CRUD-only (the pre-invocation
+         * behavior). Invocation is only attempted when the service itself is enabled.
+         */
+        @WithDefault("true")
+        boolean invocationEnabled();
+
+        /**
+         * How often the dispatcher scans for due schedules. Must be >= 1s;
+         * default 10s is a reasonable trade-off between latency and load for local use.
+         */
+        @WithDefault("10")
+        long tickIntervalSeconds();
     }
 
     interface CloudWatchLogsServiceConfig {
