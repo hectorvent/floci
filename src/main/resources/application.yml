@@ -11,6 +11,7 @@ quarkus:
   native:
     additional-build-args: >-
       --initialize-at-run-time=org.apache.hc.client5.http.impl.auth.NTLMEngineImpl,
+      --initialize-at-run-time=io.vertx.ext.mail.impl.sasl.NTLMEngineImpl,
       --initialize-at-run-time=com.github.dockerjava.transport.NamedPipeSocket$Kernel32,
       --initialize-at-run-time=org.bouncycastle.jcajce.provider.drbg.DRBG$Default,
       --initialize-at-run-time=org.bouncycastle.jcajce.provider.drbg.DRBG$NonceAndIV,
