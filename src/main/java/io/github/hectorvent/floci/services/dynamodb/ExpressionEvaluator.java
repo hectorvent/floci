@@ -413,26 +413,25 @@ final class ExpressionEvaluator {
     static boolean evaluate(Expr expr, JsonNode item, JsonNode exprAttrNames, JsonNode exprAttrValues) {
         if (expr == null) return true;
 
-        return switch (expr) {
-            case AndExpr and -> {
-                for (Expr op : and.operands()) {
-                    if (!evaluate(op, item, exprAttrNames, exprAttrValues)) yield false;
-                }
-                yield true;
+        if (expr instanceof AndExpr and) {
+            for (Expr op : and.operands()) {
+                if (!evaluate(op, item, exprAttrNames, exprAttrValues)) return false;
             }
-            case OrExpr or -> {
-                for (Expr op : or.operands()) {
-                    if (evaluate(op, item, exprAttrNames, exprAttrValues)) yield true;
-                }
-                yield false;
+            return true;
+        }
+        if (expr instanceof OrExpr or) {
+            for (Expr op : or.operands()) {
+                if (evaluate(op, item, exprAttrNames, exprAttrValues)) return true;
             }
-            case NotExpr not -> !evaluate(not.operand(), item, exprAttrNames, exprAttrValues);
+            return false;
+        }
+        if (expr instanceof NotExpr not) return !evaluate(not.operand(), item, exprAttrNames, exprAttrValues);
 
-            case CompareExpr cmp -> evaluateComparison(cmp, item, exprAttrNames, exprAttrValues);
-            case BetweenExpr bet -> evaluateBetween(bet, item, exprAttrNames, exprAttrValues);
-            case InExpr in -> evaluateIn(in, item, exprAttrNames, exprAttrValues);
-            case FunctionCallExpr func -> evaluateFunction(func, item, exprAttrNames, exprAttrValues);
-        };
+        if (expr instanceof CompareExpr cmp) return evaluateComparison(cmp, item, exprAttrNames, exprAttrValues);
+        if (expr instanceof BetweenExpr bet) return evaluateBetween(bet, item, exprAttrNames, exprAttrValues);
+        if (expr instanceof InExpr in) return evaluateIn(in, item, exprAttrNames, exprAttrValues);
+        if (expr instanceof FunctionCallExpr func) return evaluateFunction(func, item, exprAttrNames, exprAttrValues);
+        return false;
     }
 
     /**
@@ -580,28 +579,27 @@ final class ExpressionEvaluator {
      */
     private static String resolveScalar(Operand operand, JsonNode item,
                                          JsonNode exprAttrNames, JsonNode exprAttrValues) {
-        return switch (operand) {
-            case PlaceholderOperand p -> {
-                if (exprAttrValues != null) {
-                    yield extractScalarValue(exprAttrValues.get(p.name()));
-                }
-                yield null;
+        if (operand instanceof PlaceholderOperand p) {
+            if (exprAttrValues != null) {
+                return extractScalarValue(exprAttrValues.get(p.name()));
             }
-            case PathOperand path -> {
-                String resolvedPath = resolvePathString(path, exprAttrNames);
-                JsonNode attrNode = item != null ? resolveNestedAttribute(item, resolvedPath) : null;
-                yield extractScalarValue(attrNode);
+            return null;
+        }
+        if (operand instanceof PathOperand path) {
+            String resolvedPath = resolvePathString(path, exprAttrNames);
+            JsonNode attrNode = item != null ? resolveNestedAttribute(item, resolvedPath) : null;
+            return extractScalarValue(attrNode);
+        }
+        if (operand instanceof FunctionOperand func) {
+            // size() returns a number
+            if ("size".equalsIgnoreCase(func.functionName()) && !func.args().isEmpty()) {
+                String path = resolveAttributePath(func.args().get(0), exprAttrNames);
+                JsonNode attrNode = item != null ? resolveNestedAttribute(item, path) : null;
+                return attrNode != null ? String.valueOf(computeSize(attrNode)) : null;
             }
-            case FunctionOperand func -> {
-                // size() returns a number
-                if ("size".equalsIgnoreCase(func.functionName()) && !func.args().isEmpty()) {
-                    String path = resolveAttributePath(func.args().get(0), exprAttrNames);
-                    JsonNode attrNode = item != null ? resolveNestedAttribute(item, path) : null;
-                    yield attrNode != null ? String.valueOf(computeSize(attrNode)) : null;
-                }
-                yield null;
-            }
-        };
+            return null;
+        }
+        return null;
     }
 
     /**
@@ -609,14 +607,14 @@ final class ExpressionEvaluator {
      */
     private static JsonNode resolveAttributeValue(Operand operand, JsonNode item,
                                                     JsonNode exprAttrNames, JsonNode exprAttrValues) {
-        return switch (operand) {
-            case PlaceholderOperand p -> exprAttrValues != null ? exprAttrValues.get(p.name()) : null;
-            case PathOperand path -> {
-                String resolvedPath = resolvePathString(path, exprAttrNames);
-                yield item != null ? resolveNestedAttribute(item, resolvedPath) : null;
-            }
-            case FunctionOperand funcOp -> null;
-        };
+        if (operand instanceof PlaceholderOperand p) {
+            return exprAttrValues != null ? exprAttrValues.get(p.name()) : null;
+        }
+        if (operand instanceof PathOperand path) {
+            String resolvedPath = resolvePathString(path, exprAttrNames);
+            return item != null ? resolveNestedAttribute(item, resolvedPath) : null;
+        }
+        return null;
     }
 
     // ── Attribute path resolution ──

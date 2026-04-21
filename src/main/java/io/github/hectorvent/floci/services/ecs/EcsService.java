@@ -560,15 +560,13 @@ public class EcsService {
     }
 
     private Map<String, String> getTagsFromResource(Object resource) {
-        return switch (resource) {
-            case EcsCluster c -> c.getTags();
-            case TaskDefinition td -> td.getTags();
-            case EcsTask t -> t.getTags();
-            case EcsServiceModel s -> s.getTags();
-            case ContainerInstance ci -> ci.getTags();
-            case CapacityProvider cp -> cp.getTags();
-            default -> Map.of();
-        };
+        if (resource instanceof EcsCluster c) return c.getTags();
+        if (resource instanceof TaskDefinition td) return td.getTags();
+        if (resource instanceof EcsTask t) return t.getTags();
+        if (resource instanceof EcsServiceModel s) return s.getTags();
+        if (resource instanceof ContainerInstance ci) return ci.getTags();
+        if (resource instanceof CapacityProvider cp) return cp.getTags();
+        return Map.of();
     }
 
     // ── Account Settings ──────────────────────────────────────────────────────

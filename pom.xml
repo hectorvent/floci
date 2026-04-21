@@ -198,9 +198,6 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
                 <configuration>
-                    <compilerArgs>
-                        <arg>--enable-preview</arg>
-                    </compilerArgs>
                     <testIncludes>
                         <testInclude>**/cognito/*Test.java</testInclude>
                     </testIncludes>
@@ -211,7 +208,6 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>--enable-preview</argLine>
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                     </systemPropertyVariables>
