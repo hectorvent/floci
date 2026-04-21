@@ -65,6 +65,7 @@ floci:
     log-max-file: "3"
     docker-host: unix:///var/run/docker.sock
     docker-config-path: ""
+    registry-credentials: []
 
   services:
     ssm:
