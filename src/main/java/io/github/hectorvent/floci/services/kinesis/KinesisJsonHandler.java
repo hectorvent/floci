@@ -13,7 +13,7 @@ import io.github.hectorvent.floci.services.kinesis.model.KinesisConsumer;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
-
+import jakarta.ws.rs.core.StreamingOutput
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -266,8 +266,82 @@ public class KinesisJsonHandler {
     }
 
     private Response handleSubscribeToShard(JsonNode request, String region) {
-        ObjectNode response = objectMapper.createObjectNode();
-        return Response.ok(response).build();
+        String consumerArn = request.has("ConsumerARN") ? request.path("ConsumerARN").asText(null) : null;
+        String shardId = request.has("ShardId") ? request.path("ShardId").asText(null) : null;
+
+        if (consumerArn == null || consumerArn.isBlank()) {
+            throw new AwsException("InvalidArgumentException", "ConsumerARN is required", 400);
+        }
+        if (shardId == null || shardId.isBlank()) {
+            throw new AwsException("InvalidArgumentException", "ShardId is required", 400);
+        }
+
+        // Validate consumer and resolve stream name
+        KinesisConsumer consumer = service.describeStreamConsumer(null, null, consumerArn, region);
+        String streamName = parseStreamNameFromArn(consumer.getStreamArn());
+        if (streamName == null) {
+            throw new AwsException("InvalidArgumentException",
+                    "Cannot resolve stream name from consumer ARN: " + consumerArn, 400);
+        }
+
+        // Parse StartingPosition
+        JsonNode startingPosition = request.path("StartingPosition");
+        String posType = startingPosition.path("Type").asText("LATEST");
+        String seqNumber = startingPosition.has("SequenceNumber")
+                ? startingPosition.path("SequenceNumber").asText(null) : null;
+        Long timestampMillis = null;
+        if (startingPosition.has("Timestamp") && !startingPosition.path("Timestamp").isNull()) {
+            JsonNode tsNode = startingPosition.path("Timestamp");
+            if (tsNode.isNumber()) {
+                timestampMillis = Math.round(tsNode.asDouble() * 1000);
+            }
+        }
+        if ("AT_TIMESTAMP".equals(posType) && timestampMillis == null) {
+            throw new AwsException("InvalidArgumentException",
+                    "StartingPosition.Type AT_TIMESTAMP requires a Timestamp", 400);
+        }
+
+        String iterator = service.getShardIterator(streamName, shardId, posType, seqNumber, timestampMillis, region);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = service.getRecords(iterator, 10000, region);
+        List<KinesisRecord> records = (List<KinesisRecord>) result.get("Records");
+        long millisBehind = ((Number) result.get("MillisBehindLatest")).longValue();
+
+        // Build JSON payload
+        ObjectNode payload = objectMapper.createObjectNode();
+        ArrayNode recordsArray = payload.putArray("Records");
+        String lastSeq = null;
+        for (KinesisRecord rec : records) {
+            ObjectNode rNode = recordsArray.addObject();
+            rNode.put("Data", Base64.getEncoder().encodeToString(rec.getData()));
+            rNode.put("PartitionKey", rec.getPartitionKey());
+            rNode.put("SequenceNumber", rec.getSequenceNumber());
+            rNode.put("ApproximateArrivalTimestamp",
+                    rec.getApproximateArrivalTimestamp().toEpochMilli() / 1000.0);
+            lastSeq = rec.getSequenceNumber();
+        }
+        if (lastSeq != null) {
+            payload.put("ContinuationSequenceNumber", lastSeq);
+        }
+        payload.put("MillisBehindLatest", millisBehind);
+
+        try {
+            byte[] payloadBytes = objectMapper.writeValueAsBytes(payload);
+            byte[] frame = AwsEventStreamEncoder.encodeEvent(
+                    "SubscribeToShardEvent", "application/json", payloadBytes);
+
+            StreamingOutput streamingOutput = output -> {
+                output.write(frame);
+                output.flush();
+            };
+
+            return Response.ok(streamingOutput)
+                    .header("Content-Type", "application/vnd.amazon.eventstream")
+                    .build();
+        } catch (Exception e) {
+            throw new AwsException("InternalFailure", "Failed to encode event stream: " + e.getMessage(), 500);
+        }
     }
 
     private ObjectNode consumerToNode(KinesisConsumer c) {
