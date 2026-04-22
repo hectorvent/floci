@@ -410,6 +410,8 @@ public class S3Controller {
                               @HeaderParam("Content-Encoding") String contentEncoding,
                               @HeaderParam("x-amz-content-sha256") String contentSha256,
                               @HeaderParam("x-amz-copy-source") String copySource,
+                              @HeaderParam("If-Match") String ifMatch,
+                              @HeaderParam("If-None-Match") String ifNoneMatch,
                               @QueryParam("uploadId") String uploadId,
                               @QueryParam("partNumber") Integer partNumber,
                               @Context UriInfo uriInfo,
@@ -447,6 +449,11 @@ public class S3Controller {
 
             if (copySource != null && !copySource.isEmpty()) {
                 return handleCopyObject(copySource, bucket, key, contentType, httpHeaders);
+            }
+
+            Response preconditionResponse = checkWritePreconditions(bucket, key, ifMatch, ifNoneMatch);
+            if (preconditionResponse != null) {
+                return preconditionResponse;
             }
 
             String lockMode = httpHeaders.getHeaderString("x-amz-object-lock-mode");
@@ -788,6 +795,8 @@ public class S3Controller {
                                          @QueryParam("uploadId") String uploadId,
                                          @QueryParam("versionId") String versionId,
                                          @HeaderParam("Content-Type") String contentType,
+                                         @HeaderParam("If-Match") String ifMatch,
+                                         @HeaderParam("If-None-Match") String ifNoneMatch,
                                          @Context HttpHeaders httpHeaders,
                                          @Context UriInfo uriInfo,
                                          byte[] body) {
@@ -827,6 +836,10 @@ public class S3Controller {
 
             if (uploadId != null) {
                 List<Integer> partNumbers = parseCompleteMultipartBody(new String(body));
+                Response preconditionResponse = checkWritePreconditions(bucket, key, ifMatch, ifNoneMatch);
+                if (preconditionResponse != null) {
+                    return preconditionResponse;
+                }
                 S3Object obj = s3Service.completeMultipartUpload(bucket, key, uploadId, partNumbers);
                 String baseUrl = uriInfo.getBaseUri().toString();
                 if (baseUrl.endsWith("/")) {
@@ -1700,6 +1713,30 @@ public class S3Controller {
         return null;
     }
 
+    private Response checkWritePreconditions(String bucket, String key, String ifMatch, String ifNoneMatch) {
+        if (ifMatch == null && ifNoneMatch == null) {
+            return null;
+        }
+
+        S3Object existing;
+        try {
+            existing = s3Service.headObject(bucket, key);
+        } catch (AwsException e) {
+            if ("NoSuchKey".equals(e.getErrorCode()) && ifMatch == null) {
+                return null;
+            }
+            throw e;
+        }
+
+        if (ifMatch != null && !eTagMatches(ifMatch, existing.getETag())) {
+            return preconditionFailedResponse();
+        }
+        if (ifNoneMatch != null && eTagMatches(ifNoneMatch, existing.getETag())) {
+            return preconditionFailedResponse();
+        }
+        return null;
+    }
+
     private boolean hasPreconditions(String ifMatch, String ifNoneMatch,
                                       String ifModifiedSince, String ifUnmodifiedSince) {
         return ifMatch != null || ifNoneMatch != null || ifModifiedSince != null || ifUnmodifiedSince != null;
@@ -1718,15 +1755,28 @@ public class S3Controller {
     }
 
     private boolean eTagMatches(String headerValue, String eTag) {
-        if ("*".equals(headerValue.trim())) {
-            return true;
-        }
+        String normalizedETag = normalizeEntityTag(eTag);
         for (String candidate : headerValue.split(",")) {
-            if (candidate.trim().equals(eTag)) {
+            String normalizedCandidate = normalizeEntityTag(candidate);
+            if ("*".equals(normalizedCandidate) || normalizedCandidate.equals(normalizedETag)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static String normalizeEntityTag(String value) {
+        if (value == null) {
+            return "";
+        }
+        String normalized = value.trim();
+        if (normalized.startsWith("W/")) {
+            normalized = normalized.substring(2).trim();
+        }
+        if (normalized.length() >= 2 && normalized.startsWith("\"") && normalized.endsWith("\"")) {
+            normalized = normalized.substring(1, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private Instant parseHttpDate(String dateStr) {
