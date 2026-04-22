@@ -131,7 +131,7 @@ class S3ControlUrlEncodedArnIntegrationTest {
 
     @Test
     @Order(6)
-    @DisplayName("Malformed ARN returns valid S3-style XML error body (#435)")
+    @DisplayName("Malformed ARN returns S3 Control ErrorResponse wrapper (#435, #557)")
     void malformedArnReturnsXmlError() {
         // Path param must not contain a literal ':bucket/' segment after decoding.
         given()
@@ -141,13 +141,15 @@ class S3ControlUrlEncodedArnIntegrationTest {
         .then()
             .statusCode(400)
             .contentType(containsString("xml"))
+            .body(containsString("<ErrorResponse xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\">"))
             .body(containsString("<Error>"))
-            .body(containsString("<Code>InvalidRequest</Code>"));
+            .body(containsString("<Code>InvalidRequest</Code>"))
+            .body(containsString("<RequestId>"));
     }
 
     @Test
     @Order(7)
-    @DisplayName("Malformed percent-encoding returns XML error, not JSON 500 (#435)")
+    @DisplayName("Malformed percent-encoding returns S3 Control ErrorResponse wrapper (#435, #557)")
     void malformedPercentEncodingReturnsXmlError() {
         // %ZZ is not a valid percent-encoding sequence; URLDecoder throws IAE.
         given()
@@ -157,7 +159,9 @@ class S3ControlUrlEncodedArnIntegrationTest {
         .then()
             .statusCode(400)
             .contentType(containsString("xml"))
+            .body(containsString("<ErrorResponse xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\">"))
             .body(containsString("<Error>"))
-            .body(containsString("<Code>InvalidRequest</Code>"));
+            .body(containsString("<Code>InvalidRequest</Code>"))
+            .body(containsString("<RequestId>"));
     }
 }
