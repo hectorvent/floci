@@ -1,7 +1,8 @@
 FROM registry.access.redhat.com/ubi9-minimal:9.7
 
 ARG VERSION=latest
-ARG BINARY_FILE=application
+# Automatically set by Docker BuildKit to "amd64" or "arm64"
+ARG TARGETARCH
 
 ENV FLOCI_VERSION=${VERSION}
 ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
@@ -14,8 +15,8 @@ RUN mkdir -p /app/data \
 
 VOLUME /app/data
 
-COPY --chown=1001:root target/*.properties target/*.so /app/
-COPY --chown=1001:root target/*-runner /app/application
+COPY --chown=1001:root native/${TARGETARCH}/ /app/
+RUN mv /app/*-runner /app/application && chmod +x /app/application
 
 EXPOSE 4566
 

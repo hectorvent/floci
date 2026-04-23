@@ -28,6 +28,18 @@
 
 ---
 
+> [!IMPORTANT]
+> **Image moved to `floci/floci`.** Update your `docker-compose.yml` and `docker run` commands:
+> ```
+> # Before
+> image: hectorvent/floci:latest
+> # After
+> image: floci/floci:latest
+> ```
+> The old `hectorvent/floci` repository will no longer receive updates.
+
+---
+
 > LocalStack's community edition [sunset in March 2026](https://blog.localstack.cloud/the-road-ahead-for-localstack/) — requiring auth tokens, and freezing security updates. Floci is the no-strings-attached alternative.
 
 ## Why Floci?
@@ -135,7 +147,7 @@ docker run -d --name floci \
   -p 4566:4566 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -u root \
-  hectorvent/floci:latest
+  floci/floci:latest
 ```
 
 In Docker Compose, add the socket volume alongside any other mounts.
@@ -227,7 +239,7 @@ For more details, visit the [Storage Configuration documentation](https://floci.
 # docker-compose.yml
 services:
   floci:
-    image: hectorvent/floci:latest
+    image: floci/floci:latest
     ports:
       - "4566:4566"
     volumes:
@@ -254,7 +266,7 @@ docker run -d --name floci \
   -e FLOCI_DEFAULT_REGION=us-east-1 \
   -e FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK=bridge \
   -u root \
-  hectorvent/floci:latest
+  floci/floci:latest
 ```
 
 All services are available at `http://localhost:4566`. Use any AWS region — credentials can be anything.
@@ -546,7 +558,7 @@ All settings are overridable via environment variables (`FLOCI_` prefix).
 ```yaml
 services:
   floci:
-    image: hectorvent/floci:latest
+    image: floci/floci:latest
     ports:
       - "4566:4566"
     environment:

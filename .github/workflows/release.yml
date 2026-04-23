@@ -142,23 +142,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/floci:${{ steps.version.outputs.version }}-jvm
-            ${{ secrets.DOCKERHUB_USERNAME }}/floci:latest-jvm
+            floci/floci:${{ steps.version.outputs.version }}-jvm
+            floci/floci:latest-jvm
+            floci/floci:${{ steps.version.outputs.version }}-aws
+            floci/floci:latest-aws
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-
-      - name: Build and push JVM image (With AWS CLI)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          file: Dockerfile.jvm-package
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/floci:${{ steps.version.outputs.version }}-aws
-            ${{ secrets.DOCKERHUB_USERNAME }}/floci:latest-aws
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             INSTALL_AWS_CLI=true
@@ -177,13 +166,6 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - uses: actions/download-artifact@v8
         with:
           name: native-amd64
@@ -194,46 +176,27 @@ jobs:
           name: native-arm64
           path: native/arm64/
 
-      - name: Prepare amd64 target
-        run: |
-          mkdir -p target
-          cp native/amd64/* target/
-          chmod +x target/*-runner
+      - name: Make binaries executable
+        run: chmod +x native/amd64/*-runner native/arm64/*-runner
 
-      - name: Build and push amd64 native image
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push native multi-arch image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           file: Dockerfile.native-package
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/floci:${{ steps.version.outputs.version }}-amd64
+          tags: |
+            floci/floci:${{ steps.version.outputs.version }}
+            floci/floci:latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
-
-      - name: Prepare arm64 target
-        run: |
-          rm -rf target
-          mkdir -p target
-          cp native/arm64/* target/
-          chmod +x target/*-runner
-
-      - name: Build and push arm64 native image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          file: Dockerfile.native-package
-          platforms: linux/arm64
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/floci:${{ steps.version.outputs.version }}-arm64
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-
-      # Combine the two platform-specific images into a single multi-arch manifest
-      - name: Create and push multi-arch manifest
-        run: |
-          docker buildx imagetools create \
-            --tag ${{ secrets.DOCKERHUB_USERNAME }}/floci:${{ steps.version.outputs.version }} \
-            --tag ${{ secrets.DOCKERHUB_USERNAME }}/floci:latest \
-            ${{ secrets.DOCKERHUB_USERNAME }}/floci:${{ steps.version.outputs.version }}-amd64 \
-            ${{ secrets.DOCKERHUB_USERNAME }}/floci:${{ steps.version.outputs.version }}-arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

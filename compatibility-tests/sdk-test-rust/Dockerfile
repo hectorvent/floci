@@ -1,5 +1,11 @@
-FROM rust:1-alpine
-RUN apk add --no-cache musl-dev pkgconf openssl-dev ca-certificates
+FROM rust:1-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev ca-certificates clang lld \
+    && rm -rf /var/lib/apt/lists/*
+
+# Use lld: far more memory-efficient than GNU ld when linking large Rust binaries on aarch64
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+
 WORKDIR /app
 
 # Install cargo-nextest

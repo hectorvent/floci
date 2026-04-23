@@ -1,5 +1,65 @@
 [
   {
+    "name": "io.github.hectorvent.floci.services.apigateway.VtlTemplateEngine$InputVariable",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.hectorvent.floci.services.apigateway.VtlTemplateEngine$UtilVariable",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.hectorvent.floci.services.apigateway.VtlTemplateEngine$ResponseOverride",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.apache.velocity.util.introspection.UberspectImpl",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.apache.velocity.util.introspection.TypeConversionHandlerImpl",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.apache.velocity.runtime.resource.ResourceManagerImpl",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.apache.velocity.runtime.resource.ResourceCacheImpl",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.apache.velocity.runtime.ParserPoolImpl",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.apache.velocity.runtime.resource.loader.FileResourceLoader",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.apache.velocity.runtime.resource.loader.StringResourceLoader",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
     "name": "com.fasterxml.jackson.dataformat.cbor.CBORFactory",
     "allDeclaredConstructors": true,
     "allDeclaredMethods": true

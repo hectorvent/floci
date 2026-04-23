@@ -54,6 +54,8 @@ jobs:
           file: Dockerfile.jvm-package
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/floci:edge
+          tags: floci/floci:edge
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            INSTALL_AWS_CLI=true

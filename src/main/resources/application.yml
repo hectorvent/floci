@@ -1,4 +1,7 @@
 quarkus:
+  log:
+    console:
+        color: true
   http:
     port: ${floci.port}
     host: 0.0.0.0
