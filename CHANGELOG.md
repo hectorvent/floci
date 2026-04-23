@@ -5,6 +5,7 @@
 
 * **bedrock-runtime:** add stub for Converse and InvokeModel ([#87](https://github.com/floci-io/floci/issues/87))
 * **s3:** preserve explicit object server-side-encryption headers on PutObject, GetObject, HeadObject, CopyObject, and multipart uploads
+* **cognito,kms:** allow caller-pinned resource IDs via the reserved `floci:override-id` tag channel ([#460](https://github.com/floci-io/floci/issues/460))
 
 
 ### Bug Fixes

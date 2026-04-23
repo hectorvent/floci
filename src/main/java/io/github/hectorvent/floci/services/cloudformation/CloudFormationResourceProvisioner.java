@@ -543,7 +543,8 @@ public class CloudFormationResourceProvisioner {
     private void provisionKmsKey(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
                                  String region, String accountId) {
         String description = resolveOptional(props, "Description", engine);
-        var key = kmsService.createKey(description, region);
+        Map<String, String> tags = parseCfnTags(props != null ? props.get("Tags") : null, engine);
+        var key = kmsService.createKey(description, null, tags, region);
         r.setPhysicalId(key.getKeyId());
         r.getAttributes().put("Arn", key.getArn());
         r.getAttributes().put("KeyId", key.getKeyId());

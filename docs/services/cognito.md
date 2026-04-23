@@ -5,6 +5,8 @@
 
 Floci serves pool-specific discovery and JWKS endpoints, plus a relaxed OAuth token endpoint, so local clients can mint and validate Cognito-like access tokens against RS256 signing keys.
 
+`CreateUserPool` accepts a reserved user-pool tag, `floci:override-id`, to pin the resulting `UserPool.Id` at creation time. Floci strips reserved `floci:*` tags from stored and returned `UserPoolTags` on both create and update paths, so the tag namespace acts as an input-only control channel and is never persisted as user-visible metadata.
+
 ## Supported Actions
 
 | Category | Actions |

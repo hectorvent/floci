@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.kms;
 
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
 import io.github.hectorvent.floci.services.kms.model.KmsKey;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -279,6 +280,7 @@ public class KmsJsonHandler {
         String keyId = request.path("KeyId").asText();
         Map<String, String> tags = new HashMap<>();
         request.path("Tags").forEach(t -> tags.put(t.path("TagKey").asText(), t.path("TagValue").asText()));
+        ReservedTags.rejectReservedTagsOnUpdate(tags);
         service.tagResource(keyId, tags, region);
         return Response.ok(objectMapper.createObjectNode()).build();
     }

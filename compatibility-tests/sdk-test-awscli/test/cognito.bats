@@ -155,3 +155,35 @@ teardown() {
     assert_success
     POOL_ID=""
 }
+
+@test "Cognito: create user pool with reserved override tag uses pinned ID and strips reserved tag" {
+    run aws_cmd cognito-idp create-user-pool \
+        --pool-name "bats-test-pool-$(unique_name)" \
+        --user-pool-tags floci:override-id=us-east-1_batspool1,env=test
+    assert_success
+    POOL_ID=$(json_get "$output" '.UserPool.Id')
+    [ "$POOL_ID" = "us-east-1_batspool1" ]
+
+    has_reserved=$(echo "$output" | jq '.UserPool.UserPoolTags | has("floci:override-id")')
+    [ "$has_reserved" = "false" ]
+
+    run aws_cmd cognito-idp describe-user-pool --user-pool-id "$POOL_ID"
+    assert_success
+    has_reserved=$(echo "$output" | jq '.UserPool.UserPoolTags | has("floci:override-id")')
+    [ "$has_reserved" = "false" ]
+    env_value=$(json_get "$output" '.UserPool.UserPoolTags.env')
+    [ "$env_value" = "test" ]
+}
+
+@test "Cognito: duplicate reserved override tag fails with ResourceConflictException" {
+    out=$(aws_cmd cognito-idp create-user-pool \
+        --pool-name "bats-test-pool-$(unique_name)" \
+        --user-pool-tags floci:override-id=us-east-1_batsdup01)
+    POOL_ID=$(json_get "$out" '.UserPool.Id')
+
+    run aws_cmd cognito-idp create-user-pool \
+        --pool-name "bats-test-pool-$(unique_name)" \
+        --user-pool-tags floci:override-id=us-east-1_batsdup01
+    assert_failure
+    [[ "$output" == *"ResourceConflictException"* ]]
+}

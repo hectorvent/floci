@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.kms;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
@@ -78,7 +79,10 @@ public class KmsService {
     }
 
     public KmsKey createKey(String description, String keyUsage, String customerMasterKeySpec, String policy, Map<String, String> tags, String region) {
-        String keyId = UUID.randomUUID().toString();
+        String keyId = resolveKeyId(tags);
+        if (keyStore.get(region + "::" + keyId).isPresent()) {
+            throw new AwsException("AlreadyExistsException", "Key already exists", 400);
+        }
         String arn = regionResolver.buildArn("kms", region, "key/" + keyId);
 
         String effectiveUsage = keyUsage != null ? keyUsage : "ENCRYPT_DECRYPT";
@@ -92,15 +96,29 @@ public class KmsService {
         key.setKeyUsage(effectiveUsage);
         key.setCustomerMasterKeySpec(effectiveSpec);
         key.setPolicy(policy != null ? policy : DEFAULT_KEY_POLICY);
-        if (tags != null) {
-            key.getTags().putAll(tags);
-        }
+        key.getTags().putAll(ReservedTags.stripReservedTags(tags));
 
         generateKeyMaterial(key);
 
         keyStore.put(region + "::" + keyId, key);
         LOG.infov("Created KMS key: {0} ({1}/{2}) in {3}", keyId, key.getKeyUsage(), key.getCustomerMasterKeySpec(), region);
         return key;
+    }
+
+    private String resolveKeyId(Map<String, String> tags) {
+        String overrideId = ReservedTags.extractOverrideId(tags);
+        if (overrideId == null) {
+            return UUID.randomUUID().toString();
+        }
+
+        String normalized = overrideId.trim();
+        if (normalized.isEmpty()) {
+            throw new AwsException("ValidationException", "Override resource ID must not be blank.", 400);
+        }
+        if (normalized.length() > 256) {
+            throw new AwsException("ValidationException", "Override resource ID must be 256 characters or fewer.", 400);
+        }
+        return normalized;
     }
 
     private void generateKeyMaterial(KmsKey key) {
@@ -448,6 +466,7 @@ public class KmsService {
 
     public void tagResource(String keyId, Map<String, String> tags, String region) {
         KmsKey key = resolveKey(keyId, region);
+        ReservedTags.rejectReservedTagsOnUpdate(tags);
         key.getTags().putAll(tags);
         keyStore.put(region + "::" + key.getKeyId(), key);
     }

@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.cognito;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.cognito.model.CognitoGroup;
 import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
@@ -70,6 +71,125 @@ class CognitoServiceTest {
         assertEquals(schema, pool.getSchemaAttributes());
         assertEquals(policies, pool.getPolicies());
         assertEquals(List.of("email"), pool.getUsernameAttributes());
+    }
+
+    @Test
+    void createUserPoolWithOverrideIdUsesProvidedId() {
+        UserPool pool = service.createUserPool(
+                Map.of(
+                        "PoolName", "PinnedPool",
+                        "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "us-east-1_testpool1")
+                ),
+                "us-east-1"
+        );
+
+        assertEquals("us-east-1_testpool1", pool.getId());
+        assertEquals("arn:aws:cognito-idp:us-east-1:000000000000:userpool/us-east-1_testpool1", pool.getArn());
+    }
+
+    @Test
+    void createUserPoolWithOverrideIdStripsReservedTagOnCreate() {
+        UserPool pool = service.createUserPool(
+                Map.of(
+                        "PoolName", "PinnedPool",
+                        "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "us-east-1_testpool1", "env", "test")
+                ),
+                "us-east-1"
+        );
+
+        assertEquals(Map.of("env", "test"), pool.getUserPoolTags());
+        assertFalse(pool.getUserPoolTags().containsKey(ReservedTags.OVERRIDE_ID_KEY));
+    }
+
+    @Test
+    void createUserPoolWithDuplicateOverrideIdThrowsResourceConflict() {
+        service.createUserPool(
+                Map.of("PoolName", "PinnedPool", "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "us-east-1_testpool1")),
+                "us-east-1"
+        );
+
+        AwsException exception = assertThrows(
+                AwsException.class,
+                () -> service.createUserPool(
+                        Map.of("PoolName", "PinnedPool2", "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "us-east-1_testpool1")),
+                        "us-east-1"
+                )
+        );
+
+        assertEquals("ResourceConflictException", exception.getErrorCode());
+    }
+
+    @Test
+    void createUserPoolWithBlankOverrideIdThrowsValidation() {
+        AwsException exception = assertThrows(
+                AwsException.class,
+                () -> service.createUserPool(
+                        Map.of("PoolName", "PinnedPool", "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "   ")),
+                        "us-east-1"
+                )
+        );
+
+        assertEquals("ValidationException", exception.getErrorCode());
+    }
+
+    @Test
+    void createUserPoolWithSlashInOverrideThrowsValidation() {
+        AwsException exception = assertThrows(
+                AwsException.class,
+                () -> service.createUserPool(
+                        Map.of("PoolName", "PinnedPool", "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "bad/pool")),
+                        "us-east-1"
+                )
+        );
+
+        assertEquals("ValidationException", exception.getErrorCode());
+    }
+
+    @Test
+    void createUserPoolWithQuestionMarkOrHashInOverrideThrowsValidation() {
+        AwsException questionMarkException = assertThrows(
+                AwsException.class,
+                () -> service.createUserPool(
+                        Map.of("PoolName", "PinnedPool", "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "bad?pool")),
+                        "us-east-1"
+                )
+        );
+        assertEquals("ValidationException", questionMarkException.getErrorCode());
+
+        AwsException hashException = assertThrows(
+                AwsException.class,
+                () -> service.createUserPool(
+                        Map.of("PoolName", "PinnedPool", "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "bad#pool")),
+                        "us-east-1"
+                )
+        );
+        assertEquals("ValidationException", hashException.getErrorCode());
+    }
+
+    @Test
+    void updateUserPoolWithReservedTagStripsIt() {
+        UserPool pool = service.createUserPool(Map.of("PoolName", "PinnedPool"), "us-east-1");
+
+        service.updateUserPool(
+                Map.of(
+                        "UserPoolId", pool.getId(),
+                        "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "late-id", "env", "test")
+                ),
+                "us-east-1"
+        );
+
+        UserPool updated = service.describeUserPool(pool.getId());
+        assertEquals(Map.of("env", "test"), updated.getUserPoolTags());
+    }
+
+    @Test
+    void issuerUrlForPinnedPoolResolvesAsBaseUrlSlashPoolId() {
+        UserPool pool = service.createUserPool(
+                Map.of("PoolName", "PinnedPool", "UserPoolTags", Map.of(ReservedTags.OVERRIDE_ID_KEY, "custompool")),
+                "us-east-1"
+        );
+
+        assertEquals("http://localhost:4566/custompool", service.getIssuer(pool.getId()));
     }
 
     // =========================================================================

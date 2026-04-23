@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.cognito.model.*;
@@ -78,7 +79,11 @@ public class CognitoService {
     @SuppressWarnings("unchecked")
     public UserPool createUserPool(Map<String, Object> request, String region) {
         String name = (String) request.get("PoolName");
-        String id = region + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 9);
+        Map<String, String> userPoolTags = (Map<String, String>) request.get("UserPoolTags");
+        String id = resolveUserPoolId(region, userPoolTags);
+        if (poolStore.get(id).isPresent()) {
+            throw new AwsException("ResourceConflictException", "User pool already exists", 400);
+        }
         UserPool pool = new UserPool();
         pool.setId(id);
         pool.setName(name);
@@ -122,7 +127,9 @@ public class CognitoService {
         if (request.containsKey("DeviceConfiguration")) pool.setDeviceConfiguration((Map<String, Object>) request.get("DeviceConfiguration"));
         if (request.containsKey("EmailConfiguration")) pool.setEmailConfiguration((Map<String, Object>) request.get("EmailConfiguration"));
         if (request.containsKey("SmsConfiguration")) pool.setSmsConfiguration((Map<String, Object>) request.get("SmsConfiguration"));
-        if (request.containsKey("UserPoolTags")) pool.setUserPoolTags((Map<String, String>) request.get("UserPoolTags"));
+        if (request.containsKey("UserPoolTags")) {
+            pool.setUserPoolTags(ReservedTags.stripReservedTags((Map<String, String>) request.get("UserPoolTags")));
+        }
         if (request.containsKey("AdminCreateUserConfig")) pool.setAdminCreateUserConfig((Map<String, Object>) request.get("AdminCreateUserConfig"));
         if (request.containsKey("UserPoolAddOns")) pool.setUserPoolAddOns((Map<String, Object>) request.get("UserPoolAddOns"));
         if (request.containsKey("UsernameConfiguration")) pool.setUsernameConfiguration((Map<String, Object>) request.get("UsernameConfiguration"));
@@ -870,6 +877,32 @@ public class CognitoService {
 
     public String getIssuer(String poolId) {
         return baseUrl + "/" + poolId;
+    }
+
+    private String resolveUserPoolId(String region, Map<String, String> tags) {
+        String overrideId = ReservedTags.extractOverrideId(tags);
+        if (overrideId == null) {
+            return region + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 9);
+        }
+        validateOverridePoolId(overrideId);
+        return overrideId.trim();
+    }
+
+    private void validateOverridePoolId(String overrideId) {
+        if (overrideId == null || overrideId.trim().isEmpty()) {
+            throw new AwsException("ValidationException", "Override resource ID must not be blank.", 400);
+        }
+
+        String normalized = overrideId.trim();
+        if (normalized.chars().anyMatch(Character::isWhitespace)) {
+            throw new AwsException("ValidationException", "Override resource ID must not contain whitespace.", 400);
+        }
+        if (normalized.indexOf('/') >= 0 || normalized.indexOf('?') >= 0 || normalized.indexOf('#') >= 0) {
+            throw new AwsException("ValidationException", "Override resource ID contains unsupported characters.", 400);
+        }
+        if (normalized.chars().anyMatch(Character::isISOControl)) {
+            throw new AwsException("ValidationException", "Override resource ID must not contain control characters.", 400);
+        }
     }
 
     public String getJwksUri(String poolId) {

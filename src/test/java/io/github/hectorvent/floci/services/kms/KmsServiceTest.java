@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.kms;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
 import io.github.hectorvent.floci.services.kms.model.KmsKey;
@@ -286,6 +287,67 @@ class KmsServiceTest {
     void createKeyWithoutTagsHasEmptyTagMap() {
         KmsKey key = kmsService.createKey(null, REGION);
         assertTrue(key.getTags().isEmpty());
+    }
+
+    @Test
+    void createKeyWithOverrideIdUsesProvidedId() {
+        KmsKey key = kmsService.createKey(
+                "tagged-key",
+                null,
+                Map.of(ReservedTags.OVERRIDE_ID_KEY, "my-test-key"),
+                REGION
+        );
+
+        assertEquals("my-test-key", key.getKeyId());
+        assertEquals("arn:aws:kms:us-east-1:000000000000:key/my-test-key", key.getArn());
+    }
+
+    @Test
+    void createKeyWithOverrideIdStripsReservedTagFromStoredKey() {
+        KmsKey key = kmsService.createKey(
+                "tagged-key",
+                null,
+                Map.of(ReservedTags.OVERRIDE_ID_KEY, "my-test-key", "env", "test"),
+                REGION
+        );
+
+        KmsKey found = kmsService.describeKey(key.getKeyId(), REGION);
+        assertEquals("test", found.getTags().get("env"));
+        assertFalse(found.getTags().containsKey(ReservedTags.OVERRIDE_ID_KEY));
+    }
+
+    @Test
+    void createKeyWithDuplicateOverrideIdThrowsAlreadyExists() {
+        kmsService.createKey("first", null, Map.of(ReservedTags.OVERRIDE_ID_KEY, "my-test-key"), REGION);
+
+        AwsException exception = assertThrows(
+                AwsException.class,
+                () -> kmsService.createKey("second", null, Map.of(ReservedTags.OVERRIDE_ID_KEY, "my-test-key"), REGION)
+        );
+
+        assertEquals("AlreadyExistsException", exception.getErrorCode());
+    }
+
+    @Test
+    void createKeyWithBlankOverrideIdThrowsValidation() {
+        AwsException exception = assertThrows(
+                AwsException.class,
+                () -> kmsService.createKey("bad", null, Map.of(ReservedTags.OVERRIDE_ID_KEY, "   "), REGION)
+        );
+
+        assertEquals("ValidationException", exception.getErrorCode());
+    }
+
+    @Test
+    void tagResourceWithReservedKeyThrowsValidation() {
+        KmsKey key = kmsService.createKey(null, REGION);
+
+        AwsException exception = assertThrows(
+                AwsException.class,
+                () -> kmsService.tagResource(key.getKeyId(), Map.of(ReservedTags.OVERRIDE_ID_KEY, "late-id"), REGION)
+        );
+
+        assertEquals("ValidationException", exception.getErrorCode());
     }
 
     // ── Issue #258 — GetKeyPolicy ────────────────────────────────────────────

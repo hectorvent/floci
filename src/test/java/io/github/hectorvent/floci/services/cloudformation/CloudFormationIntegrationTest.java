@@ -17,9 +17,11 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.matchesRegex;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 
 @QuarkusTest
@@ -242,6 +244,63 @@ class CloudFormationIntegrationTest {
         .then()
             .statusCode(200)
             .body("Configuration.FunctionName", equalTo("cfn-nocode-func"));
+    }
+
+    @Test
+    void createStack_kmsKeyWithOverrideTagUsesPinnedId() {
+        String template = """
+            {
+              "Resources": {
+                "MyKey": {
+                  "Type": "AWS::KMS::Key",
+                  "Properties": {
+                    "Description": "cfn override key",
+                    "Tags": [
+                      { "Key": "floci:override-id", "Value": "cfn-pinned-key" },
+                      { "Key": "env", "Value": "test" }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-kms-override-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-amz-json-1.1")
+            .header("X-Amz-Target", "TrentService.DescribeKey")
+            .body("""
+                {"KeyId":"cfn-pinned-key"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("KeyMetadata.KeyId", equalTo("cfn-pinned-key"));
+
+        given()
+            .contentType("application/x-amz-json-1.1")
+            .header("X-Amz-Target", "TrentService.ListResourceTags")
+            .body("""
+                {"KeyId":"cfn-pinned-key"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Tags.TagKey", hasItem("env"))
+            .body("Tags.find { it.TagKey == 'env' }.TagValue", equalTo("test"))
+            .body("Tags.find { it.TagKey == 'floci:override-id' }", nullValue());
     }
 
     @Test

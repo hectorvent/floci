@@ -145,3 +145,43 @@ teardown() {
     found=$(echo "$output" | jq --arg name "$alias_name" '.Aliases | any(.AliasName == $name)')
     [ "$found" = "false" ]
 }
+
+@test "KMS: create key with reserved override tag uses pinned ID and strips reserved tag" {
+    run aws_cmd kms create-key \
+        --description "override-key" \
+        --tags TagKey=floci:override-id,TagValue=bats-pinned-key TagKey=env,TagValue=test
+    assert_success
+    KEY_ID=$(json_get "$output" '.KeyMetadata.KeyId')
+    [ "$KEY_ID" = "bats-pinned-key" ]
+
+    run aws_cmd kms list-resource-tags --key-id "$KEY_ID"
+    assert_success
+    has_reserved=$(echo "$output" | jq 'any(.Tags[]?; .TagKey == "floci:override-id")')
+    [ "$has_reserved" = "false" ]
+    env_value=$(echo "$output" | jq -r '.Tags[] | select(.TagKey == "env") | .TagValue')
+    [ "$env_value" = "test" ]
+}
+
+@test "KMS: duplicate reserved override tag fails with AlreadyExistsException" {
+    out=$(aws_cmd kms create-key \
+        --description "override-key" \
+        --tags TagKey=floci:override-id,TagValue=bats-duplicate-key)
+    KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
+
+    run aws_cmd kms create-key \
+        --description "override-key-2" \
+        --tags TagKey=floci:override-id,TagValue=bats-duplicate-key
+    assert_failure
+    [[ "$output" == *"AlreadyExistsException"* ]]
+}
+
+@test "KMS: tag-resource rejects reserved override tag after creation" {
+    out=$(aws_cmd kms create-key --description "bats-test-key")
+    KEY_ID=$(json_get "$out" '.KeyMetadata.KeyId')
+
+    run aws_cmd kms tag-resource \
+        --key-id "$KEY_ID" \
+        --tags TagKey=floci:override-id,TagValue=late-id
+    assert_failure
+    [[ "$output" == *"ValidationException"* ]]
+}

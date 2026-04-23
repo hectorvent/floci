@@ -67,3 +67,4 @@ aws kms generate-data-key \
   --key-spec AES_256 \
   --endpoint-url $AWS_ENDPOINT_URL
 ```
+`CreateKey` also accepts a reserved creation-time tag key, `floci:override-id`, when tests need a deterministic `KeyId`. Floci uses the tag value as the created key id, strips the reserved tag from stored resource tags, and rejects attempts to add `floci:*` tags later via `TagResource`.
