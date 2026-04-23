@@ -38,6 +38,9 @@ public class CognitoJsonHandler {
             case "DescribeUserPool" -> handleDescribeUserPool(request);
             case "ListUserPools" -> handleListUserPools(request);
             case "UpdateUserPool" -> handleUpdateUserPool(request, region);
+            case "TagResource" -> handleTagResource(request);
+            case "UntagResource" -> handleUntagResource(request);
+            case "ListTagsForResource" -> handleListTagsForResource(request);
             case "GetUserPoolMfaConfig" -> handleGetUserPoolMfaConfig(request);
             case "DeleteUserPool" -> handleDeleteUserPool(request);
             case "CreateUserPoolClient" -> handleCreateUserPoolClient(request);
@@ -116,6 +119,24 @@ public class CognitoJsonHandler {
         UserPool pool = service.updateUserPool(reqMap, region);
         ObjectNode response = objectMapper.createObjectNode();
         response.set("UserPool", userPoolToFullNode(pool));
+        return Response.ok(response).build();
+    }
+
+    private Response handleTagResource(JsonNode request) {
+        @SuppressWarnings("unchecked")
+        Map<String, String> tags = objectMapper.convertValue(request.path("Tags"), Map.class);
+        service.tagResource(request.path("ResourceArn").asText(), tags);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleUntagResource(JsonNode request) {
+        service.untagResource(request.path("ResourceArn").asText(), readStringList(request.path("TagKeys")));
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleListTagsForResource(JsonNode request) {
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("Tags", objectMapper.valueToTree(service.listTagsForResource(request.path("ResourceArn").asText())));
         return Response.ok(response).build();
     }
 
