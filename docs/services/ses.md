@@ -17,6 +17,12 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 | `GetIdentityVerificationAttributes` | Get verification status for one or more identities        |
 | `SendEmail`                         | Send a structured email with text or HTML body            |
 | `SendRawEmail`                      | Send a raw MIME payload                                   |
+| `SendTemplatedEmail`                | Send an email by resolving a stored template             |
+| `CreateTemplate`                    | Create an email template with subject / text / html parts |
+| `GetTemplate`                       | Read a stored template                                    |
+| `UpdateTemplate`                    | Replace the content of a stored template                  |
+| `DeleteTemplate`                    | Remove a stored template                                  |
+| `ListTemplates`                     | List stored templates                                     |
 | `GetSendQuota`                      | Return local send quota counters                          |
 | `GetSendStatistics`                 | Return aggregate delivery stats for sent messages         |
 | `GetAccountSendingEnabled`          | Report whether sending is enabled                         |
@@ -167,5 +173,10 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `POST` | `/v2/email/outbound-emails` | `SendEmail` (simple / raw / templated) |
 | `GET` | `/v2/email/account` | `GetAccount` |
 | `PUT` | `/v2/email/account/sending` | `PutAccountSendingAttributes` |
+| `POST` | `/v2/email/templates` | `CreateEmailTemplate` |
+| `GET` | `/v2/email/templates` | `ListEmailTemplates` |
+| `GET` | `/v2/email/templates/{templateName}` | `GetEmailTemplate` |
+| `PUT` | `/v2/email/templates/{templateName}` | `UpdateEmailTemplate` |
+| `DELETE` | `/v2/email/templates/{templateName}` | `DeleteEmailTemplate` |
 
-Identity and sent-message state is shared with the v1 Query API, so messages sent through v2 appear in the same `GET /_aws/ses` inspection mailbox.
+Identity, template, and sent-message state is shared between the v1 Query API and the v2 REST JSON API, so a template created with `CreateTemplate` resolves through `SendEmail` on v2 (and vice versa), and every send appears in the same `GET /_aws/ses` inspection mailbox.

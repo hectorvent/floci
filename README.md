@@ -203,8 +203,8 @@ All default images are configurable via environment variables, useful for pinnin
 | **EC2** | In-process | VPCs, subnets, security groups, instances, AMIs, key pairs, internet gateways, route tables, Elastic IPs, tags |
 | **ACM** | In-process | Certificate issuance, validation lifecycle |
 | **ECR** | In-process + **real OCI registry** | Repositories, image push / pull via stock `docker`, image-backed Lambda functions |
-| **SES** | In-process | Send email / raw email, identity verification, DKIM attributes |
-| **SES v2 (HTTP)** | In-process | REST JSON API, identities, DKIM, feedback attributes, account sending |
+| **SES** | In-process | Send email / raw email, identity verification, DKIM attributes, email templates with `{{var}}` substitution |
+| **SES v2 (HTTP)** | In-process | REST JSON API, identities, DKIM, feedback attributes, account sending, email templates with `{{var}}` substitution |
 | **OpenSearch** | **Real Docker containers** | Domain CRUD, tags, versions, instance types, upgrade stubs |
 | **AppConfig** | In-process | Applications, environments, profiles, hosted configuration versions, deployments |
 | **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
