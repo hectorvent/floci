@@ -1034,11 +1034,16 @@ public class LambdaService {
 
             // For file-based runtimes, verify handler file exists (skip Java and .NET which use different handler formats)
             if (fn.getRuntime() != null && !fn.getRuntime().startsWith("java") && !fn.getRuntime().startsWith("dotnet")) {
-                String handlerFile = fn.getHandler().split("\\.")[0];
+                String handler = fn.getHandler();
+                int lastDotIndex = handler.lastIndexOf('.');
+                String handlerFile = lastDotIndex != -1 
+                        ? handler.substring(0, lastDotIndex).replace('.', '/') 
+                        : handler;
+
                 boolean found = Files.walk(codePath)
                         .filter(Files::isRegularFile)
                         .anyMatch(p -> {
-                            String relative = codePath.relativize(p).toString();
+                            String relative = codePath.relativize(p).toString().replace('\\', '/');
                             String withoutExt = relative.contains(".")
                                     ? relative.substring(0, relative.lastIndexOf('.'))
                                     : relative;
