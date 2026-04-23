@@ -151,6 +151,18 @@ def pipes_client(aws_config, client_config):
     return boto3.client("pipes", config=client_config, **aws_config)
 
 
+@pytest.fixture
+def ses_client(aws_config, client_config):
+    """Create SES (v1) client."""
+    return boto3.client("ses", config=client_config, **aws_config)
+
+
+@pytest.fixture
+def sesv2_client(aws_config, client_config):
+    """Create SES v2 client."""
+    return boto3.client("sesv2", config=client_config, **aws_config)
+
+
 # ============================================
 # Utility Fixtures
 # ============================================
