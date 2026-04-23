@@ -681,49 +681,104 @@ public class DynamoDbService {
     // --- Transact Operations ---
 
     public void transactWriteItems(List<JsonNode> transactItems, String region) {
-        // First pass: evaluate all conditions and collect failures
-        List<String> cancellationReasons = new ArrayList<>();
-        boolean hasFailed = false;
-
+        // Acquire every participant's item lock in a deterministic (storageKey, itemKey)
+        // order before evaluating conditions or applying writes. Total-ordered acquisition
+        // prevents deadlock across concurrent transactions; ReentrantLock lets the inner
+        // putItem/updateItem/deleteItem calls re-enter the same lock for free.
+        TreeMap<String, ReentrantLock> toAcquire = new TreeMap<>();
         for (JsonNode transactItem : transactItems) {
-            String failReason = evaluateTransactCondition(transactItem, region);
-            if (failReason != null) {
-                hasFailed = true;
-                cancellationReasons.add(failReason);
-            } else {
-                cancellationReasons.add("");
+            TransactParticipant p = resolveParticipant(transactItem, region);
+            if (p == null) continue;
+            String orderingKey = p.storageKey + "\0" + p.itemKey;
+            toAcquire.putIfAbsent(orderingKey, lockFor(p.storageKey, p.itemKey));
+        }
+
+        List<ReentrantLock> acquired = new ArrayList<>(toAcquire.size());
+        try {
+            for (ReentrantLock lock : toAcquire.values()) {
+                lock.lock();
+                acquired.add(lock);
+            }
+
+            // First pass: evaluate all conditions and collect failures.
+            List<String> cancellationReasons = new ArrayList<>();
+            boolean hasFailed = false;
+            for (JsonNode transactItem : transactItems) {
+                String failReason = evaluateTransactCondition(transactItem, region);
+                if (failReason != null) {
+                    hasFailed = true;
+                    cancellationReasons.add(failReason);
+                } else {
+                    cancellationReasons.add("");
+                }
+            }
+
+            if (hasFailed) {
+                throw new TransactionCanceledException(cancellationReasons);
+            }
+
+            // Second pass: apply all writes. Inner methods re-acquire their own locks,
+            // which is a no-op thanks to ReentrantLock.
+            for (JsonNode transactItem : transactItems) {
+                if (transactItem.has("Put")) {
+                    JsonNode put = transactItem.get("Put");
+                    String tableName = put.path("TableName").asText();
+                    JsonNode item = put.get("Item");
+                    putItem(tableName, item, region);
+                } else if (transactItem.has("Delete")) {
+                    JsonNode del = transactItem.get("Delete");
+                    String tableName = del.path("TableName").asText();
+                    JsonNode key = del.get("Key");
+                    deleteItem(tableName, key, region);
+                } else if (transactItem.has("Update")) {
+                    JsonNode upd = transactItem.get("Update");
+                    String tableName = upd.path("TableName").asText();
+                    JsonNode key = upd.get("Key");
+                    String updateExpression = upd.has("UpdateExpression") ? upd.get("UpdateExpression").asText() : null;
+                    JsonNode exprAttrNames = upd.has("ExpressionAttributeNames") ? upd.get("ExpressionAttributeNames") : null;
+                    JsonNode exprAttrValues = upd.has("ExpressionAttributeValues") ? upd.get("ExpressionAttributeValues") : null;
+                    //there is no ConditionExpression, so setting returnValuesOnConditionCheckFailure = "NONE"
+                    updateItem(tableName, key, null, updateExpression, exprAttrNames, exprAttrValues,
+                               "NONE", null, region, "NONE");
+                }
+                // ConditionCheck-only items are handled in the first pass only
+            }
+        } finally {
+            for (int i = acquired.size() - 1; i >= 0; i--) {
+                acquired.get(i).unlock();
             }
         }
+    }
 
-        if (hasFailed) {
-            throw new TransactionCanceledException(cancellationReasons);
+    private record TransactParticipant(String storageKey, String itemKey) {}
+
+    private TransactParticipant resolveParticipant(JsonNode transactItem, String region) {
+        JsonNode target;
+        boolean isPut = false;
+        if (transactItem.has("Put")) {
+            target = transactItem.get("Put");
+            isPut = true;
+        } else if (transactItem.has("Delete")) {
+            target = transactItem.get("Delete");
+        } else if (transactItem.has("Update")) {
+            target = transactItem.get("Update");
+        } else if (transactItem.has("ConditionCheck")) {
+            target = transactItem.get("ConditionCheck");
+        } else {
+            return null;
         }
 
-        // Second pass: apply all writes
-        for (JsonNode transactItem : transactItems) {
-            if (transactItem.has("Put")) {
-                JsonNode put = transactItem.get("Put");
-                String tableName = put.path("TableName").asText();
-                JsonNode item = put.get("Item");
-                putItem(tableName, item, region);
-            } else if (transactItem.has("Delete")) {
-                JsonNode del = transactItem.get("Delete");
-                String tableName = del.path("TableName").asText();
-                JsonNode key = del.get("Key");
-                deleteItem(tableName, key, region);
-            } else if (transactItem.has("Update")) {
-                JsonNode upd = transactItem.get("Update");
-                String tableName = upd.path("TableName").asText();
-                JsonNode key = upd.get("Key");
-                String updateExpression = upd.has("UpdateExpression") ? upd.get("UpdateExpression").asText() : null;
-                JsonNode exprAttrNames = upd.has("ExpressionAttributeNames") ? upd.get("ExpressionAttributeNames") : null;
-                JsonNode exprAttrValues = upd.has("ExpressionAttributeValues") ? upd.get("ExpressionAttributeValues") : null;
-                //there is no ConditionExpression, so setting returnValuesOnConditionCheckFailure = "NONE"
-                updateItem(tableName, key, null, updateExpression, exprAttrNames, exprAttrValues,
-                           "NONE", null, region, "NONE");
-            }
-            // ConditionCheck-only items are handled in the first pass only
+        String tableName = target.path("TableName").asText();
+        JsonNode keyOrItem = isPut ? target.get("Item") : target.get("Key");
+        if (keyOrItem == null) {
+            return null;
         }
+
+        String storageKey = regionKey(region, tableName);
+        TableDefinition table = tableStore.get(storageKey)
+                .orElseThrow(() -> resourceNotFoundException(tableName));
+        String itemKey = buildItemKey(table, keyOrItem);
+        return new TransactParticipant(storageKey, itemKey);
     }
 
     private String evaluateTransactCondition(JsonNode transactItem, String region) {
