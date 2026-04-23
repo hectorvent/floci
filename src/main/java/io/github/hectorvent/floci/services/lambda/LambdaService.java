@@ -1034,21 +1034,22 @@ public class LambdaService {
 
             // For file-based runtimes, verify handler file exists (skip Java and .NET which use different handler formats)
             if (fn.getRuntime() != null && !fn.getRuntime().startsWith("java") && !fn.getRuntime().startsWith("dotnet")) {
-                String handler = fn.getHandler();
-                int lastDotIndex = handler.lastIndexOf('.');
-                String handlerFile = lastDotIndex != -1 
-                        ? handler.substring(0, lastDotIndex).replace('.', '/') 
-                        : handler;
-
-                boolean found = Files.walk(codePath)
-                        .filter(Files::isRegularFile)
-                        .anyMatch(p -> {
-                            String relative = codePath.relativize(p).toString().replace('\\', '/');
-                            String withoutExt = relative.contains(".")
-                                    ? relative.substring(0, relative.lastIndexOf('.'))
-                                    : relative;
-                            return withoutExt.equals(handlerFile);
-                        });
+                String handlerFile = resolveHandlerFilePath(fn);
+                boolean pythonRuntime = fn.getRuntime().startsWith("python");
+                boolean found;
+                try (var walk = Files.walk(codePath)) {
+                    found = walk
+                            .filter(Files::isRegularFile)
+                            .anyMatch(p -> {
+                                String relative = codePath.relativize(p).toString();
+                                String withoutExt = relative.contains(".")
+                                        ? relative.substring(0, relative.lastIndexOf('.'))
+                                        : relative;
+                                String normalized = withoutExt.replace('\\', '/');
+                                return normalized.equals(handlerFile)
+                                        || (pythonRuntime && normalized.equals(handlerFile + "/__init__"));
+                            });
+                }
                 if (!found) {
                     throw new AwsException("InvalidParameterValueException",
                             "Handler file '" + handlerFile + "' not found in deployment package", 400);
@@ -1077,6 +1078,16 @@ public class LambdaService {
                     "Unable to fetch code from s3://" + s3Bucket + "/" + s3Key + ": " + e.getMessage(), 400);
         }
         extractZipCode(fn, Base64.getEncoder().encodeToString(obj.getData()));
+    }
+
+    private String resolveHandlerFilePath(LambdaFunction fn) {
+        String handler = fn.getHandler();
+        int lastDot = handler.lastIndexOf('.');
+        String modulePath = lastDot >= 0 ? handler.substring(0, lastDot) : handler;
+        if (fn.getRuntime().startsWith("python")) {
+            return modulePath.replace('.', '/');
+        }
+        return modulePath;
     }
 
     // ──────────────────────────── Permissions (Policy) ────────────────────────────
