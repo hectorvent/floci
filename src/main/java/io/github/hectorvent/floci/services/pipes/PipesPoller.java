@@ -19,6 +19,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -171,17 +172,37 @@ public class PipesPoller {
             return;
         }
 
-        // Attempt delivery; only delete matching messages after successful delivery or DLQ routing
-        String eventJson = wrapRecords(filtered);
-        boolean delivered = invokeWithDlq(pipe, eventJson, region);
-        if (delivered) {
+        if (isLambdaTarget(pipe)) {
+            String eventJson = wrapRecords(filtered);
+            boolean delivered = invokeWithDlq(pipe, eventJson, region);
+            if (delivered) {
+                for (Message msg : messages) {
+                    if (matchedMessageIds.contains(msg.getMessageId())) {
+                        try {
+                            sqsService.deleteMessage(queueUrl, msg.getReceiptHandle(), region);
+                        } catch (Exception e) {
+                            LOG.warnv("Pipe {0}: failed to delete SQS message {1}: {2}",
+                                    pipe.getName(), msg.getMessageId(), e.getMessage());
+                        }
+                    }
+                }
+            }
+        } else {
+            Map<String, Message> messagesById = new HashMap<>();
             for (Message msg : messages) {
-                if (matchedMessageIds.contains(msg.getMessageId())) {
-                    try {
-                        sqsService.deleteMessage(queueUrl, msg.getReceiptHandle(), region);
-                    } catch (Exception e) {
-                        LOG.warnv("Pipe {0}: failed to delete SQS message {1}: {2}",
-                                pipe.getName(), msg.getMessageId(), e.getMessage());
+                messagesById.put(msg.getMessageId(), msg);
+            }
+            for (JsonNode record : filtered) {
+                String messageId = record.get("messageId").asText();
+                if (invokeWithDlq(pipe, record.toString(), region)) {
+                    Message msg = messagesById.get(messageId);
+                    if (msg != null) {
+                        try {
+                            sqsService.deleteMessage(queueUrl, msg.getReceiptHandle(), region);
+                        } catch (Exception e) {
+                            LOG.warnv("Pipe {0}: failed to delete SQS message {1}: {2}",
+                                    pipe.getName(), msg.getMessageId(), e.getMessage());
+                        }
                     }
                 }
             }
@@ -218,8 +239,7 @@ public class PipesPoller {
             if (filtered.isEmpty()) {
                 return;
             }
-            String eventJson = wrapRecords(filtered);
-            invokeWithDlq(pipe, eventJson, region);
+            deliverRecords(pipe, filtered, region);
         } catch (AwsException e) {
             if ("ExpiredIteratorException".equals(e.getErrorCode())) {
                 kinesisIterators.remove(pipeKey);
@@ -266,8 +286,7 @@ public class PipesPoller {
             if (filtered.isEmpty()) {
                 return;
             }
-            String eventJson = wrapRecords(filtered);
-            invokeWithDlq(pipe, eventJson, region);
+            deliverRecords(pipe, filtered, region);
         } catch (AwsException e) {
             if ("ExpiredIteratorException".equals(e.getErrorCode()) ||
                 "TrimmedDataAccessException".equals(e.getErrorCode())) {
@@ -288,6 +307,16 @@ public class PipesPoller {
     }
 
     // ──────────────────────────── Invocation & DLQ ────────────────────────────
+
+    private void deliverRecords(Pipe pipe, List<JsonNode> records, String region) {
+        if (isLambdaTarget(pipe)) {
+            invokeWithDlq(pipe, wrapRecords(records), region);
+            return;
+        }
+        for (JsonNode record : records) {
+            invokeWithDlq(pipe, record.toString(), region);
+        }
+    }
 
     private boolean invokeWithDlq(Pipe pipe, String eventJson, String region) {
         try {
@@ -407,6 +436,11 @@ public class PipesPoller {
     }
 
     // ──────────────────────────── Utilities ────────────────────────────
+
+    private static boolean isLambdaTarget(Pipe pipe) {
+        String targetArn = pipe.getTarget();
+        return targetArn.contains(":lambda:") || targetArn.contains(":function:");
+    }
 
     private static String pipeKey(Pipe pipe) {
         return pipe.getArn();
