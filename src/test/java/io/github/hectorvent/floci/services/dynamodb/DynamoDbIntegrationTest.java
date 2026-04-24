@@ -1682,6 +1682,87 @@ given()
         .then().statusCode(200);
     }
 
+    @Test
+    @Order(32)
+    void deletionProtectionEnabled() {
+        String tableName = "deletion-protection-test";
+
+        // Create table with DeletionProtectionEnabled = true
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "%s",
+                    "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                    "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                    "BillingMode": "PAY_PER_REQUEST",
+                    "DeletionProtectionEnabled": true
+                }
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
+
+        // DescribeTable returns DeletionProtectionEnabled = true
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DescribeTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "%s"}
+                """.formatted(tableName))
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .body("Table.DeletionProtectionEnabled", equalTo(true));
+
+        // DeleteTable is blocked
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "%s"}
+                """.formatted(tableName))
+        .when().post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ResourceInUseException"));
+
+        // UpdateTable to disable deletion protection
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.UpdateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "%s",
+                    "DeletionProtectionEnabled": false
+                }
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
+
+        // DescribeTable returns DeletionProtectionEnabled = false
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DescribeTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "%s"}
+                """.formatted(tableName))
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .body("Table.DeletionProtectionEnabled", equalTo(false));
+
+        // DeleteTable now succeeds
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.DeleteTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {"TableName": "%s"}
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
+    }
+
     private static long crc32Of(byte[] bytes) {
         CRC32 crc = new CRC32();
         crc.update(bytes);

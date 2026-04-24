@@ -34,6 +34,7 @@ public class TableDefinition {
     private boolean ttlEnabled;
     private boolean pointInTimeRecoveryEnabled;
     private int pointInTimeRecoveryRecoveryPeriodInDays;
+    private boolean deletionProtectionEnabled;
     private boolean streamEnabled;
     private String streamArn;
     private String streamViewType;
@@ -133,6 +134,9 @@ public class TableDefinition {
     public void setPointInTimeRecoveryRecoveryPeriodInDays(int pointInTimeRecoveryRecoveryPeriodInDays) {
         this.pointInTimeRecoveryRecoveryPeriodInDays = pointInTimeRecoveryRecoveryPeriodInDays;
     }
+
+    public boolean isDeletionProtectionEnabled() { return deletionProtectionEnabled; }
+    public void setDeletionProtectionEnabled(boolean deletionProtectionEnabled) { this.deletionProtectionEnabled = deletionProtectionEnabled; }
 
     public boolean isStreamEnabled() { return streamEnabled; }
     public void setStreamEnabled(boolean streamEnabled) { this.streamEnabled = streamEnabled; }
