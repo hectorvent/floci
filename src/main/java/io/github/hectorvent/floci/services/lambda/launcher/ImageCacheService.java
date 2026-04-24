@@ -64,10 +64,10 @@ public class ImageCacheService {
 
     private boolean isLocalImagePresent(String imageUri) {
         try {
-            return !dockerClient.listImagesCmd()
-                    .withImageNameFilter(imageUri)
-                    .exec()
-                    .isEmpty();
+            dockerClient.inspectImageCmd(imageUri).exec();
+            return true;
+        } catch (com.github.dockerjava.api.exception.NotFoundException e) {
+            return false;
         } catch (Exception e) {
             LOG.debugv("Could not check local image presence for {0}: {1}", imageUri, e.getMessage());
             return false;
