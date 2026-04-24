@@ -18,6 +18,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -153,6 +156,40 @@ class PipesTargetInvokerTest {
     @Test
     void extractJsonPath_booleanValue() {
         assertEquals("true", invoker.extractJsonPath("$.active", "{\"active\": true}"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void eventBridge_usesEventBridgeEventBusParameters() {
+        ObjectNode tp = MAPPER.createObjectNode();
+        ObjectNode ebParams = tp.putObject("EventBridgeEventBusParameters");
+        ebParams.put("Source", "registration-service");
+        ebParams.put("DetailType", "USER_REGISTRATION_COMPLETED");
+
+        Pipe pipe = createPipe("arn:aws:events:us-east-1:000000000000:event-bus/my-bus", tp);
+        invoker.invoke(pipe, "{\"user\": \"123\"}", "us-east-1");
+
+        ArgumentCaptor<List<Map<String, Object>>> captor = ArgumentCaptor.forClass(List.class);
+        verify(eventBridgeService).putEvents(captor.capture(), eq("us-east-1"));
+        Map<String, Object> entry = captor.getValue().get(0);
+        assertEquals("my-bus", entry.get("EventBusName"));
+        assertEquals("registration-service", entry.get("Source"));
+        assertEquals("USER_REGISTRATION_COMPLETED", entry.get("DetailType"));
+        assertEquals("{\"user\": \"123\"}", entry.get("Detail"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void eventBridge_fallsBackToDefaults() {
+        Pipe pipe = createPipe("arn:aws:events:us-east-1:000000000000:event-bus/default", null);
+        invoker.invoke(pipe, "{}", "us-east-1");
+
+        ArgumentCaptor<List<Map<String, Object>>> captor = ArgumentCaptor.forClass(List.class);
+        verify(eventBridgeService).putEvents(captor.capture(), eq("us-east-1"));
+        Map<String, Object> entry = captor.getValue().get(0);
+        assertEquals("default", entry.get("EventBusName"));
+        assertEquals("aws.pipes", entry.get("Source"));
+        assertEquals("PipeForwarded", entry.get("DetailType"));
     }
 
     @Test

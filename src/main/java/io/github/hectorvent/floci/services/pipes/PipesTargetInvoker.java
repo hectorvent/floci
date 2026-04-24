@@ -67,7 +67,7 @@ public class PipesTargetInvoker {
         } else if (targetArn.contains(":sns:")) {
             invokeSns(targetArn, payload, region);
         } else if (targetArn.contains(":events:")) {
-            invokeEventBridge(targetArn, payload, region);
+            invokeEventBridge(targetArn, payload, region, tp);
         } else if (targetArn.contains(":states:")) {
             invokeStepFunctions(targetArn, payload, region);
         } else {
@@ -94,13 +94,24 @@ public class PipesTargetInvoker {
         LOG.debugv("Pipe delivered to SNS: {0}", arn);
     }
 
-    private void invokeEventBridge(String arn, String payload, String region) {
+    private void invokeEventBridge(String arn, String payload, String region, JsonNode tp) {
         String busName = arn.substring(arn.lastIndexOf('/') + 1);
         String ebRegion = extractRegionFromArn(arn, region);
+        String source = "aws.pipes";
+        String detailType = "PipeForwarded";
+        if (tp != null) {
+            JsonNode ebParams = tp.path("EventBridgeEventBusParameters");
+            if (ebParams.has("Source")) {
+                source = ebParams.get("Source").asText();
+            }
+            if (ebParams.has("DetailType")) {
+                detailType = ebParams.get("DetailType").asText();
+            }
+        }
         Map<String, Object> entry = Map.of(
                 "EventBusName", busName,
-                "Source", "aws.pipes",
-                "DetailType", "PipeForwarded",
+                "Source", source,
+                "DetailType", detailType,
                 "Detail", payload
         );
         eventBridgeService.putEvents(List.of(entry), ebRegion);
