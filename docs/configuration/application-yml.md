@@ -64,6 +64,15 @@ floci:
       opensearch:
         flush-interval-ms: 5000
 
+  dns:
+    # Extra hostname suffixes resolved to Floci's container IP by the embedded DNS server.
+    # The primary suffix (floci.hostname or derived from base-url) is always included.
+    # Useful when migrating from LocalStack — Lambda functions that hardcode
+    # localhost.localstack.cloud as their endpoint work without code changes.
+    # Via env var (comma-separated): FLOCI_DNS_EXTRA_SUFFIXES=localhost.localstack.cloud,other.internal
+    # extra-suffixes:
+    #   - localhost.localstack.cloud
+
   auth:
     validate-signatures: false               # Set to true to enforce AWS SigV4 validation
     presign-secret: local-emulator-secret    # HMAC secret for S3 pre-signed URL verification
@@ -226,6 +235,7 @@ All keys in this table are declared on `EmulatorConfig` and accept environment v
 | `FLOCI_DEFAULT_AVAILABILITY_ZONE`                  | `us-east-1a`     | Default AZ reported by EC2, RDS, and other AZ-aware services  |
 | `FLOCI_DEFAULT_ACCOUNT_ID`                         | `000000000000`   | Default AWS account ID used in ARNs                           |
 | `FLOCI_ECR_BASE_URI`                               | `public.ecr.aws` | Base URI used when pulling container images (e.g. Lambda)     |
+| `FLOCI_DNS_EXTRA_SUFFIXES`                         | *(unset)*        | Comma-separated extra hostname suffixes the embedded DNS server resolves to Floci's container IP. E.g. `localhost.localstack.cloud,localhost.example.internal` |
 | `FLOCI_SERVICES_SSM_MAX_PARAMETER_HISTORY`         | `5`              | Max parameter versions kept                                   |
 | `FLOCI_SERVICES_SQS_DEFAULT_VISIBILITY_TIMEOUT`    | `30`             | Default visibility timeout (seconds)                          |
 | `FLOCI_SERVICES_SQS_MAX_MESSAGE_SIZE`              | `262144`         | Max message size (bytes)                                      |

@@ -25,6 +25,7 @@ import java.util.Map;
  * @param extraHosts Extra /etc/hosts entries as "hostname:ip" strings
  * @param logConfig Docker log driver configuration (null = daemon default)
  * @param privileged Whether to run the container in privileged mode (required for k3s)
+ * @param dnsServers DNS server IPs to inject into the container (e.g. Floci's embedded DNS)
  */
 public record ContainerSpec(
         String image,
@@ -40,14 +41,15 @@ public record ContainerSpec(
         List<Bind> binds,
         List<String> extraHosts,
         LogConfig logConfig,
-        boolean privileged
+        boolean privileged,
+        List<String> dnsServers
 ) {
     /**
      * Creates a minimal spec with just the image name.
      * All other fields will be null or empty lists.
      */
     public ContainerSpec(String image) {
-        this(image, null, List.of(), null, null, null, Map.of(), List.of(), null, List.of(), List.of(), List.of(), null, false);
+        this(image, null, List.of(), null, null, null, Map.of(), List.of(), null, List.of(), List.of(), List.of(), null, false, List.of());
     }
 
     /**

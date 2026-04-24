@@ -65,6 +65,14 @@ floci:
       opensearch:
         flush-interval-ms: 5000
 
+  dns:
+    # Extra hostname suffixes resolved to Floci's container IP by the embedded DNS server.
+    # Useful when migrating from LocalStack — add localhost.localstack.cloud to avoid
+    # changing Lambda endpoint environment variables.
+    # Via env var (comma-separated): FLOCI_DNS_EXTRA_SUFFIXES=localhost.localstack.cloud,other.internal
+    # extra-suffixes:
+    #   - localhost.localstack.cloud
+
   auth:
     validate-signatures: false
     presign-secret: local-emulator-secret

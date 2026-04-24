@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.lambda.launcher;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.dns.EmbeddedDnsServer;
 import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
 import io.github.hectorvent.floci.core.common.docker.ContainerLogStreamer;
@@ -41,6 +42,7 @@ class ContainerLauncherTest {
     @Mock DockerHostResolver dockerHostResolver;
     @Mock EmulatorConfig config;
     @Mock EcrRegistryManager ecrRegistryManager;
+    @Mock EmbeddedDnsServer embeddedDnsServer;
     @Mock RuntimeApiServer runtimeApiServer;
     @Mock DockerClient dockerClient;
 
@@ -64,7 +66,9 @@ class ContainerLauncherTest {
         when(docker.logMaxSize()).thenReturn("10m");
         when(docker.logMaxFile()).thenReturn("3");
 
-        ContainerBuilder containerBuilder = new ContainerBuilder(config, dockerHostResolver);
+        when(embeddedDnsServer.getServerIp()).thenReturn(Optional.empty());
+
+        ContainerBuilder containerBuilder = new ContainerBuilder(config, dockerHostResolver, embeddedDnsServer);
         launcher = new ContainerLauncher(containerBuilder, lifecycleManager, logStreamer, imageResolver,
                 runtimeApiServerFactory, dockerHostResolver, config, ecrRegistryManager);
 

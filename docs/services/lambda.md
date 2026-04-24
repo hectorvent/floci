@@ -143,6 +143,58 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 ```
 
+### S3 virtual-hosted-style addressing inside Lambda containers
+
+AWS SDKs use **virtual-hosted-style** S3 addressing by default, forming URLs like
+`https://my-bucket.s3.amazonaws.com/key`. Against Floci the same pattern becomes
+`http://my-bucket.localhost.floci.io:4566/key`.
+
+When Floci runs **inside Docker**, Lambda containers are on the same Docker
+network. Docker's embedded DNS resolves the exact alias `localhost.floci.io`
+correctly, but has no wildcard support — `my-bucket.localhost.floci.io`
+falls through to public DNS and resolves to the wrong IP, causing the Lambda
+invocation to time out.
+
+**Floci solves this automatically** by running an embedded DNS server (UDP/53)
+on its container IP. All Lambda containers launched by Floci are configured to
+use it as their DNS resolver. The embedded DNS server:
+
+- Resolves `*.localhost.floci.io` → Floci's Docker network IP
+- Forwards all other queries to the upstream resolver from `/etc/resolv.conf`
+
+No extra configuration or `cap_add` is needed — Docker containers have
+`CAP_NET_BIND_SERVICE` in their default capability set, so Floci (running as a
+non-root user) can bind UDP/53 without any changes to your Compose file.
+
+!!! note "Path-style as a workaround"
+    If you cannot use virtual-hosted-style (e.g. Floci is running natively on
+    the host, not in Docker), configure the SDK client with
+    `forcePathStyle: true` / `s3ForcePathStyle: true`. Requests will go to
+    `http://localhost:4566/my-bucket/key` instead and work without DNS.
+
+#### Migrating from LocalStack
+
+If your Lambda functions have `AWS_ENDPOINT_URL=http://localhost.localstack.cloud:4566`
+hardcoded, add the LocalStack suffix to Floci's DNS resolver so it resolves to
+Floci's IP without any function-side changes:
+
+```yaml
+floci:
+  dns:
+    extra-suffixes:
+      - localhost.localstack.cloud
+```
+
+Via environment variable — use a comma-separated list for multiple suffixes:
+
+```bash
+# Single suffix
+FLOCI_DNS_EXTRA_SUFFIXES=localhost.localstack.cloud
+
+# Multiple suffixes
+FLOCI_DNS_EXTRA_SUFFIXES=localhost.localstack.cloud,localhost.example.internal
+```
+
 ### Private registry authentication
 
 Container image functions (`"PackageType": "Image"`) that pull from private registries need Docker credentials. See [Docker Configuration → Private Registry Authentication](../configuration/docker.md#private-registry-authentication) for the full guide.

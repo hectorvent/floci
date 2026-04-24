@@ -22,7 +22,7 @@ services:
     networks:
       floci_default:
         aliases:
-          - localhost.floci.cloud
+          - localhost.floci.io
 
 networks:
   floci_default:

@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.core.common.docker;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.dns.EmbeddedDnsServer;
 import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.LogConfig;
 import com.github.dockerjava.api.model.Mount;
@@ -35,11 +36,14 @@ public class ContainerBuilder {
 
     private final EmulatorConfig config;
     private final DockerHostResolver dockerHostResolver;
+    private final EmbeddedDnsServer embeddedDnsServer;
 
     @Inject
-    public ContainerBuilder(EmulatorConfig config, DockerHostResolver dockerHostResolver) {
+    public ContainerBuilder(EmulatorConfig config, DockerHostResolver dockerHostResolver,
+                            EmbeddedDnsServer embeddedDnsServer) {
         this.config = config;
         this.dockerHostResolver = dockerHostResolver;
+        this.embeddedDnsServer = embeddedDnsServer;
     }
 
     /**
@@ -49,7 +53,7 @@ public class ContainerBuilder {
      * @return a new Builder instance
      */
     public Builder newContainer(String image) {
-        return new Builder(image, config, dockerHostResolver);
+        return new Builder(image, config, dockerHostResolver, embeddedDnsServer);
     }
 
     /**
@@ -59,6 +63,7 @@ public class ContainerBuilder {
         private final String image;
         private final EmulatorConfig config;
         private final DockerHostResolver dockerHostResolver;
+        private final EmbeddedDnsServer embeddedDnsServer;
 
         private String name;
         private final List<String> env = new ArrayList<>();
@@ -73,11 +78,14 @@ public class ContainerBuilder {
         private final List<String> extraHosts = new ArrayList<>();
         private LogConfig logConfig;
         private boolean privileged;
+        private final List<String> dnsServers = new ArrayList<>();
 
-        Builder(String image, EmulatorConfig config, DockerHostResolver dockerHostResolver) {
+        Builder(String image, EmulatorConfig config, DockerHostResolver dockerHostResolver,
+                EmbeddedDnsServer embeddedDnsServer) {
             this.image = image;
             this.config = config;
             this.dockerHostResolver = dockerHostResolver;
+            this.embeddedDnsServer = embeddedDnsServer;
         }
 
         /**
@@ -279,6 +287,16 @@ public class ContainerBuilder {
         }
 
         /**
+         * Injects Floci's embedded DNS server into the container so virtual-hosted
+         * S3 hostnames (my-bucket.localhost.floci.io) resolve to Floci's Docker
+         * network IP. No-op when the embedded DNS server is not running.
+         */
+        public Builder withEmbeddedDns() {
+            embeddedDnsServer.getServerIp().ifPresent(dnsServers::add);
+            return this;
+        }
+
+        /**
          * Builds the immutable ContainerSpec.
          */
         public ContainerSpec build() {
@@ -296,7 +314,8 @@ public class ContainerBuilder {
                     List.copyOf(binds),
                     List.copyOf(extraHosts),
                     logConfig,
-                    privileged
+                    privileged,
+                    List.copyOf(dnsServers)
             );
         }
     }

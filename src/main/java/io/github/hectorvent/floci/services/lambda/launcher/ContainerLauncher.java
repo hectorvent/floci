@@ -157,6 +157,8 @@ public class ContainerLauncher {
                 .withHostDockerInternalOnLinux()
                 .withLogRotation();
 
+        specBuilder.withEmbeddedDns();
+
         // For Image package type without an explicit handler, omit CMD so the image's own CMD is used
         if (fn.getHandler() != null && !fn.getHandler().isBlank()) {
             specBuilder.withCmd(fn.getHandler());

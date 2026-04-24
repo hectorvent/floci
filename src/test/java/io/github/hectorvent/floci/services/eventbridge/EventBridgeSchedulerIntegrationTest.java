@@ -294,6 +294,8 @@ class EventBridgeSchedulerIntegrationTest {
             @Override
             public StorageConfig storage() { return null; }
             @Override
+            public DnsConfig dns() { return Optional::empty; }
+            @Override
             public AuthConfig auth() { return null; }
             @Override
             public ServicesConfig services() { return null; }

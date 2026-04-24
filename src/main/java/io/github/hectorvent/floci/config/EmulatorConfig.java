@@ -53,6 +53,8 @@ public interface EmulatorConfig {
 
     StorageConfig storage();
 
+    DnsConfig dns();
+
     AuthConfig auth();
 
     ServicesConfig services();
@@ -60,6 +62,27 @@ public interface EmulatorConfig {
     DockerConfig docker();
 
     InitHooksConfig initHooks();
+
+    interface DnsConfig {
+        /**
+         * Additional hostname suffixes the embedded DNS server will resolve to Floci's
+         * container IP, alongside the primary {@code floci.hostname}.
+         *
+         * Useful for migrating from LocalStack without changing Lambda endpoint configuration:
+         * <pre>
+         * floci:
+         *   dns:
+         *     extra-suffixes:
+         *       - localhost.localstack.cloud
+         * </pre>
+         *
+         * Via environment variable (comma-separated for multiple values):
+         * <pre>
+         * FLOCI_DNS_EXTRA_SUFFIXES=localhost.localstack.cloud,localhost.example.internal
+         * </pre>
+         */
+        Optional<List<String>> extraSuffixes();
+    }
 
     interface StorageConfig {
         @WithDefault("hybrid")

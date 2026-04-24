@@ -329,6 +329,12 @@ public class ContainerLifecycleManager {
             hostConfig.withLogConfig(spec.logConfig());
         }
 
+        // DNS servers — used to inject Floci's embedded DNS so spawned containers
+        // can resolve *.localhost.floci.io to Floci's Docker network IP.
+        if (spec.dnsServers() != null && !spec.dnsServers().isEmpty()) {
+            hostConfig.withDns(spec.dnsServers().toArray(new String[0]));
+        }
+
         return hostConfig;
     }
 
