@@ -494,4 +494,56 @@ class SesTemplateV2IntegrationTest {
             .body("__type", equalTo("BadRequestException"));
     }
 
+    // ──────────────── Cross-region isolation ────────────────
+
+    private static final String AUTH_EU_WEST_1 =
+            "AWS4-HMAC-SHA256 Credential=AKID/20260101/eu-west-1/ses/aws4_request";
+
+    @Test
+    @Order(20)
+    void crossRegionIsolation_templateNotVisibleInOtherRegion() {
+        // Create template in eu-west-1
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_EU_WEST_1)
+            .body("""
+                {
+                  "TemplateName": "region-test",
+                  "TemplateContent": {
+                    "Subject": "Regional",
+                    "Text": "Hello from eu-west-1"
+                  }
+                }
+                """)
+        .when()
+            .post("/v2/email/templates")
+        .then()
+            .statusCode(200);
+
+        // Verify it exists in eu-west-1
+        given()
+            .header("Authorization", AUTH_EU_WEST_1)
+        .when()
+            .get("/v2/email/templates/region-test")
+        .then()
+            .statusCode(200)
+            .body("TemplateName", equalTo("region-test"));
+
+        // Verify it does NOT exist in us-east-1
+        given()
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .get("/v2/email/templates/region-test")
+        .then()
+            .statusCode(404);
+
+        // Clean up
+        given()
+            .header("Authorization", AUTH_EU_WEST_1)
+        .when()
+            .delete("/v2/email/templates/region-test")
+        .then()
+            .statusCode(200);
+    }
+
 }
