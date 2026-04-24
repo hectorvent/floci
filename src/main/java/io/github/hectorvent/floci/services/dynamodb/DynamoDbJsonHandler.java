@@ -139,8 +139,12 @@ public class DynamoDbJsonHandler {
         String billingMode = request.has("BillingMode")
                 ? request.get("BillingMode").asText() : null;
 
+        boolean deletionProtection = request.path("DeletionProtectionEnabled").asBoolean(false);
+
         TableDefinition table = dynamoDbService.createTable(tableName, keySchema, attrDefs,
                 readCapacity, writeCapacity, gsis, lsis, region);
+
+        table.setDeletionProtectionEnabled(deletionProtection);
 
         if ("PAY_PER_REQUEST".equals(billingMode)) {
             table.setBillingMode("PAY_PER_REQUEST");
@@ -176,6 +180,10 @@ public class DynamoDbJsonHandler {
     private Response handleDeleteTable(JsonNode request, String region) {
         String tableName = request.path("TableName").asText();
         TableDefinition table = dynamoDbService.describeTable(tableName, region);
+        if (table.isDeletionProtectionEnabled()) {
+            throw new AwsException("ResourceInUseException",
+                    "Table " + tableName + " can't be deleted while DeletionProtectionEnabled is set to true", 400);
+        }
         dynamoDbService.deleteTable(tableName, region);
 
         table.setTableStatus("DELETING");
@@ -506,6 +514,11 @@ public class DynamoDbJsonHandler {
 
         TableDefinition table = dynamoDbService.updateTable(tableName, readCapacity, writeCapacity,
                 gsiCreates, gsiDeletes, newAttrDefs, region);
+
+        JsonNode deletionProtectionNode = request.path("DeletionProtectionEnabled");
+        if (!deletionProtectionNode.isMissingNode()) {
+            table.setDeletionProtectionEnabled(deletionProtectionNode.asBoolean());
+        }
 
         String billingMode = request.has("BillingMode")
                 ? request.get("BillingMode").asText() : null;
@@ -849,7 +862,7 @@ public class DynamoDbJsonHandler {
         node.put("CreationDateTime", table.getCreationDateTime().getEpochSecond());
         node.put("ItemCount", table.getItemCount());
         node.put("TableSizeBytes", table.getTableSizeBytes());
-        node.put("DeletionProtectionEnabled", false);
+        node.put("DeletionProtectionEnabled", table.isDeletionProtectionEnabled());
 
         if ("PAY_PER_REQUEST".equals(table.getBillingMode())) {
             ObjectNode billing = objectMapper.createObjectNode();
