@@ -5,7 +5,13 @@ report_dir="$(mktemp -d /tmp/bats-junit-XXXXXX)"
 trap 'rm -rf "$report_dir"' EXIT
 
 set +e
-/opt/bats-core/bin/bats --jobs 4 --report-formatter junit -o "$report_dir" test/
+# --no-parallelize-within-files: bats-core defaults to running tests in parallel
+# both across files and within a file when --jobs > 1. Several tests in this
+# suite share state across tests in the same file via setup_file/teardown_file
+# (e.g. ses.bats, s3-notifications.bats), which races ordering-dependent tests.
+# Cross-file parallelism is preserved.
+/opt/bats-core/bin/bats --jobs 4 --no-parallelize-within-files \
+    --report-formatter junit -o "$report_dir" test/
 status=$?
 set -e
 
