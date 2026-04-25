@@ -103,6 +103,7 @@ jobs:
             -e FLOCI_BASE_URL=http://floci:4566 \
             -e FLOCI_SERVICES_DOCKER_NETWORK=compat-net \
             -e FLOCI_HOSTNAME=floci \
+            -e FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED=true \
             floci:test
 
       - name: Wait for floci to be ready
@@ -135,6 +136,13 @@ jobs:
           # compat-cdk needs Docker access for CDK's DockerImageFunction (docker build + push to emulated ECR)
           if [ "${{ matrix.test }}" = "compat-cdk" ]; then
             EXTRA_ARGS="-v /var/run/docker.sock:/var/run/docker.sock --group-add $DOCKER_GID"
+          fi
+
+          # sdk-test-java: mount a host-side directory so the Docker daemon can
+          # bind-mount hot-reload code paths that are written by the test container.
+          if [ "${{ matrix.test }}" = "sdk-test-java" ]; then
+            mkdir -p /tmp/floci-hot-reload
+            EXTRA_ARGS="$EXTRA_ARGS -v /tmp/floci-hot-reload:/tmp/floci-hot-reload -e HOT_RELOAD_BASE_DIR=/tmp/floci-hot-reload"
           fi
 
           docker run --rm --network compat-net \

@@ -43,7 +43,14 @@ class LambdaHotReloadTest {
                 "Lambda dispatch unavailable — skipping hot-reload test");
 
         lambda = TestFixtures.lambdaClient();
-        codeDir = Files.createTempDirectory("floci-hot-reload-");
+
+        // HOT_RELOAD_BASE_DIR is set in CI to a host-mounted volume so the Docker
+        // daemon (on the host) can see the path. Unset means the test runs locally
+        // where the system tmpdir is already on the Docker host.
+        String baseDir = System.getenv("HOT_RELOAD_BASE_DIR");
+        codeDir = baseDir != null
+                ? Files.createTempDirectory(Path.of(baseDir), "floci-hot-reload-")
+                : Files.createTempDirectory("floci-hot-reload-");
 
         writeHandler(codeDir, "v1");
 
