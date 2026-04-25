@@ -14,22 +14,30 @@ public class ContainerHandle {
     private final String functionName;
     private final RuntimeApiServer runtimeApiServer;
     private final long createdAt;
+    private final boolean hotReload;
     private volatile ContainerState state;
     private volatile long lastUsedMs;
     private Closeable logStream;
 
     public ContainerHandle(String containerId, String functionName,
                            RuntimeApiServer runtimeApiServer, ContainerState state) {
+        this(containerId, functionName, runtimeApiServer, state, false);
+    }
+
+    public ContainerHandle(String containerId, String functionName,
+                           RuntimeApiServer runtimeApiServer, ContainerState state, boolean hotReload) {
         this.containerId = containerId;
         this.functionName = functionName;
         this.runtimeApiServer = runtimeApiServer;
         this.state = state;
+        this.hotReload = hotReload;
         this.createdAt = System.currentTimeMillis();
         this.lastUsedMs = this.createdAt;
     }
 
     public String getContainerId() { return containerId; }
     public String getFunctionName() { return functionName; }
+    public boolean isHotReload() { return hotReload; }
     public RuntimeApiServer getRuntimeApiServer() { return runtimeApiServer; }
     public long getCreatedAt() { return createdAt; }
     public long getLastUsedMs() { return lastUsedMs; }

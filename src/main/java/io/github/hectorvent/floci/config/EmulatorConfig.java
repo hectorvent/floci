@@ -632,6 +632,31 @@ public interface EmulatorConfig {
          */
         @WithDefault("100")
         int unreservedConcurrencyMin();
+
+        HotReload hotReload();
+
+        interface HotReload {
+            /**
+             * When true, the magic bucket name {@code hot-reload} triggers a bind-mount of the
+             * S3Key path (a Docker-host absolute path) into the Lambda container instead of
+             * extracting a ZIP. Changes on disk are visible on the next invocation without
+             * re-deploying. Disabled by default — when false, {@code hot-reload} is an
+             * ordinary (non-existent) bucket and returns NoSuchBucket as usual.
+             *
+             * Env var: FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED
+             */
+            @WithDefault("false")
+            boolean enabled();
+
+            /**
+             * Optional allow-list of absolute path prefixes. When non-empty, the S3Key supplied
+             * to a hot-reload CreateFunction/UpdateFunctionCode must start with one of these
+             * prefixes. Empty = all absolute paths are accepted.
+             *
+             * Env var: FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ALLOWED_PATHS
+             */
+            Optional<List<String>> allowedPaths();
+        }
     }
 
     interface Ec2ServiceConfig {

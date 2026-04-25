@@ -117,6 +117,11 @@ floci:
       container-idle-timeout-seconds: 300     # Remove idle containers after this
       region-concurrency-limit: 1000          # Concurrent executions ceiling per region
       unreserved-concurrency-min: 100         # Minimum unreserved capacity PutFunctionConcurrency must leave
+      hot-reload:
+        enabled: false                        # true = enable bind-mount hot-reload via S3Bucket=hot-reload
+        # allowed-paths:                      # Optional allowlist of host paths that may be bind-mounted
+        #   - /home/user/projects
+        #   - /tmp
 
     apigateway:
       enabled: true
@@ -254,6 +259,8 @@ All keys in this table are declared on `EmulatorConfig` and accept environment v
 | `FLOCI_SERVICES_SES_SMTP_USER`                     | *(unset)*        | SMTP authentication username                                  |
 | `FLOCI_SERVICES_SES_SMTP_PASS`                     | *(unset)*        | SMTP authentication password                                  |
 | `FLOCI_SERVICES_SES_SMTP_STARTTLS`                 | `DISABLED`       | STARTTLS mode: `DISABLED`, `OPTIONAL`, or `REQUIRED`          |
+| `FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED`         | `false`          | Enable bind-mount hot-reload mode (`S3Bucket=hot-reload`)     |
+| `FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ALLOWED_PATHS`   | *(unset)*        | Comma-separated list of host paths allowed as bind-mount roots; unset = any absolute path |
 
 Per-queue SQS redrive policy (`maxReceiveCount`) is configured at queue creation time via `SetQueueAttributes` / `CreateQueue`, not as a global default.
 

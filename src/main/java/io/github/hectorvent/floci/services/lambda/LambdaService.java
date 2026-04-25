@@ -88,13 +88,23 @@ public class LambdaService {
                   CodeStore codeStore,
                   ZipExtractor zipExtractor,
                   RegionResolver regionResolver) {
+        this(functionStore, warmPool, codeStore, zipExtractor, null, regionResolver);
+    }
+
+    /** Package-private constructor for testing with a supplied config (e.g. for hot-reload tests). */
+    LambdaService(LambdaFunctionStore functionStore,
+                  WarmPool warmPool,
+                  CodeStore codeStore,
+                  ZipExtractor zipExtractor,
+                  EmulatorConfig config,
+                  RegionResolver regionResolver) {
         this.functionStore = functionStore;
         this.executorService = null;
         this.concurrencyLimiter = new LambdaConcurrencyLimiter();
         this.warmPool = warmPool;
         this.codeStore = codeStore;
         this.zipExtractor = zipExtractor;
-        this.config = null;
+        this.config = config;
         this.regionResolver = regionResolver;
         this.esmStore = null;
         this.aliasStore = null;
@@ -291,7 +301,11 @@ public class LambdaService {
             String s3Bucket = (String) code.get("S3Bucket");
             String s3Key = (String) code.get("S3Key");
             if (s3Bucket != null && s3Key != null) {
-                extractZipCodeFromS3(fn, s3Bucket, s3Key);
+                if ("hot-reload".equals(s3Bucket)) {
+                    applyHotReload(fn, s3Key);
+                } else {
+                    extractZipCodeFromS3(fn, s3Bucket, s3Key);
+                }
             }
         }
 
@@ -358,7 +372,11 @@ public class LambdaService {
             fn.setImageUri(imageUri);
         }
         if (s3Bucket != null && s3Key != null) {
-            extractZipCodeFromS3(fn, s3Bucket, s3Key);
+            if ("hot-reload".equals(s3Bucket)) {
+                applyHotReload(fn, s3Key);
+            } else {
+                extractZipCodeFromS3(fn, s3Bucket, s3Key);
+            }
         }
 
         fn.setLastModified(System.currentTimeMillis());
@@ -1090,6 +1108,30 @@ public class LambdaService {
         return modulePath;
     }
 
+    private void applyHotReload(LambdaFunction fn, String hostPath) {
+        if (config == null || !config.services().lambda().hotReload().enabled()) {
+            throw new AwsException("InvalidParameterValueException",
+                    "Hot-reload is disabled. Set FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED=true to enable it.", 400);
+        }
+        if (hostPath == null || !hostPath.startsWith("/")) {
+            throw new AwsException("InvalidParameterValueException",
+                    "Hot-reload S3Key must be an absolute path on the Docker host, got: " + hostPath, 400);
+        }
+        config.services().lambda().hotReload().allowedPaths().ifPresent(allowed -> {
+            if (allowed.stream().noneMatch(hostPath::startsWith)) {
+                throw new AwsException("InvalidParameterValueException",
+                        "Path '" + hostPath + "' is not under an allowed hot-reload mount prefix.", 400);
+            }
+        });
+        fn.setHotReloadHostPath(hostPath);
+        fn.setCodeLocalPath(null);
+        fn.setS3Bucket(null);
+        fn.setS3Key(null);
+        fn.setCodeSizeBytes(0);
+        fn.setCodeSha256("");
+        LOG.infov("Hot-reload configured for function {0}: bind-mounting {1}", fn.getFunctionName(), hostPath);
+    }
+
     // ──────────────────────────── Permissions (Policy) ────────────────────────────
 
     public Map<String, Object> addPermission(String region, String functionName, Map<String, Object> request) {
@@ -1228,6 +1270,9 @@ public class LambdaService {
         String region = regionResolver.getDefaultRegion();
         List<LambdaFunction> functions = functionStore.list(region);
         for (LambdaFunction fn : functions) {
+            if (fn.isHotReload()) {
+                continue;
+            }
             if (event.bucketName().equals(fn.getS3Bucket()) && event.key().equals(fn.getS3Key())) {
                 LOG.infov("Reactive S3 Sync: updating function {0} from s3://{1}/{2}",
                         fn.getFunctionName(), event.bucketName(), event.key());

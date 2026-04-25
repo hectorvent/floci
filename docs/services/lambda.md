@@ -79,6 +79,83 @@ aws lambda invoke --function-name my-function out.json
 !!! note "Standard Behavior"
     This mechanism requires no custom configuration or non-standard magic strings. It works with standard AWS SDKs and CLI tools, providing a "live" development feel while staying within the AWS API contract.
 
+## Hot-Reload via Bind Mount
+
+For the tightest inner-loop development cycle, Floci supports a **bind-mount hot-reload** mode. Instead of packaging code into a ZIP and uploading it to S3, you point Floci directly at a directory on your host machine. The directory is bind-mounted into `/var/task` inside the container, so every invocation runs the files as they currently exist on disk — no upload, no redeploy.
+
+This is enabled by using the magic bucket name `hot-reload` when creating a function:
+
+```bash
+aws lambda create-function \
+  --function-name my-function \
+  --runtime nodejs22.x \
+  --role arn:aws:iam::000000000000:role/lambda-role \
+  --handler index.handler \
+  --code S3Bucket=hot-reload,S3Key=/absolute/path/to/your/code \
+  --endpoint-url http://localhost:4566
+```
+
+The `S3Key` must be an **absolute path** reachable by the Docker daemon. When Floci runs in Docker Compose, this is the path on the Docker host (the machine running Docker), not the path inside the Floci container.
+
+### How it works
+
+1. `CreateFunction` with `S3Bucket=hot-reload` marks the function as a hot-reload function; `S3Key` is stored as the host-side path.
+2. On each invocation, Floci starts a **fresh ephemeral container** with the host path bind-mounted at `/var/task`.
+3. The container executes the files as they exist at invocation time — editing a file and immediately invoking picks up the change without any API call.
+4. After the invocation completes the container is stopped and removed, ensuring the next invocation always sees the current state of the directory.
+
+### Configuration
+
+Hot-reload must be enabled explicitly. By default it is disabled so that `S3Bucket=hot-reload` is treated as a regular S3 bucket name.
+
+```yaml
+floci:
+  services:
+    lambda:
+      hot-reload:
+        enabled: true                # Required — off by default
+        allowed-paths:               # Optional allowlist; omit to allow any absolute path
+          - /home/user/projects
+          - /tmp
+```
+
+Via environment variables:
+
+```bash
+FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED=true
+
+# Optional: restrict which host paths may be bind-mounted (comma-separated)
+FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ALLOWED_PATHS=/home/user/projects,/tmp
+```
+
+**Docker Compose setup** — enable the feature and share the Docker socket:
+
+```yaml
+services:
+  floci:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED: "true"
+```
+
+### Limitations
+
+- The `S3Key` path is interpreted by the **Docker daemon**, not by Floci. When Floci itself runs inside Docker, the path must exist on the Docker host machine, not inside the Floci container.
+- Hot-reload containers are always ephemeral — there is no warm-container reuse. Each invocation pays a cold-start penalty.
+- `UpdateFunctionCode` on a hot-reload function converts it back to a standard Zip function (the hot-reload bind-mount is removed).
+- S3 reactive sync is skipped for hot-reload functions — edits are picked up directly from disk.
+
+### Difference from Reactive S3 Sync
+
+| | Reactive S3 Sync | Bind-Mount Hot-Reload |
+|---|---|---|
+| Trigger | Upload a new ZIP to S3 | Edit files on disk |
+| Cold start | Only after upload | Every invocation |
+| Requires upload step | Yes | No |
+| Works without `hot-reload` enabled | Yes | No |
+| Path on host required | No | Yes |
+
 !!! note "Concurrency enforcement"
     Reserved concurrency is enforced: invocations beyond the reserved value
     return `TooManyRequestsException` (HTTP 429). Functions without a reserved
@@ -130,6 +207,10 @@ floci:
       container-idle-timeout-seconds: 300  # Idle container cleanup
       region-concurrency-limit: 1000       # Concurrent executions ceiling per region
       unreserved-concurrency-min: 100      # Min unreserved capacity PutFunctionConcurrency must leave
+      hot-reload:
+        enabled: false                     # true = enable bind-mount hot-reload via S3Bucket=hot-reload
+        # allowed-paths:                   # Optional path allowlist (host paths that may be bind-mounted)
+        #   - /home/user/projects
 ```
 
 ### Docker socket requirement

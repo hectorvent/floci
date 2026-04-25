@@ -47,6 +47,9 @@ public class LambdaFunction {
     private Map<String, Object> vpcConfig;
     private String codeSha256;
 
+    /** Non-null only for hot-reload functions. Holds the Docker-host path bind-mounted into /var/task. */
+    private String hotReloadHostPath;
+
     @JsonIgnore
     private volatile ContainerState containerState = ContainerState.COLD;
 
@@ -151,6 +154,12 @@ public class LambdaFunction {
 
     public String getCodeSha256() { return codeSha256; }
     public void setCodeSha256(String codeSha256) { this.codeSha256 = codeSha256; }
+
+    public String getHotReloadHostPath() { return hotReloadHostPath; }
+    public void setHotReloadHostPath(String hotReloadHostPath) { this.hotReloadHostPath = hotReloadHostPath; }
+
+    @JsonIgnore
+    public boolean isHotReload() { return hotReloadHostPath != null; }
 
     @JsonIgnore
     public ContainerState getContainerState() { return containerState; }

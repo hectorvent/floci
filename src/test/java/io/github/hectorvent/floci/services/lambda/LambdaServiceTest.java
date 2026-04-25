@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.lambda;
 
+import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
@@ -14,10 +15,12 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class LambdaServiceTest {
 
@@ -465,6 +468,113 @@ class LambdaServiceTest {
 
         held.close();
         assertEquals(0, service.concurrencyLimiter().inflightCount(arn));
+    }
+
+    // ──────────────────────────── Hot-reload ────────────────────────────
+
+    private LambdaService serviceWithHotReload(boolean enabled, List<String> allowedPaths) {
+        EmulatorConfig cfg = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig svc = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.LambdaServiceConfig lambdaCfg = mock(EmulatorConfig.LambdaServiceConfig.class);
+        EmulatorConfig.LambdaServiceConfig.HotReload hr = mock(EmulatorConfig.LambdaServiceConfig.HotReload.class);
+
+        when(cfg.services()).thenReturn(svc);
+        when(svc.lambda()).thenReturn(lambdaCfg);
+        when(lambdaCfg.hotReload()).thenReturn(hr);
+        when(lambdaCfg.defaultTimeoutSeconds()).thenReturn(3);
+        when(lambdaCfg.defaultMemoryMb()).thenReturn(128);
+        when(hr.enabled()).thenReturn(enabled);
+        when(hr.allowedPaths()).thenReturn(allowedPaths == null ? Optional.empty() : Optional.of(allowedPaths));
+
+        LambdaFunctionStore store = new LambdaFunctionStore(new InMemoryStorage<String, LambdaFunction>());
+        WarmPool warmPool = new WarmPool();
+        CodeStore codeStore = new CodeStore(Path.of("target/test-data/lambda-code"));
+        ZipExtractor zipExtractor = new ZipExtractor();
+        RegionResolver regionResolver = new RegionResolver(REGION, "000000000000");
+        return new LambdaService(store, warmPool, codeStore, zipExtractor, cfg, regionResolver);
+    }
+
+    @Test
+    void hotReload_disabledByDefault_throwsInvalidParameter() {
+        // The package-private test constructor leaves config=null, which means disabled.
+        Map<String, Object> req = baseRequest("hr-disabled");
+        req.put("Code", Map.of("S3Bucket", "hot-reload", "S3Key", "/tmp/my-fn"));
+        AwsException ex = assertThrows(AwsException.class, () -> service.createFunction(REGION, req));
+        assertEquals("InvalidParameterValueException", ex.getErrorCode());
+    }
+
+    @Test
+    void hotReload_nonAbsolutePath_throwsInvalidParameter() {
+        LambdaService svc = serviceWithHotReload(true, null);
+        Map<String, Object> req = baseRequest("hr-relpath");
+        req.put("Code", Map.of("S3Bucket", "hot-reload", "S3Key", "relative/path"));
+        AwsException ex = assertThrows(AwsException.class, () -> svc.createFunction(REGION, req));
+        assertEquals("InvalidParameterValueException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("absolute"));
+    }
+
+    @Test
+    void hotReload_allowListRejection_throwsInvalidParameter() {
+        LambdaService svc = serviceWithHotReload(true, List.of("/allowed/"));
+        Map<String, Object> req = baseRequest("hr-denied");
+        req.put("Code", Map.of("S3Bucket", "hot-reload", "S3Key", "/not-allowed/my-fn"));
+        AwsException ex = assertThrows(AwsException.class, () -> svc.createFunction(REGION, req));
+        assertEquals("InvalidParameterValueException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("allowed"));
+    }
+
+    @Test
+    void hotReload_happyPath_setsHostPathAndClearsCodeLocalPath() {
+        LambdaService svc = serviceWithHotReload(true, null);
+        Map<String, Object> req = baseRequest("hr-fn");
+        req.put("Code", Map.of("S3Bucket", "hot-reload", "S3Key", "/tmp/my-fn"));
+        LambdaFunction fn = svc.createFunction(REGION, req);
+        assertEquals("/tmp/my-fn", fn.getHotReloadHostPath());
+        assertNull(fn.getCodeLocalPath());
+        assertTrue(fn.isHotReload());
+        assertEquals(0L, fn.getCodeSizeBytes());
+    }
+
+    @Test
+    void hotReload_allowListAccepted_setsHostPath() {
+        LambdaService svc = serviceWithHotReload(true, List.of("/allowed/"));
+        Map<String, Object> req = baseRequest("hr-allowed");
+        req.put("Code", Map.of("S3Bucket", "hot-reload", "S3Key", "/allowed/my-fn"));
+        LambdaFunction fn = svc.createFunction(REGION, req);
+        assertEquals("/allowed/my-fn", fn.getHotReloadHostPath());
+    }
+
+    @Test
+    void hotReload_updateFunctionCode_setsNewHostPath() {
+        LambdaService svc = serviceWithHotReload(true, null);
+        svc.createFunction(REGION, baseRequest("hr-update"));
+
+        LambdaFunction updated = svc.updateFunctionCode(REGION, "hr-update",
+                Map.of("S3Bucket", "hot-reload", "S3Key", "/tmp/v2"));
+        assertEquals("/tmp/v2", updated.getHotReloadHostPath());
+        assertTrue(updated.isHotReload());
+    }
+
+    @Test
+    void hotReload_convertFromS3Backed_clearsBucketAndKey() {
+        // A function previously deployed from S3 that is later converted to hot-reload
+        // must have s3Bucket/s3Key cleared so the reactive S3 sync observer cannot fire.
+        LambdaService svc = serviceWithHotReload(true, null);
+        Map<String, Object> req = baseRequest("hr-convert");
+        req.put("Code", Map.of("S3Bucket", "my-code-bucket", "S3Key", "fn.zip"));
+        // createFunction with a non-existent S3 bucket will fail inside extractZipCodeFromS3
+        // because s3Service is null in the test constructor → ServiceUnavailableException.
+        // So we create without code and then simulate the S3 bucket/key being set directly.
+        LambdaFunction fn = svc.createFunction(REGION, baseRequest("hr-convert"));
+        fn.setS3Bucket("my-code-bucket");
+        fn.setS3Key("fn.zip");
+
+        LambdaFunction updated = svc.updateFunctionCode(REGION, "hr-convert",
+                Map.of("S3Bucket", "hot-reload", "S3Key", "/tmp/converted"));
+
+        assertNull(updated.getS3Bucket(), "s3Bucket must be cleared after hot-reload conversion");
+        assertNull(updated.getS3Key(), "s3Key must be cleared after hot-reload conversion");
+        assertEquals("/tmp/converted", updated.getHotReloadHostPath());
     }
 
     /**

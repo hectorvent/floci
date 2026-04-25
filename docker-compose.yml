@@ -19,6 +19,7 @@ services:
       FLOCI_STORAGE_HOST_PERSISTENT_PATH: ${PWD}/data
       FLOCI_HOSTNAME: floci
       FLOCI_BASE_URL: http://floci:4566
+      FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED: "true"
     networks:
       floci_default:
         aliases:

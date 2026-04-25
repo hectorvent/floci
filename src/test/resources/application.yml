@@ -64,6 +64,8 @@ floci:
       enabled: true
     lambda:
       enabled: true
+      hot-reload:
+        enabled: true
     apigateway:
       enabled: true
     apigatewayv2:

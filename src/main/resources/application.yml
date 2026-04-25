@@ -111,6 +111,8 @@ floci:
       container-idle-timeout-seconds: 300
       region-concurrency-limit: 1000
       unreserved-concurrency-min: 100
+      hot-reload:
+        enabled: false
     apigateway:
       enabled: true
     apigatewayv2:

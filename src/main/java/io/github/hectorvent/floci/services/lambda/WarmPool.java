@@ -126,8 +126,9 @@ public class WarmPool {
      */
     public void release(ContainerHandle handle) {
         boolean ephemeral = config != null && config.services().lambda().ephemeral();
-        if (ephemeral) {
-            LOG.debugv("Ephemeral: stopping container {0} after invocation", handle.getContainerId());
+        if (ephemeral || handle.isHotReload()) {
+            LOG.debugv("{0}: stopping container {1} after invocation",
+                    handle.isHotReload() ? "Hot-reload" : "Ephemeral", handle.getContainerId());
             stopQuietly(handle);
             return;
         }
