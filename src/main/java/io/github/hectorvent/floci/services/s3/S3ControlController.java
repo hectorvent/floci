@@ -134,6 +134,12 @@ public class S3ControlController {
      * literally. We decode defensively so both forms work, and so routing
      * frameworks that leave {@code %2F} encoded in path segments don't break
      * us.
+     *
+     * <p>Two valid ARN forms are accepted:
+     * <ul>
+     *   <li>S3 Control ARN: {@code arn:aws:s3:<region>:<account>:bucket/<name>}</li>
+     *   <li>Plain S3 ARN:   {@code arn:aws:s3:::<name>} — sent by Go SDK v2 / Terraform provider v6</li>
+     * </ul>
      */
     private String extractBucketName(String resourceArn) {
         String decoded;
@@ -143,13 +149,25 @@ public class S3ControlController {
             throw new AwsException("InvalidRequest",
                     "Malformed percent-encoding in resource ARN: " + e.getMessage(), 400);
         }
+
+        // Form 1: arn:<partition>:s3:<region>:<account>:bucket/<name>
         int idx = decoded.lastIndexOf(":bucket/");
-        if (idx < 0) {
-            throw new AwsException("InvalidRequest",
-                    "Unsupported resource type. Only S3 bucket ARNs are supported " +
-                    "(arn:aws:s3:<region>:<account>:bucket/<name>).", 400);
+        if (idx >= 0) {
+            return decoded.substring(idx + ":bucket/".length());
         }
-        return decoded.substring(idx + ":bucket/".length());
+
+        // Form 2: arn:<partition>:s3:::<name>  (plain S3 ARN — no region, no account)
+        // Go SDK v2 / Terraform provider v6 sends this form for general-purpose buckets.
+        String[] parts = decoded.split(":", 6);
+        if (parts.length == 6 && "s3".equals(parts[2])
+                && parts[3].isEmpty() && parts[4].isEmpty()
+                && !parts[5].isEmpty() && !parts[5].contains("/")) {
+            return parts[5];
+        }
+
+        throw new AwsException("InvalidRequest",
+                "Unsupported resource type. Only S3 bucket ARNs are supported " +
+                "(arn:aws:s3:<region>:<account>:bucket/<name> or arn:aws:s3:::<name>).", 400);
     }
 
     /**

@@ -180,4 +180,36 @@ class S3ControlUrlEncodedArnIntegrationTest {
 
         assertS3ControlErrorResponse(response);
     }
+
+    @Test
+    @Order(8)
+    @DisplayName("ListTagsForResource accepts plain S3 ARN (arn:aws:s3:::bucket) from Go SDK v2 / Terraform (#556)")
+    void listTagsForResourceWithPlainS3Arn() {
+        // Terraform AWS provider v6 / Go SDK v2 sends arn:aws:s3:::<name> for general-purpose buckets
+        String plainArn = "arn:aws:s3:::" + BUCKET;
+        given()
+            .header("x-amz-account-id", ACCOUNT)
+        .when()
+            .get("/v20180820/tags/" + plainArn)
+        .then()
+            .statusCode(200)
+            .contentType(containsString("xml"))
+            .body(containsString("<ListTagsForResourceResult"));
+    }
+
+    @Test
+    @Order(9)
+    @DisplayName("ListTagsForResource accepts URL-encoded plain S3 ARN from Go SDK v2 / Terraform (#556)")
+    void listTagsForResourceWithUrlEncodedPlainS3Arn() {
+        // Go SDK v2 percent-encodes colons: arn%3Aaws%3As3%3A%3A%3A<bucket>
+        String encodedPlainArn = "arn%3Aaws%3As3%3A%3A%3A" + BUCKET;
+        given()
+            .header("x-amz-account-id", ACCOUNT)
+        .when()
+            .get("/v20180820/tags/" + encodedPlainArn)
+        .then()
+            .statusCode(200)
+            .contentType(containsString("xml"))
+            .body(containsString("<ListTagsForResourceResult"));
+    }
 }

@@ -213,4 +213,31 @@ class S3ControlTest {
                 .isInstanceOf(S3ControlException.class)
                 .satisfies(e -> assertThat(((S3ControlException) e).statusCode()).isEqualTo(404));
     }
+
+    @Test
+    @Order(7)
+    @DisplayName("listTagsForResource: accepts plain S3 ARN (arn:aws:s3:::bucket) — Go SDK v2 / Terraform provider v6 (#556)")
+    void listTagsForResourceWithPlainS3Arn() {
+        s3.putBucketTagging(PutBucketTaggingRequest.builder()
+                .bucket(BUCKET)
+                .tagging(Tagging.builder()
+                        .tagSet(Tag.builder().key("PlainArn").value("works").build())
+                        .build())
+                .build());
+
+        // Plain ARN form used by Terraform provider v6 / Go SDK v2 for general-purpose buckets
+        String plainArn = "arn:aws:s3:::" + BUCKET;
+        ListTagsForResourceResponse response = s3control.listTagsForResource(
+                ListTagsForResourceRequest.builder()
+                        .accountId(ACCOUNT_ID)
+                        .resourceArn(plainArn)
+                        .build());
+
+        Map<String, String> tags = response.tags().stream()
+                .collect(Collectors.toMap(
+                        software.amazon.awssdk.services.s3control.model.Tag::key,
+                        software.amazon.awssdk.services.s3control.model.Tag::value));
+
+        assertThat(tags).containsEntry("PlainArn", "works");
+    }
 }
