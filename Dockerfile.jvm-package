@@ -6,6 +6,24 @@ ARG INSTALL_AWS_CLI=false
 ENV FLOCI_VERSION=${VERSION}
 ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
 
+ENV GOSU_VERSION=1.17
+ENV GOSU_AMD64_SHA256=bbc4136d03ab138b1ad66fa4fc051bafc6cc7ffae632b069a53657279a450de3
+ENV GOSU_ARM64_SHA256=c3805a85d17f4454c23d7059bcb97e1ec1af272b90126e79ed002342de08389b
+RUN set -eux; \
+    apk add --no-cache shadow ca-certificates; \
+    useradd -r -u 1001 -g root -d /app -s /sbin/nologin floci; \
+    arch="$(apk --print-arch)"; \
+    case "$arch" in \
+        x86_64) gosuArch='amd64'; gosuSha256="$GOSU_AMD64_SHA256" ;; \
+        aarch64) gosuArch='arm64'; gosuSha256="$GOSU_ARM64_SHA256" ;; \
+        *) echo >&2 "unsupported arch: $arch"; exit 1 ;; \
+    esac; \
+    wget -q -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${gosuArch}"; \
+    echo "${gosuSha256}  /usr/local/bin/gosu" | sha256sum -c -; \
+    chmod +x /usr/local/bin/gosu; \
+    gosu --version; \
+    gosu nobody true
+
 WORKDIR /app
 
 RUN mkdir -p /app/data \
@@ -20,11 +38,13 @@ VOLUME /app/data
 
 COPY --chown=1001:root target/quarkus-app quarkus-app/
 
+COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 4566 6379-6399
 
 HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
     CMD wget -q --spider http://localhost:4566/_floci/health || exit 1
 
-USER 1001
-
-ENTRYPOINT ["java", "-jar", "quarkus-app/quarkus-run.jar", "-Dquarkus.http.host=0.0.0.0"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["java", "-jar", "/app/quarkus-app/quarkus-run.jar", "-Dquarkus.http.host=0.0.0.0"]
