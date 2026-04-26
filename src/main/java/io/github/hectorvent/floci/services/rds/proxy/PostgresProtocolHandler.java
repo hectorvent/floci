@@ -68,15 +68,12 @@ public class PostgresProtocolHandler {
             return;
         }
 
-        // Phase 4: Validate credentials
-        boolean valid;
-        if (iamEnabled && clientPassword.contains("X-Amz-Signature")) {
-            valid = sigV4.validate(clientPassword, clientUsername);
-        } else {
-            valid = passwordValidator.validate(clientUsername, clientPassword);
-        }
-
-        if (!valid) {
+        // Phase 4: Validate credentials.
+        // IAM tokens are validated locally (SigV4). For plain-password clients the
+        // backend is the authority — we pass the credentials straight through so
+        // non-master users with their own passwords are accepted by PostgreSQL.
+        boolean isIam = iamEnabled && clientPassword.contains("X-Amz-Signature");
+        if (isIam && !sigV4.validate(clientPassword, clientUsername)) {
             sendErrorResponse(clientOut, "FATAL", "28P01",
                     "password authentication failed for user \"" + clientUsername + "\"");
             clientOut.flush();
@@ -85,15 +82,19 @@ public class PostgresProtocolHandler {
             return;
         }
 
-        // Phase 5: Connect to backend PostgreSQL
+        // Phase 5: Connect to backend PostgreSQL.
+        // IAM: connect as master (the token has no real DB password).
+        // Plain-password: connect as the client user so PostgreSQL enforces its own ACLs.
         InputStream backendIn = backend.getInputStream();
         OutputStream backendOut = backend.getOutputStream();
 
         String effectiveDbName = (dbName != null && !dbName.isBlank()) ? dbName : "postgres";
-        sendStartupToBackend(backendOut, masterUsername, effectiveDbName);
+        String backendUser = isIam ? masterUsername : clientUsername;
+        String backendPass = isIam ? masterPassword : clientPassword;
+        sendStartupToBackend(backendOut, backendUser, effectiveDbName);
         backendOut.flush();
 
-        if (!authenticateWithBackend(backendIn, backendOut, masterUsername, masterPassword)) {
+        if (!authenticateWithBackend(backendIn, backendOut, backendUser, backendPass)) {
             sendErrorResponse(clientOut, "FATAL", "08006",
                     "Backend database authentication failed");
             clientOut.flush();

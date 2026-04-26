@@ -65,7 +65,10 @@ public class MySqlProtocolHandler {
             return;
         }
 
-        // Phase 4: Validate credentials against the backend nonce
+        // Phase 4: Validate credentials against the backend nonce.
+        // Master user: validate the scramble locally against the known master password.
+        // Non-master users: pass through — the backend validates their scramble directly.
+        // IAM tokens: validate SigV4, then connect to backend as master.
         byte[] clientPayload = Arrays.copyOfRange(clientResponseRaw, 4, clientResponseRaw.length);
         String[] parsed = parseHandshakeResponse(clientPayload);
         String clientUsername = parsed[0];
@@ -74,8 +77,13 @@ public class MySqlProtocolHandler {
 
         boolean valid;
         try {
-            byte[] expected = scrambleNativePassword(masterPassword, backendNonce);
-            valid = masterUsername.equals(clientUsername) && Arrays.equals(expected, clientAuthData);
+            if (masterUsername.equals(clientUsername)) {
+                byte[] expected = scrambleNativePassword(masterPassword, backendNonce);
+                valid = Arrays.equals(expected, clientAuthData);
+            } else {
+                // Non-master user: defer to backend — it knows their password.
+                valid = true;
+            }
         } catch (Exception e) {
             LOG.warnv("MySQL auth error for instance: {0}", e.getMessage());
             valid = false;

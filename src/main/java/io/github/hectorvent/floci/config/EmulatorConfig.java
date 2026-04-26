@@ -115,6 +115,7 @@ public interface EmulatorConfig {
         AppConfigStorageConfig appconfig();
         AppConfigDataStorageConfig appconfigdata();
         ElastiCacheStorageConfig elasticache();
+        RdsStorageConfig rds();
     }
 
     interface SsmStorageConfig {
@@ -207,6 +208,10 @@ public interface EmulatorConfig {
 
         @WithDefault("5000")
         long flushIntervalMs();
+    }
+
+    interface RdsStorageConfig {
+        Optional<String> mode();
     }
 
     interface WalConfig {

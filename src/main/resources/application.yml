@@ -64,6 +64,9 @@ floci:
         flush-interval-ms: 5000
       opensearch:
         flush-interval-ms: 5000
+      rds:
+        # Override storage mode for RDS (in-memory = no Docker volumes; omit to inherit global mode)
+        # mode: memory
 
   dns:
     # Extra hostname suffixes resolved to Floci's container IP by the embedded DNS server.

@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.rds.container;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.ServiceConfigAccess;
 import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
 import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
@@ -38,6 +39,7 @@ public class RdsContainerManager {
     private final ContainerDetector containerDetector;
     private final EmulatorConfig config;
     private final RegionResolver regionResolver;
+    private final ServiceConfigAccess serviceConfigAccess;
     private final Map<String, RdsContainerHandle> activeContainers = new ConcurrentHashMap<>();
 
     @Inject
@@ -46,13 +48,15 @@ public class RdsContainerManager {
                                ContainerLogStreamer logStreamer,
                                ContainerDetector containerDetector,
                                EmulatorConfig config,
-                               RegionResolver regionResolver) {
+                               RegionResolver regionResolver,
+                               ServiceConfigAccess serviceConfigAccess) {
         this.containerBuilder = containerBuilder;
         this.lifecycleManager = lifecycleManager;
         this.logStreamer = logStreamer;
         this.containerDetector = containerDetector;
         this.config = config;
         this.regionResolver = regionResolver;
+        this.serviceConfigAccess = serviceConfigAccess;
     }
 
     public RdsContainerHandle start(String instanceId, DatabaseEngine engine,
@@ -140,36 +144,66 @@ public class RdsContainerManager {
 
     private void addPersistenceMounts(ContainerBuilder.Builder specBuilder, String instanceId,
                                       DatabaseEngine engine, List<String> envVars) {
+        if ("in-memory".equals(serviceConfigAccess.storageMode("rds"))) {
+            return; // ephemeral mode — no mount needed
+        }
+
         String hostPersistentPath = config.storage().hostPersistentPath();
-        boolean isVolume = !hostPersistentPath.startsWith("/") && !hostPersistentPath.startsWith(".");
 
-        if (isVolume) {
-            // Named volume mode: mount the whole volume and tell the engine where to write
+        if (!hostPersistentPath.startsWith("/") && !hostPersistentPath.startsWith(".")) {
+            // Explicit Docker named volume (e.g. "floci-data"): mount the shared volume
             String internalMountPath = "/app/data";
-            specBuilder.withBind(hostPersistentPath, internalMountPath);
-
+            specBuilder.withNamedVolume(hostPersistentPath, internalMountPath);
             String dataPath = internalMountPath + "/rds/" + instanceId;
-            if (engine == DatabaseEngine.POSTGRES) {
-                envVars.add("PGDATA=" + dataPath);
-            } else {
-                LOG.warnv("Volume-based persistence for RDS engine {0} is currently only optimized for POSTGRES. " +
-                        "Using default non-persistent path.", engine);
-            }
-        } else {
-            // Directory mode: mount the specific subdirectory directly
-            String dataPath = Path.of(config.storage().persistentPath(), "rds", instanceId)
-                    .toAbsolutePath().toString();
+            applyEngineDataPath(specBuilder, engine, envVars, instanceId, dataPath);
+
+        } else if (hostPersistentPath.startsWith("/")) {
+            // Absolute bind-mount path: user explicitly configured this host path
+            String hostDataPath = Path.of(hostPersistentPath, "rds", instanceId).toString();
             try {
-                Files.createDirectories(Path.of(dataPath));
-                String hostDataPath = Path.of(hostPersistentPath, "rds", instanceId)
-                        .toAbsolutePath().toString();
-                String target = (engine == DatabaseEngine.POSTGRES)
-                        ? "/var/lib/postgresql/data"
-                        : "/var/lib/mysql";
-                specBuilder.withBind(hostDataPath, target);
+                Files.createDirectories(Path.of(hostDataPath));
             } catch (IOException e) {
-                LOG.errorv("Failed to create RDS data directory: {0}", dataPath, e);
+                LOG.errorv("Failed to create RDS data directory: {0}", hostDataPath, e);
             }
+            specBuilder.withBind(hostDataPath, engineDefaultDataPath(engine));
+
+        } else {
+            // Default (relative path like ./data): use a per-instance Docker named volume.
+            // This works on all platforms including Docker Desktop on macOS, where
+            // bind-mounting paths inside the Floci container is not allowed.
+            String volumeName = "floci-rds-" + instanceId;
+            specBuilder.withNamedVolume(volumeName, engineDefaultDataPath(engine));
+            if (engine == DatabaseEngine.POSTGRES) {
+                envVars.add("PGDATA=/var/lib/postgresql/data");
+            }
+        }
+    }
+
+    private void applyEngineDataPath(ContainerBuilder.Builder specBuilder, DatabaseEngine engine,
+                                     List<String> envVars, String instanceId, String dataPath) {
+        if (engine == DatabaseEngine.POSTGRES) {
+            envVars.add("PGDATA=" + dataPath);
+        } else {
+            // MySQL / MariaDB: use a dedicated per-instance named volume
+            String volumeName = "floci-rds-" + instanceId;
+            specBuilder.withNamedVolume(volumeName, engineDefaultDataPath(engine));
+        }
+    }
+
+    private static String engineDefaultDataPath(DatabaseEngine engine) {
+        return switch (engine) {
+            case POSTGRES -> "/var/lib/postgresql/data";
+            case MYSQL, MARIADB -> "/var/lib/mysql";
+        };
+    }
+
+    public void removeVolume(String instanceId) {
+        String volumeName = "floci-rds-" + instanceId;
+        try {
+            lifecycleManager.getDockerClient().removeVolumeCmd(volumeName).exec();
+            LOG.infov("Removed Docker volume {0} for RDS instance {1}", volumeName, instanceId);
+        } catch (Exception e) {
+            LOG.warnv("Could not remove Docker volume {0}: {1}", volumeName, e.getMessage());
         }
     }
 

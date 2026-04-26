@@ -215,6 +215,23 @@ class RdsQueryHandlerTest {
         assertTrue(((String) response.getEntity()).contains("UnsupportedOperation"));
     }
 
+    // ──────────────────────────── DBSubnetGroup shape ───────────────────────────
+
+    @Test
+    void describeDbClusters_dbSubnetGroupIsPlainString() {
+        DbCluster cluster = makeCluster("mycluster");
+        when(service.listDbClusters(null)).thenReturn(List.of(cluster));
+
+        Response response = handler.handle("DescribeDBClusters", params());
+
+        String body = (String) response.getEntity();
+        // DBCluster.DBSubnetGroup is shape: String in the AWS service model — not a nested struct
+        assertTrue(body.contains("<DBSubnetGroup>default</DBSubnetGroup>"),
+                "Expected DBSubnetGroup as plain string element");
+        assertFalse(body.contains("<DBSubnetGroupName>"),
+                "Did not expect nested DBSubnetGroupName inside DBCluster");
+    }
+
     // ──────────────────────────── Helpers ────────────────────────────
 
     private static MultivaluedMap<String, String> params() {
