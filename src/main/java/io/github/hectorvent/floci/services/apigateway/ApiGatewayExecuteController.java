@@ -12,6 +12,7 @@ import io.github.hectorvent.floci.services.apigatewayv2.model.Route;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
 import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -44,6 +45,7 @@ import java.util.regex.Pattern;
 public class ApiGatewayExecuteController {
 
     private static final Logger LOG = Logger.getLogger(ApiGatewayExecuteController.class);
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final ApiGatewayService apiGatewayService;
     private final ApiGatewayV2Service apiGatewayV2Service;
@@ -66,6 +68,8 @@ public class ApiGatewayExecuteController {
         this.vtlEngine = vtlEngine;
         this.serviceRouter = serviceRouter;
     }
+
+    private record AuthorizerResult(Response errorResponse, String principalId, Map<String, Object> context) {}
 
     @GET
     @Path("/{proxy: .*}")
@@ -163,8 +167,8 @@ public class ApiGatewayExecuteController {
         }
 
         // 1. Authorizer
-        Response authResponse = invokeAuthorizer(region, apiId, method, headers, uriInfo);
-        if (authResponse != null) return authResponse;
+        AuthorizerResult authorizerResult = invokeAuthorizer(region, apiId, stageName, httpMethod, path, method, headers, uriInfo);
+        if (authorizerResult.errorResponse() != null) return authorizerResult.errorResponse();
 
         // 2. Request validation
         Response validationResponse = validateRequest(region, apiId, method, headers, uriInfo, body);
@@ -182,7 +186,7 @@ public class ApiGatewayExecuteController {
 
         return switch (integration.getType().toUpperCase()) {
             case "AWS_PROXY" -> invokeProxy(region, httpMethod, path, proxy, stageName,
-                    matched, integration, headers, uriInfo, body);
+                    matched, integration, headers, uriInfo, body, authorizerResult);
             case "AWS" -> invokeAwsIntegration(region, httpMethod, path, proxy, stageName,
                     matched, integration, headers, uriInfo, body);
             case "MOCK" -> invokeMock(region, httpMethod, path, stageName, matched, integration, headers, uriInfo, body);
@@ -197,7 +201,8 @@ public class ApiGatewayExecuteController {
     private Response invokeProxy(String region, String httpMethod, String path, String proxy,
                                  String stageName, ApiGatewayResource resource,
                                  Integration integration, HttpHeaders headers,
-                                 UriInfo uriInfo, byte[] body) {
+                                 UriInfo uriInfo, byte[] body,
+                                 AuthorizerResult authorizerResult) {
         String functionName = functionNameFromUri(integration.getUri());
         if (functionName == null) {
             return Response.status(500)
@@ -207,7 +212,8 @@ public class ApiGatewayExecuteController {
 
         String requestId = UUID.randomUUID().toString();
         String eventJson = buildProxyEvent(httpMethod, path, proxy, resource.getPath(),
-                stageName, headers, uriInfo, body, requestId);
+                stageName, headers, uriInfo, body, requestId,
+                authorizerResult.principalId(), authorizerResult.context());
 
         try {
             InvokeResult result = lambdaService.invoke(region, functionName, eventJson.getBytes(),
@@ -223,38 +229,45 @@ public class ApiGatewayExecuteController {
         }
     }
 
-    private Response invokeAuthorizer(String region, String apiId, MethodConfig method,
-                                      HttpHeaders headers, UriInfo uriInfo) {
+    private AuthorizerResult invokeAuthorizer(String region, String apiId, String stageName,
+                                              String httpMethod, String requestPath, MethodConfig method,
+                                              HttpHeaders headers, UriInfo uriInfo) {
         if ("CUSTOM".equals(method.getAuthorizationType())) {
             String authorizerId = method.getAuthorizerId();
             if (authorizerId == null) {
-                return null;
+                return new AuthorizerResult(null, null, null);
             }
 
             io.github.hectorvent.floci.services.apigateway.model.Authorizer auth = apiGatewayService.getAuthorizer(region, apiId, authorizerId);
             String lambdaName = functionNameFromUri(auth.getAuthorizerUri());
             if (lambdaName == null) {
-                return null;
+                return new AuthorizerResult(null, null, null);
             }
 
-            String event = toAuthorizerEvent(auth, headers);
+            String event = toAuthorizerEvent(auth, headers, region, apiId, stageName, httpMethod, requestPath);
             try {
                 InvokeResult result = lambdaService.invoke(region, lambdaName, event.getBytes(), InvocationType.RequestResponse);
                 if (result.getFunctionError() != null) {
-                    return Response.status(403).build();
+                    return new AuthorizerResult(Response.status(403).build(), null, null);
                 }
                 
                 JsonNode policy = objectMapper.readTree(result.getPayload());
                 String effect = policy.path("policyDocument").path("Statement").get(0).path("Effect").asText("Deny");
                 if ("Deny".equalsIgnoreCase(effect)) {
-                    return Response.status(403).entity(jsonMessage("User is not authorized to access this resource")).build();
+                    return new AuthorizerResult(
+                            Response.status(403).entity(jsonMessage("User is not authorized to access this resource")).build(),
+                            null,
+                            null);
                 }
+                String principalId = policy.path("principalId").asText(null);
+                Map<String, Object> context = extractAuthorizerContext(policy.path("context"));
+                return new AuthorizerResult(null, principalId, context);
             } catch (Exception e) {
                 LOG.warnv("Authorizer failure: {0}", e.getMessage());
-                return Response.status(500).build();
+                return new AuthorizerResult(Response.status(500).build(), null, null);
             }
         }
-        return null;
+        return new AuthorizerResult(null, null, null);
     }
 
     private Response validateRequest(String region, String apiId, MethodConfig method,
@@ -348,16 +361,32 @@ public class ApiGatewayExecuteController {
         return null;
     }
 
-    private String toAuthorizerEvent(io.github.hectorvent.floci.services.apigateway.model.Authorizer auth, HttpHeaders headers) {
+    private Map<String, Object> extractAuthorizerContext(JsonNode contextNode) {
+        if (contextNode == null || contextNode.isMissingNode() || contextNode.isNull() || !contextNode.isObject()) {
+            return null;
+        }
+        return objectMapper.convertValue(contextNode, MAP_TYPE);
+    }
+
+    private String toAuthorizerEvent(io.github.hectorvent.floci.services.apigateway.model.Authorizer auth,
+                                     HttpHeaders headers, String region, String apiId, String stageName,
+                                     String httpMethod, String requestPath) {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("type", auth.getType());
-        node.put("methodArn", "arn:aws:execute-api:" + regionResolver.getDefaultRegion()
-                + ":" + regionResolver.getAccountId() + ":api/stage/METHOD/path");
+        node.put("methodArn", buildMethodArn(region, apiId, stageName, httpMethod, requestPath));
         if ("TOKEN".equals(auth.getType())) {
             String headerName = auth.getIdentitySource().replace("method.request.header.", "");
             node.put("authorizationToken", headers.getHeaderString(headerName));
         }
         return node.toString();
+    }
+
+    private String buildMethodArn(String region, String apiId, String stageName, String httpMethod, String requestPath) {
+        String normalizedPath = requestPath == null ? "" : requestPath.replaceFirst("^/", "");
+        String arnRegion = region == null ? regionResolver.getDefaultRegion() : region;
+        return "arn:aws:execute-api:" + arnRegion
+                + ":" + regionResolver.getAccountId()
+                + ":" + apiId + "/" + stageName + "/" + httpMethod + "/" + normalizedPath;
     }
 
     /**
@@ -391,7 +420,8 @@ public class ApiGatewayExecuteController {
     private String buildProxyEvent(String httpMethod, String path, String proxy,
                                    String resourcePath, String stageName,
                                    HttpHeaders headers, UriInfo uriInfo,
-                                   byte[] body, String requestId) {
+                                   byte[] body, String requestId,
+                                   String principalId, Map<String, Object> authorizerContext) {
         ObjectNode event = objectMapper.createObjectNode();
         event.put("resource", resourcePath);
         event.put("path", path);
@@ -426,6 +456,19 @@ public class ApiGatewayExecuteController {
         ctx.put("requestId", requestId);
         ctx.put("requestTimeEpoch", System.currentTimeMillis());
         ctx.putObject("identity").put("sourceIp", "127.0.0.1");
+        if (principalId != null || (authorizerContext != null && !authorizerContext.isEmpty())) {
+            ObjectNode authorizerNode = ctx.putObject("authorizer");
+            if (principalId != null) {
+                authorizerNode.put("principalId", principalId);
+            }
+            if (authorizerContext != null) {
+                authorizerContext.forEach((key, value) -> {
+                    if (value != null) {
+                        authorizerNode.put(key, value.toString());
+                    }
+                });
+            }
+        }
 
         if (body != null && body.length > 0) {
             event.put("body", new String(body));
