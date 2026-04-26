@@ -69,28 +69,43 @@ public class PostgresProtocolHandler {
         }
 
         // Phase 4: Validate credentials.
-        // IAM tokens are validated locally (SigV4). For plain-password clients the
-        // backend is the authority — we pass the credentials straight through so
-        // non-master users with their own passwords are accepted by PostgreSQL.
+        // - IAM tokens: validated locally via SigV4.
+        // - Master user (plain password): validated at the proxy via passwordValidator, which
+        //   reads from RdsService and therefore reflects modifyDBInstance password changes.
+        // - Non-master users: pass through — the backend is the authority for their passwords.
         boolean isIam = iamEnabled && clientPassword.contains("X-Amz-Signature");
-        if (isIam && !sigV4.validate(clientPassword, clientUsername)) {
-            sendErrorResponse(clientOut, "FATAL", "28P01",
-                    "password authentication failed for user \"" + clientUsername + "\"");
-            clientOut.flush();
-            closeQuietly(client);
-            closeQuietly(backend);
-            return;
+        boolean isMaster = masterUsername.equals(clientUsername);
+
+        if (isIam) {
+            if (!sigV4.validate(clientPassword, clientUsername)) {
+                sendErrorResponse(clientOut, "FATAL", "28P01",
+                        "password authentication failed for user \"" + clientUsername + "\"");
+                clientOut.flush();
+                closeQuietly(client);
+                closeQuietly(backend);
+                return;
+            }
+        } else if (isMaster) {
+            if (!passwordValidator.validate(clientUsername, clientPassword)) {
+                sendErrorResponse(clientOut, "FATAL", "28P01",
+                        "password authentication failed for user \"" + clientUsername + "\"");
+                clientOut.flush();
+                closeQuietly(client);
+                closeQuietly(backend);
+                return;
+            }
         }
 
         // Phase 5: Connect to backend PostgreSQL.
-        // IAM: connect as master (the token has no real DB password).
-        // Plain-password: connect as the client user so PostgreSQL enforces its own ACLs.
+        // IAM and master: use master credentials — the backend has the original container password
+        // and is never updated directly, so the proxy always authenticates as master.
+        // Non-master: forward the client's own credentials so the backend enforces its own ACLs.
         InputStream backendIn = backend.getInputStream();
         OutputStream backendOut = backend.getOutputStream();
 
         String effectiveDbName = (dbName != null && !dbName.isBlank()) ? dbName : "postgres";
-        String backendUser = isIam ? masterUsername : clientUsername;
-        String backendPass = isIam ? masterPassword : clientPassword;
+        String backendUser = (isIam || isMaster) ? masterUsername : clientUsername;
+        String backendPass = (isIam || isMaster) ? masterPassword : clientPassword;
         sendStartupToBackend(backendOut, backendUser, effectiveDbName);
         backendOut.flush();
 
