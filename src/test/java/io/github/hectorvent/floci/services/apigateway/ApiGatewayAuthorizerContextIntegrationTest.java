@@ -289,6 +289,7 @@ class ApiGatewayAuthorizerContextIntegrationTest {
                           "Runtime":"nodejs20.x",
                           "Role":"%s",
                           "Handler":"index.handler",
+                          "Timeout":30,
                           "Code":{"ZipFile":"%s"}
                         }
                         """.formatted(functionName, ROLE_ARN, zipBase64))
