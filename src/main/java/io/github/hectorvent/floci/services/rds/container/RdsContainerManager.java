@@ -144,7 +144,7 @@ public class RdsContainerManager {
 
     private void addPersistenceMounts(ContainerBuilder.Builder specBuilder, String instanceId,
                                       DatabaseEngine engine, List<String> envVars) {
-        if ("in-memory".equals(serviceConfigAccess.storageMode("rds"))) {
+        if ("memory".equals(serviceConfigAccess.storageMode("rds"))) {
             return; // ephemeral mode — no mount needed
         }
 

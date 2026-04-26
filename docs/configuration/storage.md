@@ -67,6 +67,12 @@ Override the global mode for individual services via environment variables. When
 | `FLOCI_STORAGE_SERVICES_ACM_FLUSH_INTERVAL_MS`                  | `5000`         | ACM flush interval (ms)                |
 | `FLOCI_STORAGE_SERVICES_OPENSEARCH_MODE`                        | global default | OpenSearch storage mode                |
 | `FLOCI_STORAGE_SERVICES_OPENSEARCH_FLUSH_INTERVAL_MS`           | `5000`         | OpenSearch flush interval (ms)         |
+| `FLOCI_STORAGE_SERVICES_RDS_MODE`                               | global default | RDS storage mode (see note below)      |
+
+!!! note "RDS storage mode"
+    For RDS, `FLOCI_STORAGE_SERVICES_RDS_MODE` controls whether DB containers get a persistent Docker volume.
+    When set to `memory` (or when the global mode is `memory`), no volume is created and data is lost when the container stops.
+    Any other mode (`hybrid`, `persistent`, `wal`) causes a per-instance named volume (`floci-rds-<id>`) to be created and removed when the instance is deleted.
 
 ## Environment Variable Override
 

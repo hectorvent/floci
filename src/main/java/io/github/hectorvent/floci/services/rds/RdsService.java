@@ -402,7 +402,7 @@ public class RdsService {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private boolean isInMemory() {
-        return "in-memory".equals(serviceConfigAccess.storageMode("rds"));
+        return "memory".equals(serviceConfigAccess.storageMode("rds"));
     }
 
     private DatabaseEngine resolveEngine(String engineParam) {
