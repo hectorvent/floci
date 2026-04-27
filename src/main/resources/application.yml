@@ -217,3 +217,5 @@ floci:
       api-server-max-port: 6599
       data-path: ./data/eks
       keep-running-on-shutdown: false
+    elbv2:
+      enabled: true

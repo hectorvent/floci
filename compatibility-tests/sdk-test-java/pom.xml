@@ -204,6 +204,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>eks</artifactId>
         </dependency>
+        <!-- ELBv2 client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>elasticloadbalancingv2</artifactId>
+        </dependency>
         <!-- EventBridge Scheduler client -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

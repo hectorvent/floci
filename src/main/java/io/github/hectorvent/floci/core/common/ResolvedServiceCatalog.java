@@ -204,7 +204,11 @@ public class ResolvedServiceCatalog {
                 descriptor("pipes", "pipes", config.services().pipes().enabled(), true,
                         "pipes", config.storage().mode(), 5000L, null, ServiceProtocol.REST_JSON,
                         protocols(ServiceProtocol.REST_JSON),
-                        Set.of(), Set.of("pipes"), Set.of(), Set.of(PipesController.class))
+                        Set.of(), Set.of("pipes"), Set.of(), Set.of(PipesController.class)),
+                descriptor("elasticloadbalancing", "elbv2", config.services().elbv2().enabled(), true,
+                        "elbv2", config.storage().mode(), 5000L, AwsNamespaces.ELB_V2, ServiceProtocol.QUERY,
+                        protocols(ServiceProtocol.QUERY),
+                        Set.of(), Set.of("elasticloadbalancing"), Set.of(), Set.of())
         ));
     }
 
