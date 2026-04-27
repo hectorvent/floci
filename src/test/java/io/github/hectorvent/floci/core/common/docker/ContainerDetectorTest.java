@@ -150,6 +150,18 @@ class ContainerDetectorTest {
     }
 
     @Test
+    void hostDockerMountsDoNotDetectAsContainer() {
+        ContainerDetector d = detector(false, false, null,
+                """
+                1505 1423 252:1 / / rw,relatime - ext4 /dev/mapper/root rw
+                1514 1511 0:4 net:[4026533347] /run/docker/netns/abc rw - nsfs nsfs rw
+                1538 1505 0:67 / /var/lib/docker/rootfs/abc rw - overlay overlay rw,lowerdir=/var/lib/containerd/snapshots/1/fs
+                """,
+                null, null, null);
+        assertFalse(d.isRunningInContainer());
+    }
+
+    @Test
     void detectedViaMountInfoMoby() {
         ContainerDetector d = detector(false, false, null,
                 "100 95 0:54 / / rw - overlay overlay lowerdir=/moby/something\n",
@@ -181,5 +193,4 @@ class ContainerDetectorTest {
         assertTrue(d.isRunningInContainer());
     }
 }
-
 
