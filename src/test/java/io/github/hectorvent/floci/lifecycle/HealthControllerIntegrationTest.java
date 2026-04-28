@@ -52,6 +52,7 @@ class HealthControllerIntegrationTest {
                 "bedrock-runtime": "running",
                 "eks": "running",
                 "pipes": "running",
+                "elasticloadbalancing": "running",
                 "codebuild": "running",
                 "codedeploy": "running"
               },

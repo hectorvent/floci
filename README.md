@@ -213,6 +213,7 @@ All default images are configurable via environment variables, useful for pinnin
 | **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
 | **Bedrock Runtime** | In-process (stub) | Dummy Converse and InvokeModel responses for local development; streaming returns 501 |
 | **EKS** | **Real Docker containers** (mock mode available) | Clusters, tagging; real mode starts k3s per cluster with a live Kubernetes API server |
+| **ELB v2** | In-process | Application and Network Load Balancers, target groups, listeners, path/host-based routing rules, tags |
 | **CodeBuild** | In-process | Projects, report groups, source credentials, curated environment images |
 | **CodeDeploy** | In-process | Applications, deployment groups, deployment configs; 17 AWS built-in `CodeDeployDefault.*` configs pre-seeded |
 
@@ -220,7 +221,7 @@ All default images are configurable via environment variables, useful for pinnin
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**40 AWS services supported.**
+**41 AWS services supported.**
 
 ## Persistence & Storage Modes
 

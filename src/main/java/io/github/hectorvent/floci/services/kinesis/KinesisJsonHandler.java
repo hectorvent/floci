@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.kinesis;
 
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.core.common.AwsEventStreamEncoder;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.kinesis.model.KinesisRecord;
 import io.github.hectorvent.floci.services.kinesis.model.KinesisShard;
@@ -17,6 +18,7 @@ import jakarta.ws.rs.core.Response;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -265,9 +267,71 @@ public class KinesisJsonHandler {
         return Response.ok(response).build();
     }
 
+    @SuppressWarnings("unchecked")
     private Response handleSubscribeToShard(JsonNode request, String region) {
-        ObjectNode response = objectMapper.createObjectNode();
-        return Response.ok(response).build();
+        String consumerArn = request.path("ConsumerARN").asText(null);
+        String shardId = request.path("ShardId").asText(null);
+        JsonNode startPos = request.path("StartingPosition");
+        String startType = startPos.path("Type").asText("TRIM_HORIZON");
+        String seqNumber = startPos.has("SequenceNumber") ? startPos.path("SequenceNumber").asText(null) : null;
+        Long timestampMs = startPos.has("Timestamp")
+                ? Math.round(startPos.path("Timestamp").asDouble() * 1000) : null;
+
+        KinesisConsumer consumer = service.describeStreamConsumer(null, null, consumerArn, region);
+        String streamName = parseStreamNameFromArn(consumer.getStreamArn());
+
+        String shardIterator = service.getShardIterator(streamName, shardId, startType, seqNumber, timestampMs, region);
+
+        Map<String, Object> result = service.getRecords(shardIterator, null, region);
+        List<KinesisRecord> records = (List<KinesisRecord>) result.get("Records");
+        long millisBehind = ((Number) result.get("MillisBehindLatest")).longValue();
+
+        String continuationSeqNo = records.isEmpty() ? null
+                : records.get(records.size() - 1).getSequenceNumber();
+
+        ObjectNode eventPayload = objectMapper.createObjectNode();
+        ArrayNode recordsNode = eventPayload.putArray("Records");
+        for (KinesisRecord rec : records) {
+            recordsNode.addObject()
+                    .put("Data", Base64.getEncoder().encodeToString(rec.getData()))
+                    .put("PartitionKey", rec.getPartitionKey())
+                    .put("SequenceNumber", rec.getSequenceNumber())
+                    .put("ApproximateArrivalTimestamp",
+                         rec.getApproximateArrivalTimestamp().toEpochMilli() / 1000.0);
+        }
+        if (continuationSeqNo != null) {
+            eventPayload.put("ContinuationSequenceNumber", continuationSeqNo);
+        }
+        eventPayload.put("MillisBehindLatest", millisBehind);
+        eventPayload.putArray("ChildShards");
+
+        try {
+            // The Go SDK (and other SDKs) expect an initial-response message before
+            // SubscribeToShardEvent messages. Without it, HandleDeserialize blocks
+            // indefinitely waiting on the initialResponse channel.
+            LinkedHashMap<String, String> initialHeaders = new LinkedHashMap<>();
+            initialHeaders.put(":message-type", "event");
+            initialHeaders.put(":event-type", "initial-response");
+            initialHeaders.put(":content-type", "application/json");
+            byte[] initialMessage = AwsEventStreamEncoder.encodeMessage(initialHeaders, new byte[]{'{', '}'});
+
+            LinkedHashMap<String, String> eventHeaders = new LinkedHashMap<>();
+            eventHeaders.put(":message-type", "event");
+            eventHeaders.put(":event-type", "SubscribeToShardEvent");
+            eventHeaders.put(":content-type", "application/json");
+            byte[] eventPayloadBytes = objectMapper.writeValueAsBytes(eventPayload);
+            byte[] eventMessage = AwsEventStreamEncoder.encodeMessage(eventHeaders, eventPayloadBytes);
+
+            byte[] body = new byte[initialMessage.length + eventMessage.length];
+            System.arraycopy(initialMessage, 0, body, 0, initialMessage.length);
+            System.arraycopy(eventMessage, 0, body, initialMessage.length, eventMessage.length);
+
+            return Response.ok(body)
+                    .header("Content-Type", "application/vnd.amazon.eventstream")
+                    .build();
+        } catch (Exception e) {
+            throw new AwsException("InternalError", "Failed to encode SubscribeToShard response: " + e.getMessage(), 500);
+        }
     }
 
     private ObjectNode consumerToNode(KinesisConsumer c) {

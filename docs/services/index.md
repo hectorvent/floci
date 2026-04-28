@@ -1,6 +1,6 @@
 # Services Overview
 
-Floci emulates 40 AWS services on a single port (`4566`). All services use the real AWS wire protocol, your existing AWS CLI commands and SDK clients work without modification.
+Floci emulates 41 AWS services on a single port (`4566`). All services use the real AWS wire protocol, your existing AWS CLI commands and SDK clients work without modification.
 
 This page is the canonical reference for supported service counts and operation counts. Other docs (and the README) should link here rather than duplicating the table.
 
@@ -44,6 +44,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [AppConfigData](appconfig.md#data-plane) | `/configurationsessions`, `/configuration` | REST JSON | 2 |
 | [Bedrock Runtime](bedrock-runtime.md) | `/model/{modelId}/converse`, `/model/{modelId}/invoke` | REST JSON | 2 (stub; streaming returns 501) |
 | [EKS](eks.md) | `/clusters`, `/clusters/{name}`, `/tags/{resourceArn}` | REST JSON | 7 |
+| [ELB v2](elb.md) | `POST /` with `Action=` param | Query | 34 |
 | [MSK](msk.md) | `/v1/clusters/...`, `/api/v2/clusters/...` | REST JSON | 8 |
 | [Athena](athena.md) | `POST /` + `X-Amz-Target: AmazonAthena.*` | JSON 1.1 | 8 |
 | [Glue](glue.md) | `POST /` + `X-Amz-Target: AWSGlue.*` | JSON 1.1 | 15 |

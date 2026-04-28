@@ -269,6 +269,7 @@ public interface EmulatorConfig {
         BedrockRuntimeServiceConfig bedrockRuntime();
         EksServiceConfig eks();
         PipesServiceConfig pipes();
+        ElbV2ServiceConfig elbv2();
         CodeBuildServiceConfig codebuild();
         CodeDeployServiceConfig codedeploy();
     }
@@ -692,6 +693,11 @@ public interface EmulatorConfig {
     }
 
     interface PipesServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface ElbV2ServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }

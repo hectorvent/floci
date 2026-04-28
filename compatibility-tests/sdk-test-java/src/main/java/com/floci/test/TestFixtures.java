@@ -10,7 +10,10 @@ import software.amazon.awssdk.services.cognitoidentityprovider.CognitoIdentityPr
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.eventbridge.EventBridgeClient;
 import software.amazon.awssdk.services.iam.IamClient;
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisClient;
+import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
+import software.amazon.awssdk.http.Protocol;
 import software.amazon.awssdk.services.kms.KmsClient;
 import software.amazon.awssdk.services.lambda.LambdaClient;
 import software.amazon.awssdk.services.opensearch.OpenSearchClient;
@@ -45,6 +48,7 @@ import software.amazon.awssdk.services.eks.EksClient;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
 import software.amazon.awssdk.services.appconfig.AppConfigClient;
 import software.amazon.awssdk.services.appconfigdata.AppConfigDataClient;
+import software.amazon.awssdk.services.elasticloadbalancingv2.ElasticLoadBalancingV2Client;
 
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.lambda.model.CreateFunctionRequest;
@@ -339,6 +343,16 @@ public final class TestFixtures {
                 .build();
     }
 
+    public static KinesisAsyncClient kinesisAsyncClient() {
+        return KinesisAsyncClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .httpClientBuilder(NettyNioAsyncHttpClient.builder()
+                        .protocol(Protocol.HTTP1_1))
+                .build();
+    }
+
     public static CloudWatchClient cloudWatchClient() {
         return CloudWatchClient.builder()
                 .endpointOverride(ENDPOINT)
@@ -509,6 +523,14 @@ public final class TestFixtures {
 
     public static PipesClient pipesClient() {
         return PipesClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static ElasticLoadBalancingV2Client elbV2Client() {
+        return ElasticLoadBalancingV2Client.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)
