@@ -279,7 +279,9 @@ public class AwsQueryController {
             "SetIdentityNotificationTopic", "GetIdentityNotificationAttributes",
             "GetIdentityDkimAttributes",
             "CreateTemplate", "UpdateTemplate", "GetTemplate", "DeleteTemplate",
-            "ListTemplates", "SendTemplatedEmail"
+            "ListTemplates", "SendTemplatedEmail",
+            "CreateConfigurationSet", "DescribeConfigurationSet",
+            "ListConfigurationSets", "DeleteConfigurationSet"
     );
 
     private static final Set<String> COGNITO_ACTIONS = Set.of(

@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.ses;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -364,6 +365,92 @@ public class SesController {
         }
     }
 
+    // ──────────────────────── Configuration Sets ───────────────────────
+
+    @POST
+    @Path("/configuration-sets")
+    public Response createConfigurationSet(@Context HttpHeaders headers, String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            JsonNode request = objectMapper.readTree(body);
+            String name = request.path("ConfigurationSetName").asText(null);
+            if (name == null || name.isBlank()) {
+                throw new AwsException("BadRequestException", "ConfigurationSetName is required.", 400);
+            }
+            ConfigurationSet cs = new ConfigurationSet(name);
+            JsonNode tags = request.get("Tags");
+            if (tags != null && !tags.isNull()) {
+                if (!tags.isArray()) {
+                    throw new AwsException("BadRequestException",
+                            "Tags must be an array.", 400);
+                }
+                List<ConfigurationSet.Tag> tagList = new ArrayList<>();
+                for (JsonNode t : tags) {
+                    tagList.add(new ConfigurationSet.Tag(
+                            t.path("Key").asText(null),
+                            t.path("Value").asText(null)));
+                }
+                cs.setTags(tagList);
+            }
+            sesService.createConfigurationSet(cs, region);
+            LOG.infov("SES V2 CreateConfigurationSet: {0}", name);
+            return Response.ok(objectMapper.createObjectNode()).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
+        } catch (Exception e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @GET
+    @Path("/configuration-sets")
+    public Response listConfigurationSets(@Context HttpHeaders headers) {
+        String region = regionResolver.resolveRegion(headers);
+        List<ConfigurationSet> all = sesService.listConfigurationSets(region);
+        ObjectNode result = objectMapper.createObjectNode();
+        ArrayNode arr = result.putArray("ConfigurationSets");
+        for (ConfigurationSet cs : all) {
+            arr.add(cs.getName());
+        }
+        return Response.ok(result).build();
+    }
+
+    @GET
+    @Path("/configuration-sets/{configurationSetName}")
+    public Response getConfigurationSet(@Context HttpHeaders headers,
+                                         @PathParam("configurationSetName") String name) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            ConfigurationSet cs = sesService.getConfigurationSet(name, region);
+            ObjectNode result = objectMapper.createObjectNode();
+            result.put("ConfigurationSetName", cs.getName());
+            ArrayNode tags = result.putArray("Tags");
+            for (ConfigurationSet.Tag t : cs.getTags()) {
+                ObjectNode tagNode = objectMapper.createObjectNode();
+                tagNode.put("Key", t.key());
+                tagNode.put("Value", t.value());
+                tags.add(tagNode);
+            }
+            return Response.ok(result).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
+        }
+    }
+
+    @DELETE
+    @Path("/configuration-sets/{configurationSetName}")
+    public Response deleteConfigurationSet(@Context HttpHeaders headers,
+                                            @PathParam("configurationSetName") String name) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            sesService.deleteConfigurationSet(name, region);
+            LOG.infov("SES V2 DeleteConfigurationSet: {0}", name);
+            return Response.ok(objectMapper.createObjectNode()).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
+        }
+    }
+
     // ──────────────────────────── Account ────────────────────────────
 
     @GET
@@ -509,9 +596,9 @@ public class SesController {
         return switch (e.getErrorCode()) {
             case "InvalidParameterValue", "InvalidTemplate" ->
                     new AwsException("BadRequestException", e.getMessage(), 400);
-            case "TemplateDoesNotExist" ->
+            case "TemplateDoesNotExist", "ConfigurationSetDoesNotExist" ->
                     new AwsException("NotFoundException", e.getMessage(), 404);
-            case "AlreadyExists" ->
+            case "AlreadyExists", "ConfigurationSetAlreadyExists" ->
                     new AwsException("AlreadyExistsException", e.getMessage(), 400);
             default -> e;
         };

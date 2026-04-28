@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.AwsQueryResponse;
 import io.github.hectorvent.floci.core.common.XmlBuilder;
+import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -62,6 +63,10 @@ public class SesQueryHandler {
                 case "DeleteTemplate" -> handleDeleteTemplate(params, region);
                 case "ListTemplates" -> handleListTemplates(region);
                 case "SendTemplatedEmail" -> handleSendTemplatedEmail(params, region);
+                case "CreateConfigurationSet" -> handleCreateConfigurationSet(params, region);
+                case "DescribeConfigurationSet" -> handleDescribeConfigurationSet(params, region);
+                case "ListConfigurationSets" -> handleListConfigurationSets(region);
+                case "DeleteConfigurationSet" -> handleDeleteConfigurationSet(params, region);
                 default -> AwsQueryResponse.error("UnsupportedOperation",
                         "Operation " + action + " is not supported by SES.", AwsNamespaces.SES, 400);
             };
@@ -334,6 +339,48 @@ public class SesQueryHandler {
 
         String result = new XmlBuilder().elem("MessageId", messageId).build();
         return Response.ok(AwsQueryResponse.envelope("SendTemplatedEmail", AwsNamespaces.SES, result)).build();
+    }
+
+    private Response handleCreateConfigurationSet(MultivaluedMap<String, String> params, String region) {
+        String name = getParam(params, "ConfigurationSet.Name");
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ConfigurationSet.Name is required.", 400);
+        }
+        sesService.createConfigurationSet(new ConfigurationSet(name), region);
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult("CreateConfigurationSet", AwsNamespaces.SES)).build();
+    }
+
+    private Response handleDescribeConfigurationSet(MultivaluedMap<String, String> params, String region) {
+        String name = getParam(params, "ConfigurationSetName");
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ConfigurationSetName is required.", 400);
+        }
+        ConfigurationSet cs = sesService.getConfigurationSet(name, region);
+        String result = new XmlBuilder()
+                .start("ConfigurationSet")
+                    .elem("Name", cs.getName())
+                .end("ConfigurationSet")
+                .build();
+        return Response.ok(AwsQueryResponse.envelope("DescribeConfigurationSet", AwsNamespaces.SES, result)).build();
+    }
+
+    private Response handleListConfigurationSets(String region) {
+        List<ConfigurationSet> all = sesService.listConfigurationSets(region);
+        XmlBuilder xml = new XmlBuilder().start("ConfigurationSets");
+        for (ConfigurationSet cs : all) {
+            xml.start("member").elem("Name", cs.getName()).end("member");
+        }
+        xml.end("ConfigurationSets");
+        return Response.ok(AwsQueryResponse.envelope("ListConfigurationSets", AwsNamespaces.SES, xml.build())).build();
+    }
+
+    private Response handleDeleteConfigurationSet(MultivaluedMap<String, String> params, String region) {
+        String name = getParam(params, "ConfigurationSetName");
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ConfigurationSetName is required.", 400);
+        }
+        sesService.deleteConfigurationSet(name, region);
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult("DeleteConfigurationSet", AwsNamespaces.SES)).build();
     }
 
     private EmailTemplate readTemplateParams(MultivaluedMap<String, String> params) {
