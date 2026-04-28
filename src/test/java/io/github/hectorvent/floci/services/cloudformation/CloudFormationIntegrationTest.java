@@ -2126,4 +2126,96 @@ class CloudFormationIntegrationTest {
             .statusCode(200)
             .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
     }
+
+    @Test
+    void createStack_withPipe() {
+        String template = """
+            {
+              "Resources": {
+                "SourceQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-pipe-source"
+                  }
+                },
+                "TargetQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-pipe-target"
+                  }
+                },
+                "MyPipe": {
+                  "Type": "AWS::Pipes::Pipe",
+                  "Properties": {
+                    "Name": "cfn-test-pipe",
+                    "Source": { "Fn::GetAtt": ["SourceQueue", "Arn"] },
+                    "Target": { "Fn::GetAtt": ["TargetQueue", "Arn"] },
+                    "RoleArn": "arn:aws:iam::000000000000:role/pipe-role",
+                    "Description": "CF provisioned pipe",
+                    "DesiredState": "STOPPED",
+                    "SourceParameters": {
+                      "SqsQueueParameters": {
+                        "BatchSize": 5
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        // 1. Create Stack
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-pipe-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // 2. Stack should reach CREATE_COMPLETE
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-pipe-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        // 3. Verify pipe exists via Pipes REST API
+        given()
+            .contentType("application/json")
+        .when()
+            .get("/v1/pipes/cfn-test-pipe")
+        .then()
+            .statusCode(200)
+            .body("Name", equalTo("cfn-test-pipe"))
+            .body("Source", containsString("cfn-pipe-source"))
+            .body("Target", containsString("cfn-pipe-target"))
+            .body("Description", equalTo("CF provisioned pipe"))
+            .body("DesiredState", equalTo("STOPPED"))
+            .body("CurrentState", equalTo("STOPPED"));
+
+        // 4. Delete stack and verify pipe is cleaned up
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DeleteStack")
+            .formParam("StackName", "cfn-pipe-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+        .when()
+            .get("/v1/pipes/cfn-test-pipe")
+        .then()
+            .statusCode(404);
+    }
 }

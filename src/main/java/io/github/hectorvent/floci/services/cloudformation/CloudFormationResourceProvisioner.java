@@ -14,6 +14,8 @@ import io.github.hectorvent.floci.services.ecr.model.Repository;
 import io.github.hectorvent.floci.services.iam.IamService;
 import io.github.hectorvent.floci.services.kms.KmsService;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
+import io.github.hectorvent.floci.services.pipes.PipesService;
+import io.github.hectorvent.floci.services.pipes.model.DesiredState;
 import io.github.hectorvent.floci.services.s3.S3Service;
 import io.github.hectorvent.floci.services.secretsmanager.SecretsManagerService;
 import io.github.hectorvent.floci.services.sns.SnsService;
@@ -57,6 +59,7 @@ public class CloudFormationResourceProvisioner {
     private final ApiGatewayService apiGatewayService;
     private final ApiGatewayV2Service apiGatewayV2Service;
     private final EcrService ecrService;
+    private final PipesService pipesService;
 
     @Inject
     public CloudFormationResourceProvisioner(S3Service s3Service, SqsService sqsService,
@@ -67,7 +70,8 @@ public class CloudFormationResourceProvisioner {
                                              EventBridgeService eventBridgeService,
                                              ApiGatewayService apiGatewayService,
                                              ApiGatewayV2Service apiGatewayV2Service,
-                                             EcrService ecrService) {
+                                             EcrService ecrService,
+                                             PipesService pipesService) {
         this.s3Service = s3Service;
         this.sqsService = sqsService;
         this.snsService = snsService;
@@ -81,6 +85,7 @@ public class CloudFormationResourceProvisioner {
         this.apiGatewayService = apiGatewayService;
         this.apiGatewayV2Service = apiGatewayV2Service;
         this.ecrService = ecrService;
+        this.pipesService = pipesService;
     }
 
     /**
@@ -130,6 +135,7 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::ApiGatewayV2::Integration" -> provisionApiGatewayV2Integration(resource, properties, engine, region);
                 case "AWS::ApiGatewayV2::Stage" -> provisionApiGatewayV2Stage(resource, properties, engine, region);
                 case "AWS::ApiGatewayV2::Deployment" -> provisionApiGatewayV2Deployment(resource, properties, engine, region);
+                case "AWS::Pipes::Pipe" -> provisionPipe(resource, properties, engine, region, stackName);
                 default -> {
                     LOG.debugv("Stubbing unsupported resource type: {0} ({1})", resourceType, logicalId);
                     resource.setPhysicalId(logicalId + "-" + UUID.randomUUID().toString().substring(0, 8));
@@ -167,6 +173,7 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::ApiGatewayV2::Api" -> apiGatewayV2Service.deleteApi(region, physicalId);
                 case "AWS::ECR::Repository" ->
                         ecrService.deleteRepository(physicalId, null, true, "us-east-1");
+                case "AWS::Pipes::Pipe" -> pipesService.deletePipe(physicalId, region);
                 default -> LOG.debugv("Skipping delete of unsupported resource type: {0}", resourceType);
             }
         } catch (Exception e) {
@@ -712,6 +719,48 @@ public class CloudFormationResourceProvisioner {
         } catch (Exception e) {
             LOG.debugv("Could not delete EventBridge rule {0}: {1}", ruleName, e.getMessage());
         }
+    }
+
+    // ── Pipes ──────────────────────────────────────────────────────────────────
+
+    private void provisionPipe(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
+                               String region, String stackName) {
+        String name = resolveOptional(props, "Name", engine);
+        if (name == null || name.isBlank()) {
+            name = generatePhysicalName(stackName, r.getLogicalId(), 64, false);
+        }
+
+        String source = resolveOptional(props, "Source", engine);
+        String target = resolveOptional(props, "Target", engine);
+        String roleArn = resolveOptional(props, "RoleArn", engine);
+        String description = resolveOptional(props, "Description", engine);
+        String enrichment = resolveOptional(props, "Enrichment", engine);
+
+        String stateStr = resolveOptional(props, "DesiredState", engine);
+        DesiredState desiredState = "STOPPED".equals(stateStr) ? DesiredState.STOPPED : DesiredState.RUNNING;
+
+        JsonNode sourceParameters = null;
+        if (props != null && props.has("SourceParameters") && !props.get("SourceParameters").isNull()) {
+            sourceParameters = engine.resolveNode(props.get("SourceParameters"));
+        }
+
+        JsonNode targetParameters = null;
+        if (props != null && props.has("TargetParameters") && !props.get("TargetParameters").isNull()) {
+            targetParameters = engine.resolveNode(props.get("TargetParameters"));
+        }
+
+        JsonNode enrichmentParameters = null;
+        if (props != null && props.has("EnrichmentParameters") && !props.get("EnrichmentParameters").isNull()) {
+            enrichmentParameters = engine.resolveNode(props.get("EnrichmentParameters"));
+        }
+
+        Map<String, String> tags = parseCfnTags(props != null ? props.get("Tags") : null, engine);
+
+        var pipe = pipesService.createPipe(name, source, target, roleArn, description, desiredState,
+                enrichment, sourceParameters, targetParameters, enrichmentParameters, tags, region);
+
+        r.setPhysicalId(name);
+        r.getAttributes().put("Arn", pipe.getArn());
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
