@@ -269,6 +269,18 @@ public interface EmulatorConfig {
         BedrockRuntimeServiceConfig bedrockRuntime();
         EksServiceConfig eks();
         PipesServiceConfig pipes();
+        CodeBuildServiceConfig codebuild();
+        CodeDeployServiceConfig codedeploy();
+    }
+
+    interface CodeBuildServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface CodeDeployServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface SsmServiceConfig {

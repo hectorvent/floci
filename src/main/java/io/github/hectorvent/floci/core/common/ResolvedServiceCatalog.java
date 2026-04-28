@@ -204,7 +204,15 @@ public class ResolvedServiceCatalog {
                 descriptor("pipes", "pipes", config.services().pipes().enabled(), true,
                         "pipes", config.storage().mode(), 5000L, null, ServiceProtocol.REST_JSON,
                         protocols(ServiceProtocol.REST_JSON),
-                        Set.of(), Set.of("pipes"), Set.of(), Set.of(PipesController.class))
+                        Set.of(), Set.of("pipes"), Set.of(), Set.of(PipesController.class)),
+                descriptor("codebuild", "codebuild", config.services().codebuild().enabled(), true,
+                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        protocols(ServiceProtocol.JSON),
+                        Set.of("CodeBuild_20161006."), Set.of("codebuild"), Set.of(), Set.of()),
+                descriptor("codedeploy", "codedeploy", config.services().codedeploy().enabled(), true,
+                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        protocols(ServiceProtocol.JSON),
+                        Set.of("CodeDeploy_20141006."), Set.of("codedeploy"), Set.of(), Set.of())
         ));
     }
 

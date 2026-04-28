@@ -214,6 +214,16 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>cloudformation</artifactId>
         </dependency>
+        <!-- CodeBuild client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>codebuild</artifactId>
+        </dependency>
+        <!-- CodeDeploy client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>codedeploy</artifactId>
+        </dependency>
         <!-- AppConfig and AppConfigData clients -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.services.acm.AcmJsonHandler;
 import io.github.hectorvent.floci.services.athena.AthenaJsonHandler;
+import io.github.hectorvent.floci.services.codebuild.CodeBuildJsonHandler;
+import io.github.hectorvent.floci.services.codedeploy.CodeDeployJsonHandler;
 import io.github.hectorvent.floci.services.ecr.EcrJsonHandler;
 import io.github.hectorvent.floci.services.ecs.EcsJsonHandler;
 import io.github.hectorvent.floci.services.firehose.FirehoseJsonHandler;
@@ -56,6 +58,8 @@ public class AwsJson11Controller {
     private final AthenaJsonHandler athenaJsonHandler;
     private final FirehoseJsonHandler firehoseJsonHandler;
     private final ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler;
+    private final CodeBuildJsonHandler codeBuildJsonHandler;
+    private final CodeDeployJsonHandler codeDeployJsonHandler;
 
     @Inject
     public AwsJson11Controller(ObjectMapper objectMapper, ResolvedServiceCatalog catalog,
@@ -70,7 +74,9 @@ public class AwsJson11Controller {
                                EcrJsonHandler ecrJsonHandler, GlueJsonHandler glueJsonHandler,
                                AthenaJsonHandler athenaJsonHandler,
                                FirehoseJsonHandler firehoseJsonHandler,
-                               ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler) {
+                               ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler,
+                               CodeBuildJsonHandler codeBuildJsonHandler,
+                               CodeDeployJsonHandler codeDeployJsonHandler) {
         this.objectMapper = objectMapper;
         this.catalog = catalog;
         this.regionResolver = regionResolver;
@@ -89,6 +95,8 @@ public class AwsJson11Controller {
         this.athenaJsonHandler = athenaJsonHandler;
         this.firehoseJsonHandler = firehoseJsonHandler;
         this.resourceGroupsTaggingJsonHandler = resourceGroupsTaggingJsonHandler;
+        this.codeBuildJsonHandler = codeBuildJsonHandler;
+        this.codeDeployJsonHandler = codeDeployJsonHandler;
     }
 
     @POST
@@ -132,6 +140,8 @@ public class AwsJson11Controller {
                 case "athena" -> athenaJsonHandler.handle(action, request, region);
                 case "firehose" -> firehoseJsonHandler.handle(action, request, region);
                 case "tagging" -> resourceGroupsTaggingJsonHandler.handle(action, request, region);
+                case "codebuild" -> codeBuildJsonHandler.handle(action, request, region, regionResolver.getAccountId());
+                case "codedeploy" -> codeDeployJsonHandler.handle(action, request, region);
                 default -> null;
             };
             // catalog.matchTarget is protocol-agnostic: a JSON 1.0 target

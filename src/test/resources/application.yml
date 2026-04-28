@@ -147,3 +147,7 @@ floci:
       mock: true
     pipes:
       enabled: true
+    codebuild:
+      enabled: true
+    codedeploy:
+      enabled: true

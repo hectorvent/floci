@@ -217,3 +217,7 @@ floci:
       api-server-max-port: 6599
       data-path: ./data/eks
       keep-running-on-shutdown: false
+    codebuild:
+      enabled: true
+    codedeploy:
+      enabled: true
