@@ -395,10 +395,7 @@ public class SesService {
                     "Tag Key must be 1-128 characters.", 400);
         }
         String value = tag.value();
-        if (value == null) {
-            throw new AwsException("InvalidParameterValue", "Tag Value is required.", 400);
-        }
-        if (value.length() > 256) {
+        if (value != null && value.length() > 256) {
             throw new AwsException("InvalidParameterValue",
                     "Tag Value must be 0-256 characters.", 400);
         }

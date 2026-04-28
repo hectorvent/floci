@@ -202,7 +202,33 @@ class SesConfigurationSetV2IntegrationTest {
 
     @Test
     @Order(12)
-    void createConfigurationSet_tagWithMissingKey() {
+    void createConfigurationSet_tagWithMissingValue_roundTripsAsAbsent() {
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "ConfigurationSetName": "v2-cs-tag-no-value",
+                  "Tags": [{"Key": "env"}]
+                }
+                """)
+        .when()
+            .post("/v2/email/configuration-sets")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .get("/v2/email/configuration-sets/v2-cs-tag-no-value")
+        .then()
+            .statusCode(200)
+            .body("Tags[0].Key", equalTo("env"));
+    }
+
+    @Test
+    @Order(13)
+    void createConfigurationSet_tagWithMissingKey_returns400() {
         given()
             .contentType("application/json")
             .header("Authorization", AUTH_HEADER)
@@ -220,7 +246,7 @@ class SesConfigurationSetV2IntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(14)
     void createConfigurationSet_tagKeyTooLong() {
         String longKey = "k".repeat(129);
         given()
@@ -240,7 +266,7 @@ class SesConfigurationSetV2IntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(15)
     void createConfigurationSet_tagValueTooLong() {
         String longValue = "v".repeat(257);
         given()
