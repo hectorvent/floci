@@ -211,12 +211,13 @@ All default images are configurable via environment variables, useful for pinnin
 | **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
 | **Bedrock Runtime** | In-process (stub) | Dummy Converse and InvokeModel responses for local development; streaming returns 501 |
 | **EKS** | **Real Docker containers** (mock mode available) | Clusters, tagging; real mode starts k3s per cluster with a live Kubernetes API server |
+| **ELB v2** | In-process | Application and Network Load Balancers, target groups, listeners, path/host-based routing rules, tags |
 
 > **Lambda, ElastiCache, RDS, MSK, ECS, EKS, and OpenSearch** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**35 AWS services supported.**
+**36 AWS services supported.**
 
 ## Persistence & Storage Modes
 

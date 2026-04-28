@@ -46,6 +46,7 @@ import software.amazon.awssdk.services.eks.EksClient;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
 import software.amazon.awssdk.services.appconfig.AppConfigClient;
 import software.amazon.awssdk.services.appconfigdata.AppConfigDataClient;
+import software.amazon.awssdk.services.elasticloadbalancingv2.ElasticLoadBalancingV2Client;
 
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.lambda.model.CreateFunctionRequest;
@@ -520,6 +521,14 @@ public final class TestFixtures {
 
     public static PipesClient pipesClient() {
         return PipesClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static ElasticLoadBalancingV2Client elbV2Client() {
+        return ElasticLoadBalancingV2Client.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)
