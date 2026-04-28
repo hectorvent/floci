@@ -45,6 +45,29 @@ aws kinesis describe-stream --stream-arn arn:aws:kinesis:us-east-1:000000000000:
 
 ## Examples
 
+## Enhanced Fan-Out (EFO)
+
+`SubscribeToShard` uses a snapshot-and-close model: the server returns one batch of records as a binary EventStream response and closes the connection. The SDK resubscribes automatically using the `ContinuationSequenceNumber` from the last delivered record. All five `StartingPosition` types are supported: `TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER`, `AT_TIMESTAMP`.
+
+```bash
+export AWS_ENDPOINT_URL=http://localhost:4566
+STREAM=my-stream
+
+# Register a consumer
+aws kinesis register-stream-consumer \
+  --stream-arn $(aws kinesis describe-stream --stream-name $STREAM \
+      --query StreamDescription.StreamARN --output text) \
+  --consumer-name my-consumer
+
+# Subscribe (AWS CLI streams events to stdout)
+aws kinesis subscribe-to-shard \
+  --consumer-arn <consumer-arn> \
+  --shard-id shardId-000000000000 \
+  --starting-position Type=TRIM_HORIZON
+```
+
+## Examples
+
 ```bash
 export AWS_ENDPOINT_URL=http://localhost:4566
 

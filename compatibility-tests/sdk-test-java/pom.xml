@@ -154,6 +154,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>kinesis</artifactId>
         </dependency>
+        <!-- Netty async HTTP client — required for KinesisAsyncClient (SubscribeToShard) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
+        </dependency>
         <!-- CloudWatch Logs client -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

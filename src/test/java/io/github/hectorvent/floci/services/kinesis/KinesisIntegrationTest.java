@@ -1,5 +1,7 @@
 package io.github.hectorvent.floci.services.kinesis;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.BeforeAll;
@@ -8,8 +10,11 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.nio.ByteBuffer;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -908,5 +913,136 @@ class KinesisIntegrationTest {
         .when().post("/")
         .then().statusCode(200)
             .body("Records.size()", equalTo(2));
+    }
+
+    @Test
+    @Order(60)
+    void subscribeToShard_returnsRecords() throws Exception {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.CreateStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "efo-test-stream", "ShardCount": 1}
+                """)
+        .when().post("/")
+        .then().statusCode(200);
+
+        String streamArn = given()
+            .header("X-Amz-Target", "Kinesis_20131202.DescribeStreamSummary")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "efo-test-stream"}
+                """)
+        .when().post("/")
+        .then().statusCode(200)
+            .extract().jsonPath().getString("StreamDescriptionSummary.StreamARN");
+
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.PutRecord")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamName\": \"efo-test-stream\", \"Data\": \"aGVsbG8=\", \"PartitionKey\": \"pk1\"}")
+        .when().post("/")
+        .then().statusCode(200);
+
+        String consumerArn = given()
+            .header("X-Amz-Target", "Kinesis_20131202.RegisterStreamConsumer")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamARN\": \"" + streamArn + "\", \"ConsumerName\": \"efo-consumer\"}")
+        .when().post("/")
+        .then().statusCode(200)
+            .extract().jsonPath().getString("Consumer.ConsumerARN");
+
+        byte[] body = given()
+            .header("X-Amz-Target", "Kinesis_20131202.SubscribeToShard")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"ConsumerARN\": \"" + consumerArn + "\", \"ShardId\": \"shardId-000000000000\","
+                + "\"StartingPosition\": {\"Type\": \"TRIM_HORIZON\"}}")
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .header("Content-Type", containsString("application/vnd.amazon.eventstream"))
+            .extract().asByteArray();
+
+        JsonNode event = decodeFirstEventStreamMessage(body);
+        assertNotNull(event);
+        assertEquals(1, event.path("Records").size());
+        assertEquals("pk1", event.path("Records").get(0).path("PartitionKey").asText());
+    }
+
+    @Test
+    @Order(61)
+    void subscribeToShard_trimHorizonEmptyShard() throws Exception {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.CreateStream")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "efo-empty-stream", "ShardCount": 1}
+                """)
+        .when().post("/")
+        .then().statusCode(200);
+
+        String streamArn = given()
+            .header("X-Amz-Target", "Kinesis_20131202.DescribeStreamSummary")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("""
+                {"StreamName": "efo-empty-stream"}
+                """)
+        .when().post("/")
+        .then().statusCode(200)
+            .extract().jsonPath().getString("StreamDescriptionSummary.StreamARN");
+
+        String consumerArn = given()
+            .header("X-Amz-Target", "Kinesis_20131202.RegisterStreamConsumer")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"StreamARN\": \"" + streamArn + "\", \"ConsumerName\": \"efo-empty-consumer\"}")
+        .when().post("/")
+        .then().statusCode(200)
+            .extract().jsonPath().getString("Consumer.ConsumerARN");
+
+        byte[] body = given()
+            .header("X-Amz-Target", "Kinesis_20131202.SubscribeToShard")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"ConsumerARN\": \"" + consumerArn + "\", \"ShardId\": \"shardId-000000000000\","
+                + "\"StartingPosition\": {\"Type\": \"TRIM_HORIZON\"}}")
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .header("Content-Type", containsString("application/vnd.amazon.eventstream"))
+            .extract().asByteArray();
+
+        JsonNode event = decodeFirstEventStreamMessage(body);
+        assertNotNull(event);
+        assertEquals(0, event.path("Records").size());
+    }
+
+    @Test
+    @Order(62)
+    void subscribeToShard_invalidConsumerArn() {
+        given()
+            .header("X-Amz-Target", "Kinesis_20131202.SubscribeToShard")
+            .contentType(KINESIS_CONTENT_TYPE)
+            .body("{\"ConsumerARN\": \"arn:aws:kinesis:us-east-1:000000000000:stream/no-such/consumer/no-such:99999\","
+                + "\"ShardId\": \"shardId-000000000000\","
+                + "\"StartingPosition\": {\"Type\": \"TRIM_HORIZON\"}}")
+        .when().post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ResourceNotFoundException"));
+    }
+
+    private JsonNode decodeFirstEventStreamMessage(byte[] data) throws Exception {
+        ByteBuffer buf = ByteBuffer.wrap(data);
+        // Skip the first message (initial-response)
+        int firstTotalLen = buf.getInt();
+        buf.position(buf.position() + firstTotalLen - 4);
+        // Decode second message (SubscribeToShardEvent)
+        int totalLen = buf.getInt();
+        int headersLen = buf.getInt();
+        buf.getInt(); // prelude CRC — skip
+        int payloadLen = totalLen - 12 - headersLen - 4;
+        buf.position(buf.position() + headersLen); // skip headers
+        byte[] payload = new byte[payloadLen];
+        buf.get(payload);
+        return new ObjectMapper().readTree(payload);
     }
 }

@@ -10,7 +10,10 @@ import software.amazon.awssdk.services.cognitoidentityprovider.CognitoIdentityPr
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.eventbridge.EventBridgeClient;
 import software.amazon.awssdk.services.iam.IamClient;
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisClient;
+import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
+import software.amazon.awssdk.http.Protocol;
 import software.amazon.awssdk.services.kms.KmsClient;
 import software.amazon.awssdk.services.lambda.LambdaClient;
 import software.amazon.awssdk.services.opensearch.OpenSearchClient;
@@ -334,6 +337,16 @@ public final class TestFixtures {
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static KinesisAsyncClient kinesisAsyncClient() {
+        return KinesisAsyncClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .httpClientBuilder(NettyNioAsyncHttpClient.builder()
+                        .protocol(Protocol.HTTP1_1))
                 .build();
     }
 
