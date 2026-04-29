@@ -31,14 +31,17 @@ public class CognitoService {
     /**
      * Claim overrides returned by a PreTokenGeneration Lambda trigger.
      *
-     * @param claimsToAddOrOverride entries added to (or replacing) standard claims
-     * @param claimsToSuppress      claim names to remove from the token
-     * @param groupsToOverride      replaces {@code cognito:groups}
-     * @param iamRolesToOverride    replaces {@code cognito:roles}
-     * @param preferredRole         replaces {@code cognito:preferred_role}
+     * Supports both V1 (single claims map applied to both id and access tokens)
+     * and V2 (per-token-type claim overrides + scope changes for the access
+     * token). For V1 lambdas the parser populates the id/access slots with the
+     * same map.
      */
-    public record ClaimsOverride(Map<String, Object> claimsToAddOrOverride,
-                                  List<String> claimsToSuppress,
+    public record ClaimsOverride(Map<String, Object> idClaimsToAddOrOverride,
+                                  List<String> idClaimsToSuppress,
+                                  Map<String, Object> accessClaimsToAddOrOverride,
+                                  List<String> accessClaimsToSuppress,
+                                  List<String> scopesToAdd,
+                                  List<String> scopesToSuppress,
                                   List<String> groupsToOverride,
                                   List<String> iamRolesToOverride,
                                   String preferredRole) {}
@@ -948,19 +951,18 @@ public class CognitoService {
             claims.put("cognito:groups", new ArrayList<>(user.getGroupNames()));
         }
 
-        applyClaimsOverride(claims, override);
+        applyClaimsOverride(claims, override, type);
 
         return signJwt(header, encodeJsonBase64Url(claims), getSigningPrivateKey(pool));
     }
 
-    private static void applyClaimsOverride(Map<String, Object> claims, ClaimsOverride override) {
+    private static void applyClaimsOverride(Map<String, Object> claims, ClaimsOverride override, String tokenType) {
         if (override == null) return;
-        if (override.claimsToSuppress() != null) {
-            override.claimsToSuppress().forEach(claims::remove);
-        }
-        if (override.claimsToAddOrOverride() != null) {
-            claims.putAll(override.claimsToAddOrOverride());
-        }
+        boolean isAccess = "access".equals(tokenType);
+        List<String> suppress = isAccess ? override.accessClaimsToSuppress() : override.idClaimsToSuppress();
+        Map<String, Object> addOrOverride = isAccess ? override.accessClaimsToAddOrOverride() : override.idClaimsToAddOrOverride();
+        if (suppress != null) suppress.forEach(claims::remove);
+        if (addOrOverride != null) claims.putAll(addOrOverride);
         if (override.groupsToOverride() != null) {
             claims.put("cognito:groups", override.groupsToOverride());
         }
@@ -969,6 +971,19 @@ public class CognitoService {
         }
         if (override.preferredRole() != null) {
             claims.put("cognito:preferred_role", override.preferredRole());
+        }
+        // V2 access-token scope mutations.
+        if (isAccess && (override.scopesToAdd() != null || override.scopesToSuppress() != null)) {
+            Object existing = claims.get("scope");
+            List<String> current = new ArrayList<>();
+            if (existing instanceof String s && !s.isBlank()) {
+                for (String t : s.split(" ")) if (!t.isBlank()) current.add(t);
+            }
+            if (override.scopesToSuppress() != null) current.removeAll(override.scopesToSuppress());
+            if (override.scopesToAdd() != null) {
+                for (String s : override.scopesToAdd()) if (!current.contains(s)) current.add(s);
+            }
+            if (!current.isEmpty()) claims.put("scope", String.join(" ", current));
         }
     }
 

@@ -725,41 +725,37 @@ final class CognitoAuthFlowHandler {
         Map<String, Object> req = new HashMap<>();
         req.put("groupConfiguration", buildGroupConfiguration(user));
         req.put("clientMetadata", clientMetadata == null ? Map.of() : clientMetadata);
+        // V2 lambdas (CognitoEventUserPoolsPreTokenGenV2) require `scopes` to deserialize.
+        // V1 lambdas tolerate the extra field.
+        req.put("scopes", List.of());
         TriggerResult result = invokeTrigger(pool, client, user, "PreTokenGeneration", triggerSource, req);
         if (!result.configured() || result.errored()) return null;
 
-        Object detailsObj = result.response() == null ? null : result.response().get("claimsOverrideDetails");
-        if (!(detailsObj instanceof Map<?, ?> details)) return null;
+        Map<String, Object> response = result.response();
+        if (response == null) return null;
 
-        Map<String, Object> claimsToAddOrOverride = null;
-        Object addOrOverride = details.get("claimsToAddOrOverride");
-        if (addOrOverride instanceof Map<?, ?> m) {
-            claimsToAddOrOverride = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> e : m.entrySet()) {
-                claimsToAddOrOverride.put(String.valueOf(e.getKey()), e.getValue());
-            }
+        // V2 response: claimsAndScopeOverrideDetails { idTokenGeneration, accessTokenGeneration, groupOverrideDetails }
+        if (response.get("claimsAndScopeOverrideDetails") instanceof Map<?, ?> v2) {
+            return parseV2Override(v2);
         }
+        // V1 response: claimsOverrideDetails { claimsToAddOrOverride, claimsToSuppress, groupOverrideDetails }
+        if (response.get("claimsOverrideDetails") instanceof Map<?, ?> v1) {
+            return parseV1Override(v1);
+        }
+        return null;
+    }
 
-        List<String> claimsToSuppress = null;
-        Object suppress = details.get("claimsToSuppress");
-        if (suppress instanceof List<?> l) {
-            claimsToSuppress = new ArrayList<>();
-            for (Object o : l) claimsToSuppress.add(String.valueOf(o));
-        }
+    @SuppressWarnings("unchecked")
+    private static CognitoService.ClaimsOverride parseV1Override(Map<?, ?> details) {
+        Map<String, Object> claimsToAddOrOverride = asStringObjectMap(details.get("claimsToAddOrOverride"));
+        List<String> claimsToSuppress = asStringList(details.get("claimsToSuppress"));
 
         List<String> groupsToOverride = null;
         List<String> iamRolesToOverride = null;
         String preferredRole = null;
-        Object groupOverride = details.get("groupOverrideDetails");
-        if (groupOverride instanceof Map<?, ?> g) {
-            if (g.get("groupsToOverride") instanceof List<?> gl) {
-                groupsToOverride = new ArrayList<>();
-                for (Object o : gl) groupsToOverride.add(String.valueOf(o));
-            }
-            if (g.get("iamRolesToOverride") instanceof List<?> rl) {
-                iamRolesToOverride = new ArrayList<>();
-                for (Object o : rl) iamRolesToOverride.add(String.valueOf(o));
-            }
+        if (details.get("groupOverrideDetails") instanceof Map<?, ?> g) {
+            groupsToOverride = asStringList(g.get("groupsToOverride"));
+            iamRolesToOverride = asStringList(g.get("iamRolesToOverride"));
             if (g.get("preferredRole") instanceof String pr) preferredRole = pr;
         }
 
@@ -767,8 +763,66 @@ final class CognitoAuthFlowHandler {
                 && groupsToOverride == null && iamRolesToOverride == null && preferredRole == null) {
             return null;
         }
-        return new CognitoService.ClaimsOverride(claimsToAddOrOverride, claimsToSuppress,
+        // V1 applies the same claims map to both id and access tokens.
+        return new CognitoService.ClaimsOverride(
+                claimsToAddOrOverride, claimsToSuppress,
+                claimsToAddOrOverride, claimsToSuppress,
+                null, null,
                 groupsToOverride, iamRolesToOverride, preferredRole);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static CognitoService.ClaimsOverride parseV2Override(Map<?, ?> details) {
+        Map<String, Object> idAdd = null;
+        List<String> idSuppress = null;
+        Map<String, Object> accessAdd = null;
+        List<String> accessSuppress = null;
+        List<String> scopesToAdd = null;
+        List<String> scopesToSuppress = null;
+
+        if (details.get("idTokenGeneration") instanceof Map<?, ?> id) {
+            idAdd = asStringObjectMap(id.get("claimsToAddOrOverride"));
+            idSuppress = asStringList(id.get("claimsToSuppress"));
+        }
+        if (details.get("accessTokenGeneration") instanceof Map<?, ?> at) {
+            accessAdd = asStringObjectMap(at.get("claimsToAddOrOverride"));
+            accessSuppress = asStringList(at.get("claimsToSuppress"));
+            scopesToAdd = asStringList(at.get("scopesToAdd"));
+            scopesToSuppress = asStringList(at.get("scopesToSuppress"));
+        }
+
+        List<String> groupsToOverride = null;
+        List<String> iamRolesToOverride = null;
+        String preferredRole = null;
+        if (details.get("groupOverrideDetails") instanceof Map<?, ?> g) {
+            groupsToOverride = asStringList(g.get("groupsToOverride"));
+            iamRolesToOverride = asStringList(g.get("iamRolesToOverride"));
+            if (g.get("preferredRole") instanceof String pr) preferredRole = pr;
+        }
+
+        if (idAdd == null && idSuppress == null && accessAdd == null && accessSuppress == null
+                && scopesToAdd == null && scopesToSuppress == null
+                && groupsToOverride == null && iamRolesToOverride == null && preferredRole == null) {
+            return null;
+        }
+        return new CognitoService.ClaimsOverride(
+                idAdd, idSuppress, accessAdd, accessSuppress,
+                scopesToAdd, scopesToSuppress,
+                groupsToOverride, iamRolesToOverride, preferredRole);
+    }
+
+    private static Map<String, Object> asStringObjectMap(Object o) {
+        if (!(o instanceof Map<?, ?> m) || m.isEmpty()) return null;
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : m.entrySet()) out.put(String.valueOf(e.getKey()), e.getValue());
+        return out;
+    }
+
+    private static List<String> asStringList(Object o) {
+        if (!(o instanceof List<?> l) || l.isEmpty()) return null;
+        List<String> out = new ArrayList<>();
+        for (Object v : l) out.add(String.valueOf(v));
+        return out;
     }
 
     private static Map<String, Object> buildGroupConfiguration(CognitoUser user) {
@@ -848,7 +902,19 @@ final class CognitoAuthFlowHandler {
         Map<String, Object> cfg = pool.getLambdaConfig();
         if (cfg == null) return null;
         Object v = cfg.get(triggerKey);
-        return (v instanceof String s && !s.isBlank()) ? s : null;
+        if (v instanceof String s && !s.isBlank()) return s;
+        // V2 form: PreTokenGeneration is configured under "PreTokenGenerationConfig"
+        // as { LambdaArn, LambdaVersion } (UpdateUserPool / UpdateUserPoolClient
+        // API). Fall through so callers using the V1 key still work, and pick up
+        // the V2 ARN when only the V2 key is set.
+        if ("PreTokenGeneration".equals(triggerKey)) {
+            Object v2 = cfg.get("PreTokenGenerationConfig");
+            if (v2 instanceof Map<?, ?> m) {
+                Object arn = m.get("LambdaArn");
+                if (arn instanceof String s && !s.isBlank()) return s;
+            }
+        }
+        return null;
     }
 
     private String regionForPool(UserPool pool) {

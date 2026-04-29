@@ -233,6 +233,146 @@ class CognitoLambdaTriggersTest {
     }
 
     // =========================================================================
+    // PreTokenGeneration V2
+    // =========================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preTokenGenerationV2AppliesPerTokenClaimsSeparately() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PreTokenGeneration", "arn:aws:lambda:::pre-token"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        Map<String, Object> v2 = Map.of(
+                "claimsAndScopeOverrideDetails", Map.of(
+                        "idTokenGeneration", Map.of(
+                                "claimsToAddOrOverride", Map.of("id_only", "yes", "tier", "id-gold"),
+                                "claimsToSuppress", List.of("auth_time")),
+                        "accessTokenGeneration", Map.of(
+                                "claimsToAddOrOverride", Map.of("access_only", "yes", "tier", "access-gold"))));
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre-token"), any(byte[].class), any()))
+                .thenReturn(ok(v2));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+        Map<String, Object> auth = (Map<String, Object>) result.get("AuthenticationResult");
+
+        Map<String, Object> idClaims;
+        Map<String, Object> accessClaims;
+        try {
+            idClaims = MAPPER.readValue(decodeJwtPayload((String) auth.get("IdToken")), new TypeReference<>() {});
+            accessClaims = MAPPER.readValue(decodeJwtPayload((String) auth.get("AccessToken")), new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        assertEquals("yes", idClaims.get("id_only"));
+        assertEquals("id-gold", idClaims.get("tier"));
+        assertNull(idClaims.get("access_only"), "access-only override must not leak into id token");
+        assertNull(idClaims.get("auth_time"), "id-side claimsToSuppress should drop auth_time");
+
+        assertEquals("yes", accessClaims.get("access_only"));
+        assertEquals("access-gold", accessClaims.get("tier"));
+        assertNull(accessClaims.get("id_only"), "id-only override must not leak into access token");
+        assertNotNull(accessClaims.get("auth_time"), "access-side did not suppress auth_time");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preTokenGenerationV2AppliesScopeAddAndSuppressToAccessToken() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PreTokenGeneration", "arn:aws:lambda:::pre-token"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        Map<String, Object> v2 = Map.of(
+                "claimsAndScopeOverrideDetails", Map.of(
+                        "accessTokenGeneration", Map.of(
+                                "claimsToAddOrOverride", Map.of("scope", "openid email phone"),
+                                "scopesToSuppress", List.of("phone"),
+                                "scopesToAdd", List.of("profile", "openid"))));
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre-token"), any(byte[].class), any()))
+                .thenReturn(ok(v2));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+        String accessToken = (String) ((Map<String, Object>) result.get("AuthenticationResult")).get("AccessToken");
+
+        Map<String, Object> claims;
+        try {
+            claims = MAPPER.readValue(decodeJwtPayload(accessToken), new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        String scope = (String) claims.get("scope");
+        assertNotNull(scope);
+        List<String> tokens = List.of(scope.split(" "));
+        assertTrue(tokens.contains("openid"), "openid retained (already present; scopesToAdd dedups)");
+        assertTrue(tokens.contains("email"), "email retained (not suppressed)");
+        assertTrue(tokens.contains("profile"), "profile added by scopesToAdd");
+        assertTrue(!tokens.contains("phone"), "phone dropped by scopesToSuppress");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preTokenGenerationV2ResolvesArnFromPreTokenGenerationConfigKey() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of(
+                "PreTokenGenerationConfig", Map.of(
+                        "LambdaArn", "arn:aws:lambda:::pre-token-v2",
+                        "LambdaVersion", "V2_0")));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre-token-v2"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of("claimsAndScopeOverrideDetails", Map.of(
+                        "accessTokenGeneration", Map.of(
+                                "claimsToAddOrOverride", Map.of("from_v2_config", "ok"))))));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+        String accessToken = (String) ((Map<String, Object>) result.get("AuthenticationResult")).get("AccessToken");
+
+        Map<String, Object> claims;
+        try {
+            claims = MAPPER.readValue(decodeJwtPayload(accessToken), new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        assertEquals("ok", claims.get("from_v2_config"),
+                "V2 config object form (PreTokenGenerationConfig.LambdaArn) should resolve trigger ARN");
+        verify(lambdaService, atLeastOnce())
+                .invoke(anyString(), eq("arn:aws:lambda:::pre-token-v2"), any(byte[].class), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preTokenGenerationV2RequestIncludesScopesField() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PreTokenGeneration", "arn:aws:lambda:::pre-token"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        org.mockito.ArgumentCaptor<byte[]> payloadCap = org.mockito.ArgumentCaptor.forClass(byte[].class);
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre-token"), payloadCap.capture(), any()))
+                .thenReturn(ok(Map.of()));
+
+        service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+
+        Map<String, Object> event;
+        try {
+            event = MAPPER.readValue(payloadCap.getValue(), new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        Map<String, Object> req = (Map<String, Object>) event.get("request");
+        assertNotNull(req.get("scopes"),
+                "V2 lambdas (CognitoEventUserPoolsPreTokenGenV2) require `scopes` to deserialize");
+        assertTrue(req.get("scopes") instanceof List<?>);
+        assertNotNull(req.get("groupConfiguration"));
+        assertNotNull(req.get("userAttributes"));
+    }
+
+    // =========================================================================
     // UserMigration
     // =========================================================================
 
