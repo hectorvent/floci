@@ -363,11 +363,14 @@ public class CognitoJsonHandler {
     private Response handleInitiateAuth(JsonNode request) {
         Map<String, String> params = new HashMap<>();
         request.path("AuthParameters").fields().forEachRemaining(e -> params.put(e.getKey(), e.getValue().asText()));
+        Map<String, String> clientMetadata = new HashMap<>();
+        request.path("ClientMetadata").fields().forEachRemaining(e -> clientMetadata.put(e.getKey(), e.getValue().asText()));
 
         Map<String, Object> result = service.initiateAuth(
                 request.path("ClientId").asText(),
                 request.path("AuthFlow").asText(),
-                params
+                params,
+                clientMetadata
         );
         return Response.ok(objectMapper.valueToTree(result)).build();
     }
@@ -375,12 +378,15 @@ public class CognitoJsonHandler {
     private Response handleAdminInitiateAuth(JsonNode request) {
         Map<String, String> params = new HashMap<>();
         request.path("AuthParameters").fields().forEachRemaining(e -> params.put(e.getKey(), e.getValue().asText()));
+        Map<String, String> clientMetadata = new HashMap<>();
+        request.path("ClientMetadata").fields().forEachRemaining(e -> clientMetadata.put(e.getKey(), e.getValue().asText()));
 
         Map<String, Object> result = service.adminInitiateAuth(
                 request.path("UserPoolId").asText(),
                 request.path("ClientId").asText(),
                 request.path("AuthFlow").asText(),
-                params
+                params,
+                clientMetadata
         );
         return Response.ok(objectMapper.valueToTree(result)).build();
     }
@@ -388,12 +394,15 @@ public class CognitoJsonHandler {
     private Response handleRespondToAuthChallenge(JsonNode request) {
         Map<String, String> responses = new HashMap<>();
         request.path("ChallengeResponses").fields().forEachRemaining(e -> responses.put(e.getKey(), e.getValue().asText()));
+        Map<String, String> clientMetadata = new HashMap<>();
+        request.path("ClientMetadata").fields().forEachRemaining(e -> clientMetadata.put(e.getKey(), e.getValue().asText()));
 
         Map<String, Object> result = service.respondToAuthChallenge(
                 request.path("ClientId").asText(),
                 request.path("ChallengeName").asText(),
                 request.path("Session").asText(null),
-                responses
+                responses,
+                clientMetadata
         );
         return Response.ok(objectMapper.valueToTree(result)).build();
     }
