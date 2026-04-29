@@ -71,43 +71,27 @@ public class EksClusterManager {
                 config.services().eks().apiServerBasePort(),
                 config.services().eks().apiServerMaxPort());
 
-        // Ensure data directory exists
-        Path dataPath = Path.of(config.services().eks().dataPath(), cluster.getName());
-        try {
-            Files.createDirectories(dataPath);
-        } catch (IOException e) {
-            LOG.warnv("Could not create EKS data directory {0}: {1}", dataPath, e.getMessage());
-        }
-
         // Remove any stale container
         lifecycleManager.removeIfExists(containerName);
 
-        // Build container spec
-        String hostDataPath;
-        String hostPersistentPath = config.storage().hostPersistentPath();
-        boolean isAbsoluteHostPath = hostPersistentPath.startsWith("/");
-
-        if (isAbsoluteHostPath) {
-            String dataPathStr = dataPath.toAbsolutePath().normalize().toString();
-            String persistentPathStr = Path.of(config.storage().persistentPath()).toAbsolutePath().normalize().toString();
-            hostDataPath = dataPathStr.replace(persistentPathStr, hostPersistentPath);
-        } else {
-            // Relative or named-volume path: when running inside Docker (DinD), a relative path
-            // refers to a path inside this container that the host daemon cannot bind-mount.
-            // Use a named Docker volume per cluster instead — the host daemon manages it directly.
-            hostDataPath = "floci-eks-" + cluster.getName();
-        }
-
+        // k3s v1.34+ removed support for --kube-apiserver-arg=storage-backend and
+        // --kube-apiserver-arg=etcd-servers. k3s now manages kine (embedded SQLite)
+        // internally without those flags.
+        //
+        // A named Docker volume is used for the k3s data directory instead of a host
+        // bind mount. Bind-mounting to a macOS host path causes kine to create its Unix
+        // socket (kine.sock) on macOS APFS, which returns EINVAL on chmod — crashing
+        // k3s before it can start. Named volumes live in the Docker VM's Linux
+        // filesystem, so chmod works correctly and data persists across container restarts.
+        String volumeName = "floci-eks-" + cluster.getName();
         ContainerSpec spec = containerBuilder.newContainer(image)
                 .withName(containerName)
                 .withCmd(List.of("server",
                         "--disable=traefik",
-                        "--tls-san=localhost",
-                        "--kube-apiserver-arg=storage-backend=sqlite3",
-                        "--kube-apiserver-arg=etcd-servers=unix:///tmp/kine.sock"))
+                        "--tls-san=localhost"))
                 .withEnv("K3S_KUBECONFIG_MODE", "644")
                 .withPortBinding(K3S_API_SERVER_PORT, hostPort)
-                .withBind(hostDataPath, "/var/lib/rancher/k3s")
+                .withNamedVolume(volumeName, "/var/lib/rancher/k3s")
                 .withDockerNetwork(config.services().eks().dockerNetwork())
                 .withPrivileged(true)
                 .withLogRotation()
@@ -193,6 +177,7 @@ public class EksClusterManager {
             return;
         }
         lifecycleManager.stopAndRemove(cluster.getContainerId(), null);
+        lifecycleManager.removeVolume("floci-eks-" + cluster.getName());
         LOG.infov("Stopped k3s container for cluster {0}", cluster.getName());
     }
 
