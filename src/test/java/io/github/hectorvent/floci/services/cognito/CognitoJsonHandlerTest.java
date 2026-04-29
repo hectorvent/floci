@@ -15,6 +15,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.Spliterators;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -93,8 +97,9 @@ class CognitoJsonHandlerTest {
         
         // Check mandatory blocks for Terraform
         assertNotNull(pool.get("SchemaAttributes"));
-        assertEquals(1, pool.get("SchemaAttributes").size());
-        assertEquals("email", pool.get("SchemaAttributes").get(0).get("Name").asText());
+        assertEquals(20, pool.get("SchemaAttributes").size(),
+                "DescribeUserPool must always return all 20 Cognito standard attributes");
+        assertTrue(schemaNames(pool).contains("email"));
 
         assertNotNull(pool.get("Policies"));
         assertNotNull(pool.get("LambdaConfig"));
@@ -191,6 +196,80 @@ class CognitoJsonHandlerTest {
     }
 
     @Test
+    void describeUserPoolWithNoSchemaReturnsAllTwentyStandardAttributes() {
+        ObjectNode create = mapper.createObjectNode();
+        create.put("PoolName", "no-schema-pool");
+        JsonNode created = (JsonNode) handler.handle("CreateUserPool", create, "us-east-1").getEntity();
+        String poolId = created.get("UserPool").get("Id").asText();
+
+        ObjectNode describe = mapper.createObjectNode();
+        describe.put("UserPoolId", poolId);
+        JsonNode body = (JsonNode) handler.handle("DescribeUserPool", describe, "us-east-1").getEntity();
+        JsonNode schema = body.get("UserPool").get("SchemaAttributes");
+
+        assertEquals(20, schema.size());
+        Set<String> names = schemaNames(body.get("UserPool"));
+        List.of("sub", "name", "given_name", "family_name", "middle_name", "nickname",
+                "preferred_username", "profile", "picture", "website", "email",
+                "email_verified", "gender", "birthdate", "zoneinfo", "locale",
+                "phone_number", "phone_number_verified", "address", "updated_at")
+                .forEach(n -> assertTrue(names.contains(n), "missing standard attribute: " + n));
+    }
+
+    @Test
+    void describeUserPoolMergesCustomAttributeAfterStandardOnes() {
+        ObjectNode create = mapper.createObjectNode();
+        create.put("PoolName", "custom-attr-pool");
+        ArrayNode schema = create.putArray("Schema");
+        ObjectNode custom = schema.addObject();
+        custom.put("Name", "custom:tenant_id");
+        custom.put("AttributeDataType", "String");
+
+        JsonNode created = (JsonNode) handler.handle("CreateUserPool", create, "us-east-1").getEntity();
+        String poolId = created.get("UserPool").get("Id").asText();
+
+        ObjectNode describe = mapper.createObjectNode();
+        describe.put("UserPoolId", poolId);
+        JsonNode body = (JsonNode) handler.handle("DescribeUserPool", describe, "us-east-1").getEntity();
+        JsonNode schemaNode = body.get("UserPool").get("SchemaAttributes");
+
+        assertEquals(21, schemaNode.size(), "20 standard + 1 custom");
+        Set<String> names = schemaNames(body.get("UserPool"));
+        assertTrue(names.contains("custom:tenant_id"));
+        assertTrue(names.contains("sub"));
+        assertTrue(names.contains("email"));
+        // custom attribute must be last (after all standard ones)
+        assertEquals("custom:tenant_id", schemaNode.get(20).get("Name").asText());
+    }
+
+    @Test
+    void describeUserPoolExplicitStandardAttributeOverridesDefault() {
+        ObjectNode create = mapper.createObjectNode();
+        create.put("PoolName", "override-attr-pool");
+        ArrayNode schema = create.putArray("Schema");
+        ObjectNode emailOverride = schema.addObject();
+        emailOverride.put("Name", "email");
+        emailOverride.put("AttributeDataType", "String");
+        emailOverride.put("Required", true);
+
+        JsonNode created = (JsonNode) handler.handle("CreateUserPool", create, "us-east-1").getEntity();
+        String poolId = created.get("UserPool").get("Id").asText();
+
+        ObjectNode describe = mapper.createObjectNode();
+        describe.put("UserPoolId", poolId);
+        JsonNode body = (JsonNode) handler.handle("DescribeUserPool", describe, "us-east-1").getEntity();
+        JsonNode schemaNode = body.get("UserPool").get("SchemaAttributes");
+
+        assertEquals(20, schemaNode.size(), "override should not add a duplicate entry");
+        JsonNode emailAttr = StreamSupport.stream(Spliterators.spliteratorUnknownSize(
+                schemaNode.elements(), 0), false)
+                .filter(n -> "email".equals(n.get("Name").asText()))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(emailAttr.get("Required").asBoolean(), "email must be required per the override");
+    }
+
+    @Test
     void tagResourceRejectsReservedKey() {
         ObjectNode createRequest = mapper.createObjectNode();
         createRequest.put("PoolName", "tag-pool");
@@ -206,5 +285,12 @@ class CognitoJsonHandlerTest {
                 () -> handler.handle("TagResource", tagRequest, "us-east-1")
         );
         assertEquals("ValidationException", exception.getErrorCode());
+    }
+
+    private Set<String> schemaNames(JsonNode pool) {
+        return StreamSupport.stream(
+                        Spliterators.spliteratorUnknownSize(pool.get("SchemaAttributes").elements(), 0), false)
+                .map(n -> n.get("Name").asText())
+                .collect(Collectors.toSet());
     }
 }
