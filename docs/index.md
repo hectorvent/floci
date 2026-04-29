@@ -12,7 +12,7 @@ Floci is a fast, free, and open-source local AWS service emulator built for deve
 
 ## Supported Services
 
-Floci emulates 31 AWS services. See the [Services Overview](services/index.md) for per-service operation counts, endpoints, and full protocol details.
+Floci emulates 41 AWS services. See the [Services Overview](services/index.md) for per-service operation counts, endpoints, and full protocol details.
 
 | Service | Protocol |
 |---|---|
@@ -38,11 +38,21 @@ Floci emulates 31 AWS services. See the [Services Overview](services/index.md) f
 | ECS | JSON 1.1 |
 | EC2 | EC2 Query |
 | ACM | JSON 1.1 |
+| ECR | JSON 1.1 + OCI Distribution |
 | OpenSearch | REST JSON |
 | EventBridge | JSON 1.1 |
 | EventBridge Scheduler | REST JSON |
 | CloudWatch Logs & Metrics | JSON 1.1 / Query |
 | AppConfig + AppConfigData | REST JSON |
+| Bedrock Runtime | REST JSON |
+| EKS | REST JSON |
+| ELB v2 | Query |
+| MSK | REST JSON |
+| Athena | JSON 1.1 |
+| Glue | JSON 1.1 |
+| Data Firehose | JSON 1.1 |
+| CodeBuild | JSON 1.1 |
+| CodeDeploy | JSON 1.1 |
 
 ## Why Floci?
 
@@ -78,7 +88,7 @@ docker compose up -d
 aws --endpoint-url http://localhost:4566 s3 mb s3://my-bucket
 ```
 
-All 31 AWS services are immediately available at `http://localhost:4566`.
+All 41 AWS services are immediately available at `http://localhost:4566`.
 
 [Get started →](getting-started/quick-start.md){ .md-button .md-button--primary }
 [View services →](services/index.md){ .md-button }
