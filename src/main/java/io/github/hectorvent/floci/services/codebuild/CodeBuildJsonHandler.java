@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.codebuild;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.services.codebuild.model.Build;
 import io.github.hectorvent.floci.services.codebuild.model.Project;
 import io.github.hectorvent.floci.services.codebuild.model.ProjectArtifacts;
 import io.github.hectorvent.floci.services.codebuild.model.ProjectEnvironment;
@@ -46,6 +47,12 @@ public class CodeBuildJsonHandler {
             case "ListSourceCredentials" -> listSourceCredentials(region);
             case "DeleteSourceCredentials" -> deleteSourceCredentials(request, region);
             case "ListCuratedEnvironmentImages" -> listCuratedEnvironmentImages();
+            case "StartBuild" -> startBuild(request, region, account);
+            case "BatchGetBuilds" -> batchGetBuilds(request, region);
+            case "ListBuilds" -> listBuilds(region);
+            case "ListBuildsForProject" -> listBuildsForProject(request, region);
+            case "StopBuild" -> stopBuild(request, region);
+            case "RetryBuild" -> retryBuild(request, region, account);
             default -> throw new AwsException("InvalidAction", "Action " + action + " is not supported", 400);
         };
     }
@@ -182,6 +189,82 @@ public class CodeBuildJsonHandler {
 
     private Response listCuratedEnvironmentImages() {
         return Response.ok(Map.of("platforms", service.listCuratedEnvironmentImages())).build();
+    }
+
+    private Response startBuild(JsonNode req, String region, String account) throws Exception {
+        String projectName = req.path("projectName").asText(null);
+        String buildspecOverride = req.has("buildspecOverride") ? req.path("buildspecOverride").asText(null) : null;
+        ProjectEnvironment envOverride = req.has("environmentVariablesOverride")
+                ? buildEnvOverride(req) : null;
+        ProjectArtifacts artifactsOverride = req.has("artifactsOverride")
+                ? mapper.treeToValue(req.get("artifactsOverride"), ProjectArtifacts.class) : null;
+        String sourceVersion = req.has("sourceVersion") ? req.path("sourceVersion").asText(null) : null;
+        Integer timeout = req.has("timeoutInMinutes") ? req.path("timeoutInMinutes").asInt() : null;
+        String imageOverride = req.has("imageOverride") ? req.path("imageOverride").asText(null) : null;
+        String computeTypeOverride = req.has("computeTypeOverride") ? req.path("computeTypeOverride").asText(null) : null;
+
+        Build build = service.startBuild(region, account, projectName, buildspecOverride,
+                envOverride, artifactsOverride, sourceVersion, timeout, imageOverride, computeTypeOverride);
+        return Response.ok(Map.of("build", build)).build();
+    }
+
+    private ProjectEnvironment buildEnvOverride(JsonNode req) throws Exception {
+        ProjectEnvironment env = new ProjectEnvironment();
+        if (req.has("environmentVariablesOverride")) {
+            List<Map<String, String>> vars = new ArrayList<>();
+            for (JsonNode v : req.get("environmentVariablesOverride")) {
+                Map<String, String> m = new HashMap<>();
+                m.put("name", v.path("name").asText());
+                m.put("value", v.path("value").asText());
+                m.put("type", v.path("type").asText("PLAINTEXT"));
+                vars.add(m);
+            }
+            env.setEnvironmentVariables(vars);
+        }
+        if (req.has("imageOverride")) {
+            env.setImage(req.path("imageOverride").asText(null));
+        }
+        if (req.has("computeTypeOverride")) {
+            env.setComputeType(req.path("computeTypeOverride").asText(null));
+        }
+        if (req.has("privilegedModeOverride")) {
+            env.setPrivilegedMode(req.path("privilegedModeOverride").asBoolean());
+        }
+        if (req.has("environmentTypeOverride")) {
+            env.setType(req.path("environmentTypeOverride").asText(null));
+        }
+        return env;
+    }
+
+    private Response batchGetBuilds(JsonNode req, String region) {
+        List<String> ids = new ArrayList<>();
+        req.path("ids").forEach(n -> ids.add(n.asText()));
+        List<Build> found = service.batchGetBuilds(region, ids);
+        List<String> foundIds = found.stream().map(Build::getId).toList();
+        List<String> notFound = ids.stream().filter(id -> !foundIds.contains(id)).toList();
+        return Response.ok(Map.of("builds", found, "buildsNotFound", notFound)).build();
+    }
+
+    private Response listBuilds(String region) {
+        return Response.ok(Map.of("ids", service.listBuilds(region))).build();
+    }
+
+    private Response listBuildsForProject(JsonNode req, String region) {
+        String projectName = req.path("projectName").asText(null);
+        return Response.ok(Map.of("ids", service.listBuildsForProject(region, projectName))).build();
+    }
+
+    private Response stopBuild(JsonNode req, String region) {
+        String id = req.path("id").asText(null);
+        service.stopBuild(region, id);
+        Build build = service.getBuild(region, id);
+        return Response.ok(Map.of("build", build)).build();
+    }
+
+    private Response retryBuild(JsonNode req, String region, String account) {
+        String id = req.path("id").asText(null);
+        Build build = service.retryBuild(region, account, id);
+        return Response.ok(Map.of("build", build)).build();
     }
 
     @SuppressWarnings("unchecked")

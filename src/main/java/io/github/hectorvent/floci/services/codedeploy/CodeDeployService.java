@@ -1,10 +1,18 @@
 package io.github.hectorvent.floci.services.codedeploy;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.codedeploy.model.Application;
+import io.github.hectorvent.floci.services.codedeploy.model.Deployment;
 import io.github.hectorvent.floci.services.codedeploy.model.DeploymentConfig;
 import io.github.hectorvent.floci.services.codedeploy.model.DeploymentGroup;
+import io.github.hectorvent.floci.services.lambda.LambdaService;
+import io.github.hectorvent.floci.services.lambda.model.InvocationType;
+import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -12,11 +20,26 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class CodeDeployService {
+
+    private static final Logger LOG = Logger.getLogger(CodeDeployService.class);
+
+    private final LambdaService lambdaService;
+    private final ObjectMapper mapper;
+
+    @Inject
+    public CodeDeployService(LambdaService lambdaService, ObjectMapper mapper) {
+        this.lambdaService = lambdaService;
+        this.mapper = mapper;
+    }
 
     // key: region -> name -> application
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, Application>> applications = new ConcurrentHashMap<>();
@@ -26,6 +49,35 @@ public class CodeDeployService {
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, DeploymentConfig>> deploymentConfigs = new ConcurrentHashMap<>();
     // key: resourceArn -> tags
     private final ConcurrentHashMap<String, Map<String, String>> tags = new ConcurrentHashMap<>();
+    // key: region -> deploymentId -> Deployment
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Deployment>> deployments = new ConcurrentHashMap<>();
+    // key: region -> deploymentId -> target map (lambdaTarget data)
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Map<String, Object>>> deploymentTargets = new ConcurrentHashMap<>();
+    // key: lifecycleEventHookExecutionId -> CompletableFuture<status>
+    private final ConcurrentHashMap<String, CompletableFuture<String>> hookFutures = new ConcurrentHashMap<>();
+    // key: deploymentId -> stop flag
+    private final ConcurrentHashMap<String, AtomicBoolean> stopFlags = new ConcurrentHashMap<>();
+
+    private static final class AppSpecInfo {
+        String functionName;
+        String aliasName;
+        String currentVersion;
+        String targetVersion;
+        String beforeAllowTraffic;
+        String afterAllowTraffic;
+    }
+
+    private static final class TrafficRoutingInfo {
+        final String type;
+        final int percentage;
+        final int intervalSeconds;
+
+        TrafficRoutingInfo(String type, int percentage, int intervalSeconds) {
+            this.type = type;
+            this.percentage = percentage;
+            this.intervalSeconds = intervalSeconds;
+        }
+    }
 
     private static final List<String> BUILT_IN_CONFIG_NAMES = List.of(
             "CodeDeployDefault.OneAtATime",
@@ -333,6 +385,420 @@ public class CodeDeployService {
 
     public List<String> listDeploymentConfigs(String region) {
         return new ArrayList<>(deploymentConfigsFor(region).keySet());
+    }
+
+    // ---- Deployments ----
+
+    private Map<String, Deployment> deploymentsFor(String region) {
+        return deployments.computeIfAbsent(region, r -> new ConcurrentHashMap<>());
+    }
+
+    private Map<String, Map<String, Object>> deploymentTargetsFor(String region) {
+        return deploymentTargets.computeIfAbsent(region, r -> new ConcurrentHashMap<>());
+    }
+
+    public String createDeployment(String region, String appName, String groupName,
+                                   String configName, Map<String, Object> revision, String description) {
+        getApplication(region, appName);
+        getDeploymentGroup(region, appName, groupName);
+
+        AppSpecInfo appSpec = parseAppSpec(revision);
+        DeploymentGroup group = getDeploymentGroup(region, appName, groupName);
+        String effectiveConfig = configName != null ? configName : group.getDeploymentConfigName();
+
+        String deploymentId = generateDeploymentId();
+        double now = Instant.now().toEpochMilli() / 1000.0;
+
+        Deployment deployment = new Deployment();
+        deployment.setDeploymentId(deploymentId);
+        deployment.setApplicationName(appName);
+        deployment.setDeploymentGroupName(groupName);
+        deployment.setDeploymentConfigName(effectiveConfig);
+        deployment.setStatus("Queued");
+        deployment.setRevision(revision);
+        deployment.setCreateTime(now);
+        deployment.setDescription(description);
+        deployment.setCreator("user");
+        deployment.setComputePlatform("Lambda");
+        deploymentsFor(region).put(deploymentId, deployment);
+
+        // Build initial target map
+        String targetId = appSpec.functionName + ":" + appSpec.aliasName;
+        String targetArn = "arn:aws:lambda:" + region + ":000000000000:function:" + appSpec.functionName + ":" + appSpec.aliasName;
+        Map<String, Object> lambdaTargetMap = new ConcurrentHashMap<>();
+        lambdaTargetMap.put("deploymentId", deploymentId);
+        lambdaTargetMap.put("targetId", targetId);
+        lambdaTargetMap.put("targetArn", targetArn);
+        lambdaTargetMap.put("status", "Pending");
+        lambdaTargetMap.put("lastUpdatedAt", now);
+        lambdaTargetMap.put("lifecycleEvents", new CopyOnWriteArrayList<>());
+
+        Map<String, Object> targetMap = new ConcurrentHashMap<>();
+        targetMap.put("deploymentTargetType", "LambdaFunction");
+        targetMap.put("lambdaTarget", lambdaTargetMap);
+        deploymentTargetsFor(region).put(deploymentId, targetMap);
+
+        AtomicBoolean stopFlag = new AtomicBoolean(false);
+        stopFlags.put(deploymentId, stopFlag);
+
+        String finalEffectiveConfig = effectiveConfig;
+        Thread.ofVirtual().name("codedeploy-" + deploymentId).start(
+                () -> runStateMachine(region, deployment, appSpec, lambdaTargetMap, stopFlag, finalEffectiveConfig));
+
+        return deploymentId;
+    }
+
+    public Deployment getDeployment(String region, String deploymentId) {
+        Deployment d = deploymentsFor(region).get(deploymentId);
+        if (d == null) {
+            throw new AwsException("DeploymentDoesNotExistException",
+                    "Deployment does not exist: " + deploymentId, 400);
+        }
+        return d;
+    }
+
+    public List<String> listDeployments(String region, String appName, String groupName, List<String> statuses) {
+        return deploymentsFor(region).values().stream()
+                .filter(d -> appName == null || appName.equals(d.getApplicationName()))
+                .filter(d -> groupName == null || groupName.equals(d.getDeploymentGroupName()))
+                .filter(d -> statuses == null || statuses.isEmpty() || statuses.contains(d.getStatus()))
+                .map(Deployment::getDeploymentId)
+                .collect(Collectors.toList());
+    }
+
+    public Map<String, String> stopDeployment(String region, String deploymentId) {
+        Deployment d = getDeployment(region, deploymentId);
+        String status = d.getStatus();
+        if ("Succeeded".equals(status) || "Failed".equals(status) || "Stopped".equals(status)) {
+            return Map.of("status", "Succeeded", "statusMessage", "Deployment is already in a terminal state.");
+        }
+        AtomicBoolean flag = stopFlags.get(deploymentId);
+        if (flag != null) {
+            flag.set(true);
+        }
+        return Map.of("status", "Pending", "statusMessage", "Stop request submitted.");
+    }
+
+    public List<Deployment> batchGetDeployments(String region, List<String> ids) {
+        Map<String, Deployment> store = deploymentsFor(region);
+        return ids.stream()
+                .map(id -> {
+                    Deployment d = store.get(id);
+                    if (d == null) {
+                        throw new AwsException("DeploymentDoesNotExistException",
+                                "Deployment does not exist: " + id, 400);
+                    }
+                    return d;
+                })
+                .collect(Collectors.toList());
+    }
+
+    public List<String> listDeploymentTargets(String region, String deploymentId) {
+        getDeployment(region, deploymentId);
+        Map<String, Object> target = deploymentTargetsFor(region).get(deploymentId);
+        if (target == null) {
+            return List.of();
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lambdaTarget = (Map<String, Object>) target.get("lambdaTarget");
+        String targetId = lambdaTarget != null ? (String) lambdaTarget.get("targetId") : null;
+        return targetId != null ? List.of(targetId) : List.of();
+    }
+
+    public List<Map<String, Object>> batchGetDeploymentTargets(String region, String deploymentId, List<String> targetIds) {
+        getDeployment(region, deploymentId);
+        Map<String, Object> target = deploymentTargetsFor(region).get(deploymentId);
+        if (target == null) {
+            return List.of();
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> lambdaTarget = (Map<String, Object>) target.get("lambdaTarget");
+        String targetId = lambdaTarget != null ? (String) lambdaTarget.get("targetId") : null;
+        if (targetId == null || (!targetIds.isEmpty() && !targetIds.contains(targetId))) {
+            return List.of();
+        }
+        return List.of(target);
+    }
+
+    public String putLifecycleEventHookExecutionStatus(String deploymentId, String executionId, String status) {
+        CompletableFuture<String> future = hookFutures.get(executionId);
+        if (future != null && !future.isDone()) {
+            future.complete(status);
+        }
+        return executionId;
+    }
+
+    // ---- Deployment state machine ----
+
+    @SuppressWarnings("unchecked")
+    private AppSpecInfo parseAppSpec(Map<String, Object> revision) {
+        if (revision == null) {
+            throw new AwsException("InvalidRevisionException", "Revision is required", 400);
+        }
+        Object appSpecContent = revision.get("appSpecContent");
+        if (!(appSpecContent instanceof Map)) {
+            throw new AwsException("InvalidRevisionException", "Missing appSpecContent in revision", 400);
+        }
+        String content = (String) ((Map<String, Object>) appSpecContent).get("content");
+        if (content == null || content.isBlank()) {
+            throw new AwsException("InvalidRevisionException", "Missing content in appSpecContent", 400);
+        }
+
+        AppSpecInfo info = new AppSpecInfo();
+        try {
+            JsonNode root = mapper.readTree(content);
+            JsonNode resources = root.get("Resources");
+            if (resources != null && resources.isArray() && !resources.isEmpty()) {
+                JsonNode firstResource = resources.get(0);
+                if (firstResource.isObject()) {
+                    JsonNode resourceNode = firstResource.fields().next().getValue();
+                    JsonNode props = resourceNode.path("Properties");
+                    info.functionName = props.path("Name").asText(null);
+                    info.aliasName = props.path("Alias").asText(null);
+                    info.currentVersion = props.path("CurrentVersion").asText(null);
+                    info.targetVersion = props.path("TargetVersion").asText(null);
+                }
+            }
+            JsonNode hooks = root.get("Hooks");
+            if (hooks != null && hooks.isArray()) {
+                for (JsonNode hook : hooks) {
+                    if (hook.has("BeforeAllowTraffic")) {
+                        info.beforeAllowTraffic = hook.get("BeforeAllowTraffic").asText(null);
+                    }
+                    if (hook.has("AfterAllowTraffic")) {
+                        info.afterAllowTraffic = hook.get("AfterAllowTraffic").asText(null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            throw new AwsException("InvalidRevisionException", "Failed to parse AppSpec content: " + e.getMessage(), 400);
+        }
+
+        if (info.functionName == null || info.aliasName == null || info.targetVersion == null) {
+            throw new AwsException("InvalidRevisionException",
+                    "AppSpec must specify Name, Alias, and TargetVersion", 400);
+        }
+        return info;
+    }
+
+    @SuppressWarnings("unchecked")
+    private TrafficRoutingInfo getTrafficRoutingInfo(String region, String configName) {
+        if (configName == null) {
+            return new TrafficRoutingInfo("AllAtOnce", 100, 0);
+        }
+        DeploymentConfig cfg = deploymentConfigsFor(region).get(configName);
+        if (cfg == null || cfg.getTrafficRoutingConfig() == null) {
+            return new TrafficRoutingInfo("AllAtOnce", 100, 0);
+        }
+        Map<String, Object> trc = (Map<String, Object>) cfg.getTrafficRoutingConfig();
+        String type = (String) trc.getOrDefault("type", "AllAtOnce");
+
+        if ("TimeBasedCanary".equals(type)) {
+            Map<String, Object> canary = (Map<String, Object>) trc.get("timeBasedCanary");
+            if (canary != null) {
+                int pct = toInt(canary.get("canaryPercentage"), 10);
+                int minutes = toInt(canary.get("canaryInterval"), 5);
+                return new TrafficRoutingInfo(type, pct, minutes * 60);
+            }
+        } else if ("TimeBasedLinear".equals(type)) {
+            Map<String, Object> linear = (Map<String, Object>) trc.get("timeBasedLinear");
+            if (linear != null) {
+                int pct = toInt(linear.get("linearPercentage"), 10);
+                int minutes = toInt(linear.get("linearInterval"), 1);
+                return new TrafficRoutingInfo(type, pct, minutes * 60);
+            }
+        }
+        return new TrafficRoutingInfo("AllAtOnce", 100, 0);
+    }
+
+    private void runStateMachine(String region, Deployment deployment, AppSpecInfo appSpec,
+                                  Map<String, Object> lambdaTargetMap, AtomicBoolean stopFlag, String configName) {
+        String deploymentId = deployment.getDeploymentId();
+        try {
+            deployment.setStatus("InProgress");
+            deployment.setStartTime(Instant.now().toEpochMilli() / 1000.0);
+            updateTargetStatus(lambdaTargetMap, "InProgress");
+
+            if (stopFlag.get()) { finishStopped(deployment, lambdaTargetMap); return; }
+
+            if (appSpec.beforeAllowTraffic != null) {
+                boolean ok = invokeHook(region, deployment, appSpec.beforeAllowTraffic,
+                        "BeforeAllowTraffic", lambdaTargetMap, stopFlag);
+                if (!ok) { finishFailed(deployment, lambdaTargetMap, "BeforeAllowTrafficHookFailed",
+                        "Hook function reported failure: BeforeAllowTraffic"); return; }
+            }
+
+            if (stopFlag.get()) { finishStopped(deployment, lambdaTargetMap); return; }
+
+            executeAllowTraffic(region, deployment, appSpec, configName, lambdaTargetMap, stopFlag);
+
+            if (stopFlag.get()) { finishStopped(deployment, lambdaTargetMap); return; }
+
+            if (appSpec.afterAllowTraffic != null) {
+                boolean ok = invokeHook(region, deployment, appSpec.afterAllowTraffic,
+                        "AfterAllowTraffic", lambdaTargetMap, stopFlag);
+                if (!ok) { finishFailed(deployment, lambdaTargetMap, "AfterAllowTrafficHookFailed",
+                        "Hook function reported failure: AfterAllowTraffic"); return; }
+            }
+
+            updateTargetStatus(lambdaTargetMap, "Succeeded");
+            deployment.setStatus("Succeeded");
+            deployment.setCompleteTime(Instant.now().toEpochMilli() / 1000.0);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            finishStopped(deployment, lambdaTargetMap);
+        } catch (Exception e) {
+            LOG.warnv("Deployment {0} failed: {1}", deploymentId, e.getMessage());
+            finishFailed(deployment, lambdaTargetMap, "DeploymentFailed", e.getMessage());
+        } finally {
+            stopFlags.remove(deploymentId);
+        }
+    }
+
+    private void executeAllowTraffic(String region, Deployment deployment, AppSpecInfo appSpec,
+                                      String configName, Map<String, Object> lambdaTargetMap,
+                                      AtomicBoolean stopFlag) throws InterruptedException {
+        TrafficRoutingInfo trc = getTrafficRoutingInfo(region, configName);
+        Map<String, Object> event = addLifecycleEvent(lambdaTargetMap, "AllowTraffic");
+
+        try {
+            switch (trc.type) {
+                case "TimeBasedCanary" -> {
+                    // Step 1: shift canaryPercentage to targetVersion
+                    double canaryWeight = trc.percentage / 100.0;
+                    Map<String, Double> routing = Map.of(appSpec.targetVersion, canaryWeight);
+                    lambdaService.updateAlias(region, appSpec.functionName, appSpec.aliasName,
+                            appSpec.currentVersion, null, routing);
+
+                    // Wait the canary interval (capped at 5s for emulator speed)
+                    long waitMs = Math.min(trc.intervalSeconds * 1000L, 5000L);
+                    if (waitMs > 0 && !stopFlag.get()) {
+                        Thread.sleep(waitMs);
+                    }
+                    if (stopFlag.get()) { return; }
+
+                    // Step 2: flip 100% to targetVersion
+                    lambdaService.updateAlias(region, appSpec.functionName, appSpec.aliasName,
+                            appSpec.targetVersion, null, Map.of());
+                }
+                case "TimeBasedLinear" -> {
+                    int steps = (int) Math.ceil(100.0 / trc.percentage);
+                    for (int step = 1; step <= steps && !stopFlag.get(); step++) {
+                        int pct = Math.min(step * trc.percentage, 100);
+                        if (pct >= 100) {
+                            lambdaService.updateAlias(region, appSpec.functionName, appSpec.aliasName,
+                                    appSpec.targetVersion, null, Map.of());
+                        } else {
+                            double weight = pct / 100.0;
+                            lambdaService.updateAlias(region, appSpec.functionName, appSpec.aliasName,
+                                    appSpec.currentVersion, null, Map.of(appSpec.targetVersion, weight));
+                            long waitMs = Math.min(trc.intervalSeconds * 1000L, 2000L);
+                            if (waitMs > 0) {
+                                Thread.sleep(waitMs);
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    // AllAtOnce: flip immediately
+                    lambdaService.updateAlias(region, appSpec.functionName, appSpec.aliasName,
+                            appSpec.targetVersion, null, Map.of());
+                }
+            }
+            finishLifecycleEvent(event, "Succeeded");
+        } catch (Exception e) {
+            finishLifecycleEvent(event, "Failed");
+            throw e;
+        }
+    }
+
+    private boolean invokeHook(String region, Deployment deployment, String hookFunctionName,
+                                String lifecycleEventName, Map<String, Object> lambdaTargetMap,
+                                AtomicBoolean stopFlag) throws InterruptedException {
+        String executionId = UUID.randomUUID().toString();
+        CompletableFuture<String> future = new CompletableFuture<>();
+        hookFutures.put(executionId, future);
+
+        Map<String, Object> event = addLifecycleEvent(lambdaTargetMap, lifecycleEventName);
+
+        try {
+            String payload = "{\"DeploymentId\":\"" + deployment.getDeploymentId()
+                    + "\",\"LifecycleEventHookExecutionId\":\"" + executionId + "\"}";
+
+            try {
+                InvokeResult result = lambdaService.invoke(region, hookFunctionName,
+                        payload.getBytes(), InvocationType.RequestResponse);
+                if (!future.isDone()) {
+                    // Lambda didn't call PutLifecycleEventHookExecutionStatus; decide from invocation result
+                    future.complete(result.getFunctionError() == null ? "Succeeded" : "Failed");
+                }
+            } catch (Exception e) {
+                LOG.debugv("Hook Lambda {0} not invokable: {1}", hookFunctionName, e.getMessage());
+                future.complete("Succeeded");
+            }
+
+            String status = "Succeeded";
+            try {
+                status = future.get(30, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                status = "Succeeded";
+            }
+
+            finishLifecycleEvent(event, status);
+            return "Succeeded".equals(status);
+        } finally {
+            hookFutures.remove(executionId);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> addLifecycleEvent(Map<String, Object> lambdaTargetMap, String name) {
+        Map<String, Object> event = new ConcurrentHashMap<>();
+        event.put("lifecycleEventName", name);
+        event.put("startTime", Instant.now().toEpochMilli() / 1000.0);
+        event.put("status", "InProgress");
+        List<Map<String, Object>> events = (List<Map<String, Object>>) lambdaTargetMap.get("lifecycleEvents");
+        if (events != null) {
+            events.add(event);
+        }
+        lambdaTargetMap.put("lastUpdatedAt", Instant.now().toEpochMilli() / 1000.0);
+        return event;
+    }
+
+    private void finishLifecycleEvent(Map<String, Object> event, String status) {
+        event.put("endTime", Instant.now().toEpochMilli() / 1000.0);
+        event.put("status", status);
+    }
+
+    private void updateTargetStatus(Map<String, Object> lambdaTargetMap, String status) {
+        lambdaTargetMap.put("status", status);
+        lambdaTargetMap.put("lastUpdatedAt", Instant.now().toEpochMilli() / 1000.0);
+    }
+
+    private void finishStopped(Deployment deployment, Map<String, Object> lambdaTargetMap) {
+        updateTargetStatus(lambdaTargetMap, "Skipped");
+        deployment.setStatus("Stopped");
+        deployment.setCompleteTime(Instant.now().toEpochMilli() / 1000.0);
+    }
+
+    private void finishFailed(Deployment deployment, Map<String, Object> lambdaTargetMap,
+                               String errorCode, String message) {
+        updateTargetStatus(lambdaTargetMap, "Failed");
+        deployment.setStatus("Failed");
+        deployment.setCompleteTime(Instant.now().toEpochMilli() / 1000.0);
+        deployment.setErrorInformation(Map.of("code", errorCode, "message", message != null ? message : ""));
+    }
+
+    private String generateDeploymentId() {
+        String hex = UUID.randomUUID().toString().replace("-", "").substring(0, 9).toUpperCase();
+        return "d-" + hex;
+    }
+
+    private int toInt(Object val, int def) {
+        if (val instanceof Number n) { return n.intValue(); }
+        if (val instanceof String s) { try { return Integer.parseInt(s); } catch (NumberFormatException ignored) {} }
+        return def;
     }
 
     // ---- Tags ----

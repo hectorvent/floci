@@ -6,27 +6,48 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.codedeploy.CodeDeployClient;
+import software.amazon.awssdk.services.codedeploy.model.AppSpecContent;
 import software.amazon.awssdk.services.codedeploy.model.BatchGetApplicationsResponse;
 import software.amazon.awssdk.services.codedeploy.model.BatchGetDeploymentGroupsResponse;
+import software.amazon.awssdk.services.codedeploy.model.BatchGetDeploymentsResponse;
+import software.amazon.awssdk.services.codedeploy.model.BatchGetDeploymentTargetsResponse;
 import software.amazon.awssdk.services.codedeploy.model.ComputePlatform;
 import software.amazon.awssdk.services.codedeploy.model.CreateApplicationResponse;
 import software.amazon.awssdk.services.codedeploy.model.CreateDeploymentConfigResponse;
 import software.amazon.awssdk.services.codedeploy.model.CreateDeploymentGroupResponse;
+import software.amazon.awssdk.services.codedeploy.model.CreateDeploymentResponse;
 import software.amazon.awssdk.services.codedeploy.model.DeploymentOption;
 import software.amazon.awssdk.services.codedeploy.model.DeploymentReadyAction;
+import software.amazon.awssdk.services.codedeploy.model.DeploymentStatus;
 import software.amazon.awssdk.services.codedeploy.model.DeploymentStyle;
 import software.amazon.awssdk.services.codedeploy.model.DeploymentType;
 import software.amazon.awssdk.services.codedeploy.model.GetDeploymentConfigResponse;
 import software.amazon.awssdk.services.codedeploy.model.GetDeploymentGroupResponse;
+import software.amazon.awssdk.services.codedeploy.model.GetDeploymentResponse;
 import software.amazon.awssdk.services.codedeploy.model.ListApplicationsResponse;
 import software.amazon.awssdk.services.codedeploy.model.ListDeploymentConfigsResponse;
 import software.amazon.awssdk.services.codedeploy.model.ListDeploymentGroupsResponse;
+import software.amazon.awssdk.services.codedeploy.model.ListDeploymentTargetsResponse;
+import software.amazon.awssdk.services.codedeploy.model.ListDeploymentsResponse;
 import software.amazon.awssdk.services.codedeploy.model.ListTagsForResourceResponse;
 import software.amazon.awssdk.services.codedeploy.model.MinimumHealthyHosts;
 import software.amazon.awssdk.services.codedeploy.model.MinimumHealthyHostsType;
+import software.amazon.awssdk.services.codedeploy.model.RevisionLocation;
+import software.amazon.awssdk.services.codedeploy.model.RevisionLocationType;
 import software.amazon.awssdk.services.codedeploy.model.Tag;
 import software.amazon.awssdk.services.codedeploy.model.TrafficRoutingType;
+import software.amazon.awssdk.services.lambda.LambdaClient;
+import software.amazon.awssdk.services.lambda.model.CreateAliasResponse;
+import software.amazon.awssdk.services.lambda.model.CreateFunctionRequest;
+import software.amazon.awssdk.services.lambda.model.FunctionCode;
+import software.amazon.awssdk.services.lambda.model.GetAliasResponse;
+import software.amazon.awssdk.services.lambda.model.PublishVersionResponse;
+import software.amazon.awssdk.services.lambda.model.Runtime;
+import software.amazon.awssdk.services.lambda.model.UpdateAliasRequest;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -35,17 +56,27 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CodeDeployTest {
 
     static CodeDeployClient codedeploy;
+    static LambdaClient lambda;
     static String appId;
     static String dgId;
+
+    static final String DEPLOY_FUNCTION = "cd-deploy-fn";
+    static final String DEPLOY_ALIAS = "live";
+    static final String ROLE = "arn:aws:iam::000000000000:role/lambda-role";
+    static String deploymentId;
+    static String v1;
+    static String v2;
 
     @BeforeAll
     static void setup() {
         codedeploy = TestFixtures.codeDeployClient();
+        lambda = TestFixtures.lambdaClient();
     }
 
     @AfterAll
     static void teardown() {
         codedeploy.close();
+        lambda.close();
     }
 
     @Test
@@ -247,5 +278,188 @@ class CodeDeployTest {
 
         ListApplicationsResponse after = codedeploy.listApplications(r -> r.build());
         assertThat(after.applications()).doesNotContain("sdk-lambda-app");
+    }
+
+    // ---- Phase 2: Lambda deployment via CodeDeploy ----
+
+    @Test
+    @Order(20)
+    void setupLambdaFunctionForDeployment() {
+        // Create function and publish two versions, alias pointing to v1
+        lambda.createFunction(CreateFunctionRequest.builder()
+                .functionName(DEPLOY_FUNCTION)
+                .runtime(Runtime.NODEJS20_X)
+                .role(ROLE)
+                .handler("index.handler")
+                .code(FunctionCode.builder()
+                        .zipFile(SdkBytes.fromByteArray(LambdaUtils.minimalZip()))
+                        .build())
+                .build());
+
+        PublishVersionResponse pv1 = lambda.publishVersion(r -> r.functionName(DEPLOY_FUNCTION));
+        v1 = pv1.version();
+        assertThat(v1).isNotBlank();
+
+        PublishVersionResponse pv2 = lambda.publishVersion(r -> r.functionName(DEPLOY_FUNCTION));
+        v2 = pv2.version();
+        assertThat(v2).isNotBlank().isNotEqualTo(v1);
+
+        CreateAliasResponse alias = lambda.createAlias(r -> r
+                .functionName(DEPLOY_FUNCTION)
+                .name(DEPLOY_ALIAS)
+                .functionVersion(v1));
+        assertThat(alias.aliasArn()).contains(DEPLOY_FUNCTION);
+    }
+
+    @Test
+    @Order(21)
+    void setupCodeDeployAppAndGroupForDeployment() {
+        codedeploy.createApplication(r -> r
+                .applicationName("cd-lambda-app")
+                .computePlatform(ComputePlatform.LAMBDA));
+
+        codedeploy.createDeploymentGroup(r -> r
+                .applicationName("cd-lambda-app")
+                .deploymentGroupName("cd-lambda-dg")
+                .deploymentConfigName("CodeDeployDefault.LambdaAllAtOnce")
+                .serviceRoleArn("arn:aws:iam::000000000000:role/codedeploy-role"));
+    }
+
+    @Test
+    @Order(22)
+    void createDeployment_allAtOnce() {
+        String appSpec = """
+                {
+                  "version": "0.0",
+                  "Resources": [{
+                    "myFunction": {
+                      "Type": "AWS::Lambda::Function",
+                      "Properties": {
+                        "Name": "%s",
+                        "Alias": "%s",
+                        "CurrentVersion": "%s",
+                        "TargetVersion": "%s"
+                      }
+                    }
+                  }]
+                }
+                """.formatted(DEPLOY_FUNCTION, DEPLOY_ALIAS, v1, v2);
+
+        CreateDeploymentResponse resp = codedeploy.createDeployment(r -> r
+                .applicationName("cd-lambda-app")
+                .deploymentGroupName("cd-lambda-dg")
+                .deploymentConfigName("CodeDeployDefault.LambdaAllAtOnce")
+                .revision(RevisionLocation.builder()
+                        .revisionType(RevisionLocationType.APP_SPEC_CONTENT)
+                        .appSpecContent(AppSpecContent.builder()
+                                .content(appSpec)
+                                .build())
+                        .build()));
+
+        assertThat(resp.deploymentId()).startsWith("d-");
+        deploymentId = resp.deploymentId();
+    }
+
+    @Test
+    @Order(23)
+    void getDeployment_returnsInfo() {
+        assertThat(deploymentId).isNotNull();
+
+        GetDeploymentResponse resp = codedeploy.getDeployment(r -> r.deploymentId(deploymentId));
+        assertThat(resp.deploymentInfo().deploymentId()).isEqualTo(deploymentId);
+        assertThat(resp.deploymentInfo().applicationName()).isEqualTo("cd-lambda-app");
+        assertThat(resp.deploymentInfo().deploymentGroupName()).isEqualTo("cd-lambda-dg");
+        assertThat(resp.deploymentInfo().status()).isIn(
+                DeploymentStatus.QUEUED, DeploymentStatus.IN_PROGRESS, DeploymentStatus.SUCCEEDED);
+    }
+
+    @Test
+    @Order(24)
+    void getDeployment_eventuallySucceeds() throws InterruptedException {
+        assertThat(deploymentId).isNotNull();
+
+        DeploymentStatus status = DeploymentStatus.QUEUED;
+        for (int i = 0; i < 20 && !DeploymentStatus.SUCCEEDED.equals(status); i++) {
+            Thread.sleep(500);
+            GetDeploymentResponse resp = codedeploy.getDeployment(r -> r.deploymentId(deploymentId));
+            status = resp.deploymentInfo().status();
+        }
+        assertThat(status).isEqualTo(DeploymentStatus.SUCCEEDED);
+    }
+
+    @Test
+    @Order(25)
+    void aliasPointsToTargetVersionAfterDeployment() {
+        GetAliasResponse alias = lambda.getAlias(r -> r
+                .functionName(DEPLOY_FUNCTION)
+                .name(DEPLOY_ALIAS));
+        assertThat(alias.functionVersion()).isEqualTo(v2);
+        assertThat(alias.routingConfig()).isNull();
+    }
+
+    @Test
+    @Order(26)
+    void listDeployments_containsDeploymentId() {
+        assertThat(deploymentId).isNotNull();
+
+        ListDeploymentsResponse resp = codedeploy.listDeployments(r -> r
+                .applicationName("cd-lambda-app")
+                .deploymentGroupName("cd-lambda-dg"));
+        assertThat(resp.deployments()).contains(deploymentId);
+    }
+
+    @Test
+    @Order(27)
+    void batchGetDeployments_returnsDeploymentInfo() {
+        assertThat(deploymentId).isNotNull();
+
+        BatchGetDeploymentsResponse resp = codedeploy.batchGetDeployments(r -> r
+                .deploymentIds(deploymentId));
+        assertThat(resp.deploymentsInfo()).hasSize(1);
+        assertThat(resp.deploymentsInfo().get(0).deploymentId()).isEqualTo(deploymentId);
+        assertThat(resp.deploymentsInfo().get(0).status()).isEqualTo(DeploymentStatus.SUCCEEDED);
+    }
+
+    @Test
+    @Order(28)
+    void listDeploymentTargets_returnsSingleTarget() {
+        assertThat(deploymentId).isNotNull();
+
+        ListDeploymentTargetsResponse resp = codedeploy.listDeploymentTargets(r -> r
+                .deploymentId(deploymentId));
+        assertThat(resp.targetIds()).hasSize(1);
+        assertThat(resp.targetIds().get(0)).contains(DEPLOY_FUNCTION);
+    }
+
+    @Test
+    @Order(29)
+    void batchGetDeploymentTargets_returnsLambdaTarget() {
+        assertThat(deploymentId).isNotNull();
+
+        ListDeploymentTargetsResponse listResp = codedeploy.listDeploymentTargets(r -> r
+                .deploymentId(deploymentId));
+        List<String> targetIds = listResp.targetIds();
+
+        BatchGetDeploymentTargetsResponse resp = codedeploy.batchGetDeploymentTargets(r -> r
+                .deploymentId(deploymentId)
+                .targetIds(targetIds));
+        assertThat(resp.deploymentTargets()).hasSize(1);
+        assertThat(resp.deploymentTargets().get(0).deploymentTargetTypeAsString())
+                .isEqualTo("LambdaFunction");
+        assertThat(resp.deploymentTargets().get(0).lambdaTarget()).isNotNull();
+        assertThat(resp.deploymentTargets().get(0).lambdaTarget().statusAsString())
+                .isEqualTo("Succeeded");
+        assertThat(resp.deploymentTargets().get(0).lambdaTarget().lifecycleEvents())
+                .anyMatch(e -> "AllowTraffic".equals(e.lifecycleEventName()));
+    }
+
+    @Test
+    @Order(30)
+    void cleanupDeployment() {
+        lambda.deleteFunction(r -> r.functionName(DEPLOY_FUNCTION));
+        codedeploy.deleteDeploymentGroup(r -> r
+                .applicationName("cd-lambda-app")
+                .deploymentGroupName("cd-lambda-dg"));
+        codedeploy.deleteApplication(r -> r.applicationName("cd-lambda-app"));
     }
 }

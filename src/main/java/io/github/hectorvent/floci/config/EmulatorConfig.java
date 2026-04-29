@@ -277,6 +277,8 @@ public interface EmulatorConfig {
     interface CodeBuildServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        Optional<String> dockerNetwork();
     }
 
     interface CodeDeployServiceConfig {
