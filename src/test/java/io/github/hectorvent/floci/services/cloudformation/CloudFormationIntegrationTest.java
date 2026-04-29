@@ -2268,4 +2268,126 @@ class CloudFormationIntegrationTest {
         .then()
             .statusCode(404);
     }
+
+    // ── TemplateURL (path-style AWS S3) ──────────────────────────────────────
+
+    @Test
+    void createStack_templateUrlPathStyle_resolvesLocalS3() {
+        String bucket = "cfn-template-url-bucket";
+        String key = "template.json";
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-template-url-queue"
+                  }
+                }
+              }
+            }
+            """;
+
+        // Create S3 bucket and upload template
+        given().when().put("/" + bucket).then().statusCode(200);
+        given()
+            .contentType("application/json")
+            .body(template)
+        .when()
+            .put("/" + bucket + "/" + key)
+        .then()
+            .statusCode(200);
+
+        // CreateStack using a CDK-style path-style AWS S3 TemplateURL
+        String templateUrl = "https://s3.us-east-1.amazonaws.com/" + bucket + "/" + key;
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-template-url-stack")
+            .formParam("TemplateURL", templateUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // Verify stack and its resource were provisioned from the S3 template
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-template-url-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("CREATE_COMPLETE"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", "cfn-template-url-queue")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    void createStack_templateUrlVirtualHosted_resolvesLocalS3() {
+        String bucket = "cfn-vhost-template-bucket";
+        String key = "template.json";
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-vhost-template-queue"
+                  }
+                }
+              }
+            }
+            """;
+
+        given().when().put("/" + bucket).then().statusCode(200);
+        given()
+            .contentType("application/json")
+            .body(template)
+        .when()
+            .put("/" + bucket + "/" + key)
+        .then()
+            .statusCode(200);
+
+        // Virtual-hosted style: bucket.s3.region.amazonaws.com/key
+        String templateUrl = "https://" + bucket + ".s3.us-east-1.amazonaws.com/" + key;
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-vhost-template-stack")
+            .formParam("TemplateURL", templateUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-vhost-template-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("CREATE_COMPLETE"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", "cfn-vhost-template-queue")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
 }
