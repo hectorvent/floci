@@ -20,7 +20,7 @@ import java.util.Locale;
  *   <li>Presence of {@code /run/.containerenv} (Podman)</li>
  *   <li>The {@code container} environment variable set by some runtimes (e.g. Podman sets it to {@code "podman"})</li>
  *   <li>{@code /proc/1/cgroup} containing {@code docker}, {@code kubepods}, or {@code libpod} (cgroup v1)</li>
- *   <li>{@code /proc/self/mountinfo} containing {@code /docker/} or {@code /libpod-} overlay paths (cgroup v2 / Podman)</li>
+ *   <li>{@code /proc/self/mountinfo} root mount containing {@code /docker/} or {@code /libpod-} overlay paths (cgroup v2 / Podman)</li>
  *   <li>On Windows: the {@code CONTAINER} or {@code DOTNET_RUNNING_IN_CONTAINER} environment variable</li>
  * </ol>
  */
@@ -33,6 +33,10 @@ public class ContainerDetector {
     private static final String PODMAN_ENV_MARKER = "/run/.containerenv";
     private static final String CGROUP_V1_FILE = "/proc/1/cgroup";
     private static final String MOUNTINFO_FILE = "/proc/self/mountinfo";
+    private static final String[] CGROUP_MARKERS = {"docker", "kubepods", "libpod", "moby",
+            "containerd", "cri-containerd"};
+    private static final String[] MOUNTINFO_MARKERS = {"/docker/", "/libpod-", "/moby/",
+            "/containerd/", "/cri-containerd-"};
 
     private volatile Boolean cachedResult;
 
@@ -102,13 +106,22 @@ public class ContainerDetector {
     }
 
     private boolean hasCgroupV1Markers() {
-        return fileContainsAny(CGROUP_V1_FILE, "docker", "kubepods", "libpod", "moby",
-                "containerd", "cri-containerd");
+        return fileContainsAny(CGROUP_V1_FILE, CGROUP_MARKERS);
     }
 
     private boolean hasMountInfoMarkers() {
-        return fileContainsAny(MOUNTINFO_FILE, "/docker/", "/libpod-", "/moby/",
-                "/containerd/", "/cri-containerd-");
+        if (!fileExists(MOUNTINFO_FILE)) {
+            return false;
+        }
+        try {
+            Path path = Path.of(MOUNTINFO_FILE);
+            String content = readFileContent(path);
+            return content.lines()
+                    .anyMatch(line -> isRootMountInfoLine(line) && containsAny(line, MOUNTINFO_MARKERS));
+        } catch (IOException e) {
+            LOG.debugv("Could not read {0}: {1}", MOUNTINFO_FILE, e.getMessage());
+        }
+        return false;
     }
 
     private boolean fileContainsAny(String filePath, String... markers) {
@@ -118,14 +131,24 @@ public class ContainerDetector {
         try {
             Path path = Path.of(filePath);
             String content = readFileContent(path);
-            String lower = content.toLowerCase(Locale.ROOT);
-            for (String marker : markers) {
-                if (lower.contains(marker.toLowerCase(Locale.ROOT))) {
-                    return true;
-                }
-            }
+            return containsAny(content, markers);
         } catch (IOException e) {
             LOG.debugv("Could not read {0}: {1}", filePath, e.getMessage());
+        }
+        return false;
+    }
+
+    private boolean isRootMountInfoLine(String line) {
+        String[] fields = line.split(" ");
+        return fields.length > 4 && "/".equals(fields[4]);
+    }
+
+    private boolean containsAny(String content, String... markers) {
+        String lower = content.toLowerCase(Locale.ROOT);
+        for (String marker : markers) {
+            if (lower.contains(marker.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
         }
         return false;
     }
@@ -144,4 +167,3 @@ public class ContainerDetector {
         return Files.readString(path);
     }
 }
-

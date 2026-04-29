@@ -495,7 +495,7 @@ public class CognitoJsonHandler {
         node.set("Policies", objectMapper.valueToTree(p.getPolicies() != null ? p.getPolicies() : new HashMap<>()));
         node.put("DeletionProtection", p.getDeletionProtection() != null ? p.getDeletionProtection() : "INACTIVE");
         node.set("LambdaConfig", objectMapper.valueToTree(p.getLambdaConfig() != null ? p.getLambdaConfig() : new HashMap<>()));
-        node.set("SchemaAttributes", objectMapper.valueToTree(p.getSchemaAttributes() != null ? p.getSchemaAttributes() : new java.util.ArrayList<>()));
+        node.set("SchemaAttributes", objectMapper.valueToTree(CognitoStandardAttributes.merge(p.getSchemaAttributes())));
         node.set("AutoVerifiedAttributes", objectMapper.valueToTree(p.getAutoVerifiedAttributes() != null ? p.getAutoVerifiedAttributes() : new java.util.ArrayList<>()));
         node.set("AliasAttributes", objectMapper.valueToTree(p.getAliasAttributes() != null ? p.getAliasAttributes() : new java.util.ArrayList<>()));
         node.set("UsernameAttributes", objectMapper.valueToTree(p.getUsernameAttributes() != null ? p.getUsernameAttributes() : new java.util.ArrayList<>()));

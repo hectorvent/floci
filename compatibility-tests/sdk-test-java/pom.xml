@@ -164,6 +164,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>kinesis</artifactId>
         </dependency>
+        <!-- Netty async HTTP client — required for KinesisAsyncClient (SubscribeToShard) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
+        </dependency>
         <!-- CloudWatch Logs client -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -214,6 +219,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>eks</artifactId>
         </dependency>
+        <!-- ELBv2 client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>elasticloadbalancingv2</artifactId>
+        </dependency>
         <!-- EventBridge Scheduler client -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -223,6 +233,16 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>cloudformation</artifactId>
+        </dependency>
+        <!-- CodeBuild client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>codebuild</artifactId>
+        </dependency>
+        <!-- CodeDeploy client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>codedeploy</artifactId>
         </dependency>
         <!-- AppConfig and AppConfigData clients -->
         <dependency>

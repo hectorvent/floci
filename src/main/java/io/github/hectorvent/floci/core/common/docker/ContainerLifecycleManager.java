@@ -171,6 +171,20 @@ public class ContainerLifecycleManager {
     }
 
     /**
+     * Removes a named Docker volume, ignoring errors if it does not exist or is still in use.
+     */
+    public void removeVolume(String volumeName) {
+        try {
+            dockerClient.removeVolumeCmd(volumeName).exec();
+            LOG.debugv("Removed volume {0}", volumeName);
+        } catch (NotFoundException e) {
+            // Already gone — nothing to do
+        } catch (Exception e) {
+            LOG.warnv("Error removing volume {0}: {1}", volumeName, e.getMessage());
+        }
+    }
+
+    /**
      * Finds an existing container by name.
      *
      * @param name the container name to search for

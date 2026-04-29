@@ -69,6 +69,8 @@
 | ECS (clusters, services, tasks) | ✅ | ❌ |
 | EKS (clusters, mock + real k3s) | ✅ | ❌ |
 | EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
+| CodeBuild (projects, report groups, credentials) | ✅ | ❌ |
+| CodeDeploy (applications, groups, configs + 17 built-ins) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
 **Broad AWS coverage. Free forever.**
@@ -83,7 +85,7 @@ flowchart LR
         Router["HTTP Router\n(JAX-RS / Vert.x)"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · EC2"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · EC2\nCodeBuild · CodeDeploy"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -211,12 +213,15 @@ All default images are configurable via environment variables, useful for pinnin
 | **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
 | **Bedrock Runtime** | In-process (stub) | Dummy Converse and InvokeModel responses for local development; streaming returns 501 |
 | **EKS** | **Real Docker containers** (mock mode available) | Clusters, tagging; real mode starts k3s per cluster with a live Kubernetes API server |
+| **ELB v2** | In-process | Application and Network Load Balancers, target groups, listeners, path/host-based routing rules, tags |
+| **CodeBuild** | In-process | Projects, report groups, source credentials, curated environment images |
+| **CodeDeploy** | In-process | Applications, deployment groups, deployment configs; 17 AWS built-in `CodeDeployDefault.*` configs pre-seeded |
 
 > **Lambda, ElastiCache, RDS, MSK, ECS, EKS, and OpenSearch** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**35 AWS services supported.**
+**41 AWS services supported.**
 
 ## Persistence & Storage Modes
 

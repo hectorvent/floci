@@ -31,6 +31,10 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 | `SetIdentityNotificationTopic`      | Store SNS notification topic ARNs for an identity         |
 | `GetIdentityNotificationAttributes` | Read stored notification topic settings                   |
 | `GetIdentityDkimAttributes`         | Return DKIM status for identities                         |
+| `CreateConfigurationSet`            | Create a configuration set                                |
+| `DescribeConfigurationSet`          | Read a configuration set                                  |
+| `ListConfigurationSets`             | List configuration sets                                   |
+| `DeleteConfigurationSet`            | Delete a configuration set                                |
 
 ## Configuration
 
@@ -178,5 +182,9 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `GET` | `/v2/email/templates/{templateName}` | `GetEmailTemplate` |
 | `PUT` | `/v2/email/templates/{templateName}` | `UpdateEmailTemplate` |
 | `DELETE` | `/v2/email/templates/{templateName}` | `DeleteEmailTemplate` |
+| `POST` | `/v2/email/configuration-sets` | `CreateConfigurationSet` |
+| `GET` | `/v2/email/configuration-sets` | `ListConfigurationSets` |
+| `GET` | `/v2/email/configuration-sets/{name}` | `GetConfigurationSet` |
+| `DELETE` | `/v2/email/configuration-sets/{name}` | `DeleteConfigurationSet` |
 
-Identity, template, and sent-message state is shared between the v1 Query API and the v2 REST JSON API, so a template created with `CreateTemplate` resolves through `SendEmail` on v2 (and vice versa), and every send appears in the same `GET /_aws/ses` inspection mailbox.
+Identity, template, configuration-set, and sent-message state is shared between the v1 Query API and the v2 REST JSON API, so a template created with `CreateTemplate` resolves through `SendEmail` on v2 (and vice versa), a configuration set created with `CreateConfigurationSet` is visible to both `DescribeConfigurationSet` (v1) and `GetConfigurationSet` (v2), and every send appears in the same `GET /_aws/ses` inspection mailbox.

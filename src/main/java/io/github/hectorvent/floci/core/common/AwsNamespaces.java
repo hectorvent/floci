@@ -16,7 +16,8 @@ public final class AwsNamespaces {
     public static final String S3  = "http://s3.amazonaws.com/doc/2006-03-01/";
     public static final String S3_CONTROL = "http://awss3control.amazonaws.com/doc/2018-08-20/";
     public static final String SES = "http://ses.amazonaws.com/doc/2010-12-01/";
-    public static final String EC2 = "http://ec2.amazonaws.com/doc/2016-11-15/";
+    public static final String EC2    = "http://ec2.amazonaws.com/doc/2016-11-15/";
+    public static final String ELB_V2 = "https://elasticloadbalancing.amazonaws.com/doc/2015-12-01/";
 
     private AwsNamespaces() {}
 }

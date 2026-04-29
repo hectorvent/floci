@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.ses;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import io.github.hectorvent.floci.services.ses.model.SentEmail;
@@ -33,6 +34,7 @@ public class SesService {
     private final StorageBackend<String, SentEmail> emailStore;
     private final StorageBackend<String, Boolean> accountSettingsStore;
     private final StorageBackend<String, EmailTemplate> templateStore;
+    private final StorageBackend<String, ConfigurationSet> configSetStore;
     private final SmtpRelay smtpRelay;
 
     @Inject
@@ -45,6 +47,8 @@ public class SesService {
                 new TypeReference<Map<String, Boolean>>() {});
         this.templateStore = storageFactory.create("ses", "ses-templates.json",
                 new TypeReference<Map<String, EmailTemplate>>() {});
+        this.configSetStore = storageFactory.create("ses", "ses-config-sets.json",
+                new TypeReference<Map<String, ConfigurationSet>>() {});
         this.smtpRelay = smtpRelay;
     }
 
@@ -52,11 +56,13 @@ public class SesService {
                StorageBackend<String, SentEmail> emailStore,
                StorageBackend<String, Boolean> accountSettingsStore,
                StorageBackend<String, EmailTemplate> templateStore,
+               StorageBackend<String, ConfigurationSet> configSetStore,
                SmtpRelay smtpRelay) {
         this.identityStore = identityStore;
         this.emailStore = emailStore;
         this.accountSettingsStore = accountSettingsStore;
         this.templateStore = templateStore;
+        this.configSetStore = configSetStore;
         this.smtpRelay = smtpRelay;
     }
 
@@ -306,6 +312,93 @@ public class SesService {
                 .thenComparing(EmailTemplate::getTemplateName,
                         Comparator.nullsLast(Comparator.naturalOrder())));
         return all;
+    }
+
+    public ConfigurationSet createConfigurationSet(ConfigurationSet configSet, String region) {
+        if (configSet == null) {
+            throw new AwsException("InvalidParameterValue",
+                    "ConfigurationSetName is required.", 400);
+        }
+        String key = configSetKey(region, configSet.getName());
+        if (configSet.getTags() != null) {
+            for (ConfigurationSet.Tag tag : configSet.getTags()) {
+                validateTag(tag);
+            }
+        }
+        if (configSetStore.get(key).isPresent()) {
+            throw new AwsException("ConfigurationSetAlreadyExists",
+                    "Configuration set " + configSet.getName() + " already exists.", 400);
+        }
+        if (configSet.getCreatedTimestamp() == null) {
+            configSet.setCreatedTimestamp(Instant.now());
+        }
+        configSetStore.put(key, configSet);
+        LOG.infov("Created SES configuration set: {0} in region {1}", configSet.getName(), region);
+        return configSet;
+    }
+
+    public ConfigurationSet getConfigurationSet(String name, String region) {
+        return configSetStore.get(configSetKey(region, name))
+                .orElseThrow(() -> new AwsException("ConfigurationSetDoesNotExist",
+                        "Configuration set " + name + " does not exist.", 400));
+    }
+
+    public List<ConfigurationSet> listConfigurationSets(String region) {
+        String prefix = "configSet::" + region + "::";
+        List<ConfigurationSet> all = new ArrayList<>(configSetStore.scan(k -> k.startsWith(prefix)));
+        all.sort(Comparator.comparing(ConfigurationSet::getCreatedTimestamp,
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(ConfigurationSet::getName,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
+        return all;
+    }
+
+    public void deleteConfigurationSet(String name, String region) {
+        String key = configSetKey(region, name);
+        if (configSetStore.get(key).isEmpty()) {
+            throw new AwsException("ConfigurationSetDoesNotExist",
+                    "Configuration set " + name + " does not exist.", 400);
+        }
+        configSetStore.delete(key);
+        LOG.infov("Deleted SES configuration set: {0} in region {1}", name, region);
+    }
+
+    private static final Pattern CONFIG_SET_NAME = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
+
+    private static String configSetKey(String region, String name) {
+        validateConfigurationSetName(name);
+        return "configSet::" + region + "::" + name;
+    }
+
+    static void validateConfigurationSetName(String name) {
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue",
+                    "ConfigurationSetName is required.", 400);
+        }
+        if (!CONFIG_SET_NAME.matcher(name).matches()) {
+            throw new AwsException("InvalidParameterValue",
+                    "ConfigurationSetName must be 1-64 characters and may only contain "
+                            + "alphanumeric characters, underscores, and hyphens.", 400);
+        }
+    }
+
+    static void validateTag(ConfigurationSet.Tag tag) {
+        if (tag == null) {
+            throw new AwsException("InvalidParameterValue", "Tag must not be null.", 400);
+        }
+        String key = tag.key();
+        if (key == null || key.isEmpty()) {
+            throw new AwsException("InvalidParameterValue", "Tag Key is required.", 400);
+        }
+        if (key.length() > 128) {
+            throw new AwsException("InvalidParameterValue",
+                    "Tag Key must be 1-128 characters.", 400);
+        }
+        String value = tag.value();
+        if (value != null && value.length() > 256) {
+            throw new AwsException("InvalidParameterValue",
+                    "Tag Value must be 0-256 characters.", 400);
+        }
     }
 
     public String sendTemplatedEmail(String source, List<String> toAddresses, List<String> ccAddresses,

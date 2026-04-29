@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"testing"
+	"time"
 
 	"floci-sdk-test-go/internal/testutil"
 
@@ -37,6 +38,7 @@ func TestKinesis(t *testing.T) {
 	})
 
 	var shardID string
+	var streamARN string
 
 	t.Run("DescribeStream", func(t *testing.T) {
 		r, err := svc.DescribeStream(ctx, &kinesis.DescribeStreamInput{StreamName: aws.String(streamName)})
@@ -45,6 +47,7 @@ func TestKinesis(t *testing.T) {
 		if len(r.StreamDescription.Shards) > 0 {
 			shardID = aws.ToString(r.StreamDescription.Shards[0].ShardId)
 		}
+		streamARN = aws.ToString(r.StreamDescription.StreamARN)
 	})
 
 	t.Run("PutRecord", func(t *testing.T) {
@@ -88,6 +91,64 @@ func TestKinesis(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.NotEmpty(t, r.Records)
+	})
+
+	var consumerARN string
+
+	t.Run("RegisterStreamConsumer", func(t *testing.T) {
+		if streamARN == "" {
+			t.Skip("No stream ARN from DescribeStream")
+		}
+		r, err := svc.RegisterStreamConsumer(ctx, &kinesis.RegisterStreamConsumerInput{
+			StreamARN:    aws.String(streamARN),
+			ConsumerName: aws.String("go-test-consumer"),
+		})
+		require.NoError(t, err)
+		require.NotNil(t, r.Consumer)
+		consumerARN = aws.ToString(r.Consumer.ConsumerARN)
+		assert.NotEmpty(t, consumerARN)
+	})
+
+	t.Run("DescribeStreamConsumer", func(t *testing.T) {
+		if consumerARN == "" {
+			t.Skip("No consumer ARN from RegisterStreamConsumer")
+		}
+		r, err := svc.DescribeStreamConsumer(ctx, &kinesis.DescribeStreamConsumerInput{
+			ConsumerARN: aws.String(consumerARN),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, kinesistypes.ConsumerStatusActive, r.ConsumerDescription.ConsumerStatus)
+		assert.Equal(t, "go-test-consumer", aws.ToString(r.ConsumerDescription.ConsumerName))
+	})
+
+	t.Run("SubscribeToShard", func(t *testing.T) {
+		if consumerARN == "" || shardID == "" {
+			t.Skip("No consumerARN or shardID")
+		}
+		subCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+
+		output, err := svc.SubscribeToShard(subCtx, &kinesis.SubscribeToShardInput{
+			ConsumerARN: aws.String(consumerARN),
+			ShardId:     aws.String(shardID),
+			StartingPosition: &kinesistypes.StartingPosition{
+				Type: kinesistypes.ShardIteratorTypeTrimHorizon,
+			},
+		})
+		require.NoError(t, err)
+
+		stream := output.GetStream()
+		defer stream.Close()
+
+		var gotEvent bool
+		for event := range stream.Events() {
+			if ev, ok := event.(*kinesistypes.SubscribeToShardEventStreamMemberSubscribeToShardEvent); ok {
+				gotEvent = true
+				assert.NotNil(t, ev.Value.Records)
+			}
+		}
+		require.NoError(t, stream.Err())
+		assert.True(t, gotEvent, "expected at least one SubscribeToShardEvent")
 	})
 
 	t.Run("DeleteStream", func(t *testing.T) {

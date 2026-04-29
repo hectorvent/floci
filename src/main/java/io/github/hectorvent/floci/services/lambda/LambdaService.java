@@ -5,6 +5,7 @@ import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.services.lambda.model.EventSourceMapping;
+import io.github.hectorvent.floci.services.lambda.model.FunctionEventInvokeConfig;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
 import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
 import io.github.hectorvent.floci.services.lambda.model.LambdaAlias;
@@ -61,6 +62,7 @@ public class LambdaService {
     private final KinesisEventSourcePoller kinesisPoller;
     private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     private final ConcurrentHashMap<String, Integer> versionCounters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, FunctionEventInvokeConfig> eventInvokeConfigs = new ConcurrentHashMap<>();
     /**
      * Per-function locks covering PutFunctionConcurrency,
      * DeleteFunctionConcurrency, and deleteFunction itself. Serializing the
@@ -284,6 +286,18 @@ public class LambdaService {
             fn.setVpcConfig(vpc);
         }
 
+        // ImageConfig (PackageType=Image overrides)
+        if (request.get("ImageConfig") instanceof Map<?, ?> ic) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> imageConfig = (Map<String, Object>) ic;
+            if (imageConfig.get("Command") instanceof List<?> cmd) {
+                fn.setImageConfigCommand(cmd.stream().map(Object::toString).toList());
+            }
+            if (imageConfig.get("EntryPoint") instanceof List<?> ep) {
+                fn.setImageConfigEntryPoint(ep.stream().map(Object::toString).toList());
+            }
+        }
+
         // Handle code deployment
         @SuppressWarnings("unchecked")
         Map<String, Object> code = (Map<String, Object>) request.get("Code");
@@ -476,6 +490,25 @@ public class LambdaService {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> vpc = (Map<String, Object>) request.get("VpcConfig");
                 fn.setVpcConfig(vpc);
+            }
+        }
+
+        if (request.containsKey("ImageConfig")) {
+            if (request.get("ImageConfig") instanceof Map<?, ?> ic) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> imageConfig = (Map<String, Object>) ic;
+                if (imageConfig.containsKey("Command")) {
+                    @SuppressWarnings("unchecked")
+                    List<String> cmd = imageConfig.get("Command") instanceof List<?>
+                            ? ((List<?>) imageConfig.get("Command")).stream().map(Object::toString).toList() : null;
+                    fn.setImageConfigCommand(cmd);
+                }
+                if (imageConfig.containsKey("EntryPoint")) {
+                    @SuppressWarnings("unchecked")
+                    List<String> ep = imageConfig.get("EntryPoint") instanceof List<?>
+                            ? ((List<?>) imageConfig.get("EntryPoint")).stream().map(Object::toString).toList() : null;
+                    fn.setImageConfigEntryPoint(ep);
+                }
             }
         }
 
@@ -1256,6 +1289,108 @@ public class LambdaService {
             return Integer.parseInt(value.toString());
         } catch (NumberFormatException e) {
             return defaultValue;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // EventInvokeConfig
+    // -------------------------------------------------------------------------
+
+    public FunctionEventInvokeConfig putEventInvokeConfig(String region, String functionName,
+                                                          String qualifier, Map<String, Object> request) {
+        LambdaFunction fn = getFunction(region, functionName);
+        String key = eventInvokeKey(region, fn.getFunctionArn(), qualifier);
+        FunctionEventInvokeConfig cfg = new FunctionEventInvokeConfig();
+        cfg.setFunctionArn(qualifiedArn(fn.getFunctionArn(), qualifier));
+        cfg.setLastModified(System.currentTimeMillis());
+        applyEventInvokeRequest(cfg, request, true);
+        eventInvokeConfigs.put(key, cfg);
+        return cfg;
+    }
+
+    public FunctionEventInvokeConfig updateEventInvokeConfig(String region, String functionName,
+                                                             String qualifier, Map<String, Object> request) {
+        LambdaFunction fn = getFunction(region, functionName);
+        String key = eventInvokeKey(region, fn.getFunctionArn(), qualifier);
+        FunctionEventInvokeConfig existing = eventInvokeConfigs.get(key);
+        if (existing == null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "The function " + fn.getFunctionArn() + " doesn't have an EventInvokeConfig", 404);
+        }
+        applyEventInvokeRequest(existing, request, false);
+        existing.setLastModified(System.currentTimeMillis());
+        return existing;
+    }
+
+    public FunctionEventInvokeConfig getEventInvokeConfig(String region, String functionName, String qualifier) {
+        LambdaFunction fn = getFunction(region, functionName);
+        String key = eventInvokeKey(region, fn.getFunctionArn(), qualifier);
+        FunctionEventInvokeConfig cfg = eventInvokeConfigs.get(key);
+        if (cfg == null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "The function " + fn.getFunctionArn() + " doesn't have an EventInvokeConfig", 404);
+        }
+        return cfg;
+    }
+
+    public void deleteEventInvokeConfig(String region, String functionName, String qualifier) {
+        LambdaFunction fn = getFunction(region, functionName);
+        String key = eventInvokeKey(region, fn.getFunctionArn(), qualifier);
+        if (eventInvokeConfigs.remove(key) == null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "The function " + fn.getFunctionArn() + " doesn't have an EventInvokeConfig", 404);
+        }
+    }
+
+    public List<FunctionEventInvokeConfig> listEventInvokeConfigs(String region, String functionName) {
+        LambdaFunction fn = getFunction(region, functionName);
+        String prefix = region + ":" + fn.getFunctionArn() + ":";
+        List<FunctionEventInvokeConfig> result = new ArrayList<>();
+        for (Map.Entry<String, FunctionEventInvokeConfig> entry : eventInvokeConfigs.entrySet()) {
+            if (entry.getKey().startsWith(prefix)) {
+                result.add(entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    private String eventInvokeKey(String region, String functionArn, String qualifier) {
+        return region + ":" + functionArn + ":" + (qualifier != null ? qualifier : "$LATEST");
+    }
+
+    private String qualifiedArn(String functionArn, String qualifier) {
+        if (qualifier == null || qualifier.isBlank() || "$LATEST".equals(qualifier)) {
+            return functionArn + ":$LATEST";
+        }
+        return functionArn + ":" + qualifier;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void applyEventInvokeRequest(FunctionEventInvokeConfig cfg, Map<String, Object> request, boolean replace) {
+        if (replace || request.containsKey("MaximumRetryAttempts")) {
+            Object raw = request.get("MaximumRetryAttempts");
+            cfg.setMaximumRetryAttempts(raw instanceof Number ? ((Number) raw).intValue() : null);
+        }
+        if (replace || request.containsKey("MaximumEventAgeInSeconds")) {
+            Object raw = request.get("MaximumEventAgeInSeconds");
+            cfg.setMaximumEventAgeInSeconds(raw instanceof Number ? ((Number) raw).intValue() : null);
+        }
+        if (replace || request.containsKey("DestinationConfig")) {
+            Map<String, Object> destMap = (Map<String, Object>) request.get("DestinationConfig");
+            if (destMap != null) {
+                FunctionEventInvokeConfig.DestinationConfig dest = new FunctionEventInvokeConfig.DestinationConfig();
+                Map<String, Object> onSuccess = (Map<String, Object>) destMap.get("OnSuccess");
+                if (onSuccess != null) {
+                    dest.setOnSuccess(new FunctionEventInvokeConfig.Destination((String) onSuccess.get("Destination")));
+                }
+                Map<String, Object> onFailure = (Map<String, Object>) destMap.get("OnFailure");
+                if (onFailure != null) {
+                    dest.setOnFailure(new FunctionEventInvokeConfig.Destination((String) onFailure.get("Destination")));
+                }
+                cfg.setDestinationConfig(dest);
+            } else if (replace) {
+                cfg.setDestinationConfig(null);
+            }
         }
     }
 

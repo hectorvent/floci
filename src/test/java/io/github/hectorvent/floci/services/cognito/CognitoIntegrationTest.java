@@ -24,11 +24,15 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
+import java.util.List;
+import java.util.Spliterators;
 import java.util.UUID;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 import static io.restassured.RestAssured.given;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -174,6 +178,36 @@ class CognitoIntegrationTest {
                 document.path("jwks_uri").asText());
         assertEquals("public", document.path("subject_types_supported").get(0).asText());
         assertEquals("RS256", document.path("id_token_signing_alg_values_supported").get(0).asText());
+    }
+
+    @Test
+    @Order(5)
+    void describeUserPoolReturnsAllTwentyStandardAttributes() throws Exception {
+        JsonNode body = cognitoJson("DescribeUserPool", """
+                { "UserPoolId": "%s" }
+                """.formatted(poolId));
+
+        JsonNode schema = body.path("UserPool").path("SchemaAttributes");
+        assertEquals(20, schema.size(), "DescribeUserPool must include all 20 Cognito standard attributes");
+
+        java.util.Set<String> names = new java.util.HashSet<>();
+        schema.forEach(attr -> names.add(attr.path("Name").asText()));
+
+        for (String expected : List.of("sub", "name", "given_name", "family_name", "middle_name",
+                "nickname", "preferred_username", "profile", "picture", "website",
+                "email", "email_verified", "gender", "birthdate", "zoneinfo",
+                "locale", "phone_number", "phone_number_verified", "address", "updated_at")) {
+            assertTrue(names.contains(expected), "Missing standard attribute in DescribeUserPool response: " + expected);
+        }
+
+        // spot-check: sub must be required and immutable
+        JsonNode sub = StreamSupport.stream(
+                        Spliterators.spliteratorUnknownSize(schema.elements(), 0), false)
+                .filter(n -> "sub".equals(n.path("Name").asText()))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(sub.path("Required").asBoolean(), "sub must be Required");
+        assertFalse(sub.path("Mutable").asBoolean(), "sub must not be Mutable");
     }
 
     // ── Groups ────────────────────────────────────────────────────────

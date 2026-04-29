@@ -24,9 +24,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -65,12 +67,14 @@ class ContainerLauncherTest {
         when(config.docker()).thenReturn(docker);
         when(docker.logMaxSize()).thenReturn("10m");
         when(docker.logMaxFile()).thenReturn("3");
+        when(config.baseUrl()).thenReturn("http://localhost:4566");
+        lenient().when(config.hostname()).thenReturn(Optional.empty());
 
         when(embeddedDnsServer.getServerIp()).thenReturn(Optional.empty());
 
         ContainerBuilder containerBuilder = new ContainerBuilder(config, dockerHostResolver, embeddedDnsServer);
         launcher = new ContainerLauncher(containerBuilder, lifecycleManager, logStreamer, imageResolver,
-                runtimeApiServerFactory, dockerHostResolver, config, ecrRegistryManager);
+                runtimeApiServerFactory, dockerHostResolver, config, ecrRegistryManager, embeddedDnsServer);
 
         when(runtimeApiServerFactory.create()).thenReturn(runtimeApiServer);
         when(runtimeApiServer.getPort()).thenReturn(9000);
@@ -150,6 +154,68 @@ class ContainerLauncherTest {
 
         // createAndStart must NOT be called — Lambda uses the split path
         verify(lifecycleManager, never()).createAndStart(any());
+    }
+
+    @Test
+    void launchFunction_injectsDefaultAwsCredentials() throws Exception {
+        Path codePath = Files.createDirectory(tempDir.resolve("creds-defaults"));
+
+        LambdaFunction fn = new LambdaFunction();
+        fn.setFunctionName("creds-fn");
+        fn.setRuntime("nodejs20.x");
+        fn.setHandler("index.handler");
+        fn.setCodeLocalPath(codePath.toString());
+
+        launcher.launch(fn);
+
+        ArgumentCaptor<ContainerSpec> specCaptor = ArgumentCaptor.forClass(ContainerSpec.class);
+        verify(lifecycleManager).create(specCaptor.capture());
+
+        List<String> env = specCaptor.getValue().env();
+        assertTrue(env.contains("AWS_ACCESS_KEY_ID=test"),
+                "default AWS_ACCESS_KEY_ID should be injected");
+        assertTrue(env.contains("AWS_SECRET_ACCESS_KEY=test"),
+                "default AWS_SECRET_ACCESS_KEY should be injected");
+        assertTrue(env.contains("AWS_SESSION_TOKEN=test"),
+                "default AWS_SESSION_TOKEN should be injected");
+    }
+
+    @Test
+    void launchFunction_userEnvironmentOverridesDefaultCredentials() throws Exception {
+        Path codePath = Files.createDirectory(tempDir.resolve("creds-override"));
+
+        LambdaFunction fn = new LambdaFunction();
+        fn.setFunctionName("override-fn");
+        fn.setRuntime("nodejs20.x");
+        fn.setHandler("index.handler");
+        fn.setCodeLocalPath(codePath.toString());
+        fn.setEnvironment(Map.of(
+                "AWS_ACCESS_KEY_ID", "user-key",
+                "AWS_SECRET_ACCESS_KEY", "user-secret"));
+
+        launcher.launch(fn);
+
+        ArgumentCaptor<ContainerSpec> specCaptor = ArgumentCaptor.forClass(ContainerSpec.class);
+        verify(lifecycleManager).create(specCaptor.capture());
+
+        List<String> env = specCaptor.getValue().env();
+        // Docker honours the last occurrence of a duplicate Env entry, so user
+        // overrides must appear after the Floci defaults.
+        int defaultKeyIdx = env.indexOf("AWS_ACCESS_KEY_ID=test");
+        int userKeyIdx = env.indexOf("AWS_ACCESS_KEY_ID=user-key");
+        assertTrue(defaultKeyIdx >= 0, "default AWS_ACCESS_KEY_ID still present");
+        assertTrue(userKeyIdx > defaultKeyIdx,
+                "user AWS_ACCESS_KEY_ID must appear after the default");
+
+        int defaultSecretIdx = env.indexOf("AWS_SECRET_ACCESS_KEY=test");
+        int userSecretIdx = env.indexOf("AWS_SECRET_ACCESS_KEY=user-secret");
+        assertTrue(defaultSecretIdx >= 0, "default AWS_SECRET_ACCESS_KEY still present");
+        assertTrue(userSecretIdx > defaultSecretIdx,
+                "user AWS_SECRET_ACCESS_KEY must appear after the default");
+
+        // AWS_SESSION_TOKEN was not overridden so the default remains.
+        assertEquals(1, env.stream().filter(e -> e.startsWith("AWS_SESSION_TOKEN=")).count(),
+                "AWS_SESSION_TOKEN should retain its default exactly once");
     }
 
     @Test
