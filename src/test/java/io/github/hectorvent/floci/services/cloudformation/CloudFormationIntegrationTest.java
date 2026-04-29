@@ -453,6 +453,56 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void createStack_lambdaWithInlineZipFile() {
+        String template = """
+            {
+              "Resources": {
+                "MyFunction": {
+                  "Type": "AWS::Lambda::Function",
+                  "Properties": {
+                    "FunctionName": "cfn-inline-zipfile-func",
+                    "Runtime": "nodejs20.x",
+                    "Handler": "index.handler",
+                    "Code": {
+                      "ZipFile": "exports.handler = async (e) => ({ statusCode: 200 });"
+                    },
+                    "Role": "arn:aws:iam::000000000000:role/cfn-test-lambda-role"
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-inline-zipfile-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-inline-zipfile-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        given()
+        .when()
+            .get("/2015-03-31/functions/cfn-inline-zipfile-func")
+        .then()
+            .statusCode(200)
+            .body("Configuration.FunctionName", equalTo("cfn-inline-zipfile-func"));
+    }
+
+    @Test
     void createStack_withDynamoDbGsiAndLsi() {
         String template = """
             {

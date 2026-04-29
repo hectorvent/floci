@@ -409,7 +409,9 @@ public class CloudFormationResourceProvisioner {
 
             String zipFile = codeNode.path("ZipFile").asText(null);
             if (zipFile != null) {
-                return Map.of("ZipFile", zipFile);
+                String handler = resolveOrDefault(props, "Handler", engine, "index.handler");
+                String runtime = resolveOrDefault(props, "Runtime", engine, "nodejs18.x");
+                return Map.of("ZipFile", sourceToZipBase64(zipFile, handler, runtime));
             }
 
             String imageUri = codeNode.path("ImageUri").asText(null);
@@ -418,6 +420,22 @@ public class CloudFormationResourceProvisioner {
             }
         }
         return Map.of("ZipFile", defaultHandlerZipBase64());
+    }
+
+    private static String sourceToZipBase64(String source, String handler, String runtime) {
+        String module = handler.contains(".") ? handler.substring(0, handler.lastIndexOf('.')) : "index";
+        String ext = runtime.startsWith("python") ? ".py" : ".js";
+        try {
+            var baos = new ByteArrayOutputStream();
+            try (var zos = new ZipOutputStream(baos)) {
+                zos.putNextEntry(new ZipEntry(module + ext));
+                zos.write(source.getBytes(StandardCharsets.UTF_8));
+                zos.closeEntry();
+            }
+            return Base64.getEncoder().encodeToString(baos.toByteArray());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create zip from ZipFile source", e);
+        }
     }
 
     private static String defaultHandlerZipBase64() {
