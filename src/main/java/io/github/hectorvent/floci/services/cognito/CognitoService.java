@@ -79,7 +79,8 @@ public class CognitoService {
                    StorageBackend<String, CognitoUser> userStore,
                    StorageBackend<String, CognitoGroup> groupStore,
                    String baseUrl,
-                   RegionResolver regionResolver) {
+                   RegionResolver regionResolver,
+                   LambdaService lambdaService) {
         this.poolStore = poolStore;
         this.clientStore = clientStore;
         this.resourceServerStore = resourceServerStore;
@@ -87,8 +88,8 @@ public class CognitoService {
         this.groupStore = groupStore;
         this.baseUrl = baseUrl;
         this.regionResolver = regionResolver;
-        this.lambdaService = null;
-        this.authFlowHandler = new CognitoAuthFlowHandler(this, null, regionResolver);
+        this.lambdaService = lambdaService;
+        this.authFlowHandler = new CognitoAuthFlowHandler(this, lambdaService, regionResolver);
     }
 
     // ──────────────────────────── User Pools ────────────────────────────

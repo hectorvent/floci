@@ -1,0 +1,354 @@
+package io.github.hectorvent.floci.services.cognito;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
+import io.github.hectorvent.floci.services.cognito.model.UserPool;
+import io.github.hectorvent.floci.services.cognito.model.UserPoolClient;
+import io.github.hectorvent.floci.services.lambda.LambdaService;
+import io.github.hectorvent.floci.services.lambda.model.InvocationType;
+import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * Verifies that Cognito user-pool Lambda triggers fire on the right events with the right
+ * triggerSource, and that their responses are correctly applied to the auth flow.
+ */
+class CognitoLambdaTriggersTest {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private LambdaService lambdaService;
+    private CognitoService service;
+
+    @BeforeEach
+    void setUp() {
+        lambdaService = mock(LambdaService.class);
+        RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
+        service = new CognitoService(
+                new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
+                new InMemoryStorage<>(), new InMemoryStorage<>(),
+                "http://localhost:4566", regionResolver, lambdaService);
+    }
+
+    private UserPool createPoolWithLambdaConfig(Map<String, Object> lambdaConfig) {
+        Map<String, Object> req = new HashMap<>();
+        req.put("PoolName", "trigger-pool");
+        req.put("LambdaConfig", lambdaConfig);
+        return service.createUserPool(req, "us-east-1");
+    }
+
+    private UserPoolClient createClient(UserPool pool) {
+        return service.createUserPoolClient(pool.getId(), "c", false, false, List.of(), List.of());
+    }
+
+    private void seedUser(UserPool pool, String username, String password) {
+        service.adminCreateUser(pool.getId(), username,
+                Map.of("email", username + "@example.com"), null);
+        service.adminSetUserPassword(pool.getId(), username, password, true);
+    }
+
+    /** Builds a Lambda-style response payload with the given {@code response} block. */
+    private static byte[] lambdaPayload(Map<String, Object> response) {
+        try {
+            return MAPPER.writeValueAsBytes(Map.of("response", response));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static InvokeResult ok(Map<String, Object> response) {
+        return new InvokeResult(200, null, lambdaPayload(response), null, "req-id");
+    }
+
+    private static InvokeResult lambdaError(String error) {
+        return new InvokeResult(200, error, new byte[0], null, "req-id");
+    }
+
+    private static String decodeJwtPayload(String jwt) {
+        return new String(Base64.getUrlDecoder().decode(jwt.split("\\.")[1]), StandardCharsets.UTF_8);
+    }
+
+    // =========================================================================
+    // PreAuthentication
+    // =========================================================================
+
+    @Test
+    void preAuthenticationFiresOnUserPasswordAuth() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PreAuthentication", "arn:aws:lambda:::pre"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre"), any(byte[].class), eq(InvocationType.RequestResponse)))
+                .thenReturn(ok(Map.of()));
+
+        service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+
+        verify(lambdaService, atLeastOnce())
+                .invoke(anyString(), eq("arn:aws:lambda:::pre"), any(byte[].class), eq(InvocationType.RequestResponse));
+    }
+
+    @Test
+    void preAuthenticationLambdaErrorBlocksAuthentication() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PreAuthentication", "arn:aws:lambda:::pre"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre"), any(byte[].class), any()))
+                .thenReturn(lambdaError("Unhandled"));
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                        Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!")));
+        assertEquals("NotAuthorizedException", ex.getErrorCode());
+    }
+
+    // =========================================================================
+    // PostAuthentication
+    // =========================================================================
+
+    @Test
+    void postAuthenticationFiresAfterSuccessfulAuth() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PostAuthentication", "arn:aws:lambda:::post"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::post"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of()));
+
+        service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+
+        verify(lambdaService, atLeastOnce())
+                .invoke(anyString(), eq("arn:aws:lambda:::post"), any(byte[].class), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void postAuthenticationLambdaErrorDoesNotBlockAuth() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PostAuthentication", "arn:aws:lambda:::post"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::post"), any(byte[].class), any()))
+                .thenReturn(lambdaError("Unhandled"));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+
+        Map<String, Object> auth = (Map<String, Object>) result.get("AuthenticationResult");
+        assertNotNull(auth, "Auth should still succeed when PostAuthentication errors");
+        assertNotNull(auth.get("AccessToken"));
+    }
+
+    // =========================================================================
+    // PreTokenGeneration
+    // =========================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preTokenGenerationAddsAndOverridesClaims() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PreTokenGeneration", "arn:aws:lambda:::pre-token"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        Map<String, Object> claimsOverride = Map.of(
+                "claimsToAddOrOverride", Map.of(
+                        "tier", "gold",
+                        "email", "override@example.com"),
+                "claimsToSuppress", List.of("auth_time"),
+                "groupOverrideDetails", Map.of(
+                        "groupsToOverride", List.of("admins", "managers")));
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre-token"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of("claimsOverrideDetails", claimsOverride)));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+        String accessToken = (String) ((Map<String, Object>) result.get("AuthenticationResult")).get("AccessToken");
+
+        Map<String, Object> claims;
+        try {
+            claims = MAPPER.readValue(decodeJwtPayload(accessToken), new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        assertEquals("gold", claims.get("tier"), "claimsToAddOrOverride should add 'tier'");
+        assertEquals("override@example.com", claims.get("email"), "claimsToAddOrOverride should override 'email'");
+        assertNull(claims.get("auth_time"), "claimsToSuppress should drop 'auth_time'");
+        assertEquals(List.of("admins", "managers"), claims.get("cognito:groups"),
+                "groupOverrideDetails.groupsToOverride should replace cognito:groups");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void preTokenGenerationFiresOnRefreshTokenFlow() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("PreTokenGeneration", "arn:aws:lambda:::pre-token"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::pre-token"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of("claimsOverrideDetails",
+                        Map.of("claimsToAddOrOverride", Map.of("source", "refresh")))));
+
+        Map<String, Object> initial = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+        String refreshToken = (String) ((Map<String, Object>) initial.get("AuthenticationResult")).get("RefreshToken");
+
+        Map<String, Object> refreshResult = service.initiateAuth(client.getClientId(), "REFRESH_TOKEN_AUTH",
+                Map.of("REFRESH_TOKEN", refreshToken));
+        String accessToken = (String) ((Map<String, Object>) refreshResult.get("AuthenticationResult")).get("AccessToken");
+
+        Map<String, Object> claims;
+        try {
+            claims = MAPPER.readValue(decodeJwtPayload(accessToken), new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        assertEquals("refresh", claims.get("source"));
+    }
+
+    // =========================================================================
+    // UserMigration
+    // =========================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void userMigrationCreatesAndAuthenticatesMissingUser() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("UserMigration", "arn:aws:lambda:::migrate"));
+        UserPoolClient client = createClient(pool);
+
+        Map<String, Object> migrationResp = Map.of(
+                "userAttributes", Map.of(
+                        "email", "newcomer@example.com",
+                        "email_verified", "true"),
+                "finalUserStatus", "CONFIRMED",
+                "messageAction", "SUPPRESS");
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::migrate"), any(byte[].class), any()))
+                .thenReturn(ok(migrationResp));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "newcomer", "PASSWORD", "MyPassword1!"));
+
+        Map<String, Object> auth = (Map<String, Object>) result.get("AuthenticationResult");
+        assertNotNull(auth, "Migrated user should authenticate successfully");
+        assertNotNull(auth.get("AccessToken"));
+
+        CognitoUser user = service.adminGetUser(pool.getId(), "newcomer");
+        assertEquals("newcomer@example.com", user.getAttributes().get("email"));
+        assertEquals("CONFIRMED", user.getUserStatus());
+        assertTrue(user.isEnabled());
+    }
+
+    @Test
+    void userMigrationLambdaErrorPropagatesUserNotFound() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("UserMigration", "arn:aws:lambda:::migrate"));
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::migrate"), any(byte[].class), any()))
+                .thenReturn(lambdaError("Unhandled"));
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                        Map.of("USERNAME", "ghost", "PASSWORD", "x")));
+        assertEquals("UserNotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void userMigrationNotInvokedWhenUserAlreadyExists() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of("UserMigration", "arn:aws:lambda:::migrate"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!"));
+
+        verify(lambdaService, never())
+                .invoke(anyString(), eq("arn:aws:lambda:::migrate"), any(byte[].class), any());
+    }
+
+    // =========================================================================
+    // CUSTOM_AUTH triggers (already covered indirectly; check triggerSource wiring)
+    // =========================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void customAuthInvokesDefineAndCreateChallengeTriggers() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of(
+                "DefineAuthChallenge", "arn:aws:lambda:::define",
+                "CreateAuthChallenge", "arn:aws:lambda:::create"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::define"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of("challengeName", "CUSTOM_CHALLENGE")));
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::create"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of(
+                        "publicChallengeParameters", Map.of("question", "favourite-colour"),
+                        "privateChallengeParameters", Map.of("answer", "blue"),
+                        "challengeMetadata", "QA-V1")));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "CUSTOM_AUTH",
+                Map.of("USERNAME", "alice"));
+
+        assertEquals("CUSTOM_CHALLENGE", result.get("ChallengeName"));
+        Map<String, String> params = (Map<String, String>) result.get("ChallengeParameters");
+        assertEquals("favourite-colour", params.get("question"),
+                "publicChallengeParameters from CreateAuthChallenge should appear in ChallengeParameters");
+        verify(lambdaService).invoke(anyString(), eq("arn:aws:lambda:::define"), any(byte[].class), any());
+        verify(lambdaService).invoke(anyString(), eq("arn:aws:lambda:::create"), any(byte[].class), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void verifyAuthChallengeLambdaDecidesCorrectness() {
+        UserPool pool = createPoolWithLambdaConfig(Map.of(
+                "DefineAuthChallenge", "arn:aws:lambda:::define",
+                "VerifyAuthChallengeResponse", "arn:aws:lambda:::verify"));
+        seedUser(pool, "alice", "Perm1234!");
+        UserPoolClient client = createClient(pool);
+
+        // First Define call (initiation): present a challenge
+        // Second Define call (after verify): issue tokens
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::define"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of("challengeName", "CUSTOM_CHALLENGE")))
+                .thenReturn(ok(Map.of("issueTokens", true)));
+        when(lambdaService.invoke(anyString(), eq("arn:aws:lambda:::verify"), any(byte[].class), any()))
+                .thenReturn(ok(Map.of("answerCorrect", true)));
+
+        Map<String, Object> initResult = service.initiateAuth(client.getClientId(), "CUSTOM_AUTH",
+                Map.of("USERNAME", "alice"));
+        String session = (String) initResult.get("Session");
+
+        Map<String, Object> tokens = service.respondToAuthChallenge(client.getClientId(),
+                "CUSTOM_CHALLENGE", session,
+                Map.of("USERNAME", "alice", "ANSWER", "anything"));
+
+        assertNotNull(((Map<String, Object>) tokens.get("AuthenticationResult")).get("AccessToken"));
+        verify(lambdaService).invoke(anyString(), eq("arn:aws:lambda:::verify"), any(byte[].class), any());
+    }
+}
