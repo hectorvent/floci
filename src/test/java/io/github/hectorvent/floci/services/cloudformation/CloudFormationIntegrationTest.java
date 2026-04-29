@@ -453,6 +453,56 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void createStack_lambdaWithInlineZipFile() {
+        String template = """
+            {
+              "Resources": {
+                "MyFunction": {
+                  "Type": "AWS::Lambda::Function",
+                  "Properties": {
+                    "FunctionName": "cfn-inline-zipfile-func",
+                    "Runtime": "nodejs20.x",
+                    "Handler": "index.handler",
+                    "Code": {
+                      "ZipFile": "exports.handler = async (e) => ({ statusCode: 200 });"
+                    },
+                    "Role": "arn:aws:iam::000000000000:role/cfn-test-lambda-role"
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-inline-zipfile-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-inline-zipfile-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        given()
+        .when()
+            .get("/2015-03-31/functions/cfn-inline-zipfile-func")
+        .then()
+            .statusCode(200)
+            .body("Configuration.FunctionName", equalTo("cfn-inline-zipfile-func"));
+    }
+
+    @Test
     void createStack_withDynamoDbGsiAndLsi() {
         String template = """
             {
@@ -2125,5 +2175,219 @@ class CloudFormationIntegrationTest {
         .then()
             .statusCode(200)
             .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+    }
+
+    @Test
+    void createStack_withPipe() {
+        String template = """
+            {
+              "Resources": {
+                "SourceQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-pipe-source"
+                  }
+                },
+                "TargetQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-pipe-target"
+                  }
+                },
+                "MyPipe": {
+                  "Type": "AWS::Pipes::Pipe",
+                  "Properties": {
+                    "Name": "cfn-test-pipe",
+                    "Source": { "Fn::GetAtt": ["SourceQueue", "Arn"] },
+                    "Target": { "Fn::GetAtt": ["TargetQueue", "Arn"] },
+                    "RoleArn": "arn:aws:iam::000000000000:role/pipe-role",
+                    "Description": "CF provisioned pipe",
+                    "DesiredState": "STOPPED",
+                    "SourceParameters": {
+                      "SqsQueueParameters": {
+                        "BatchSize": 5
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        // 1. Create Stack
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-pipe-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // 2. Stack should reach CREATE_COMPLETE
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-pipe-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        // 3. Verify pipe exists via Pipes REST API
+        given()
+            .contentType("application/json")
+        .when()
+            .get("/v1/pipes/cfn-test-pipe")
+        .then()
+            .statusCode(200)
+            .body("Name", equalTo("cfn-test-pipe"))
+            .body("Source", containsString("cfn-pipe-source"))
+            .body("Target", containsString("cfn-pipe-target"))
+            .body("Description", equalTo("CF provisioned pipe"))
+            .body("DesiredState", equalTo("STOPPED"))
+            .body("CurrentState", equalTo("STOPPED"));
+
+        // 4. Delete stack and verify pipe is cleaned up
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DeleteStack")
+            .formParam("StackName", "cfn-pipe-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+        .when()
+            .get("/v1/pipes/cfn-test-pipe")
+        .then()
+            .statusCode(404);
+    }
+
+    // ── TemplateURL (path-style AWS S3) ──────────────────────────────────────
+
+    @Test
+    void createStack_templateUrlPathStyle_resolvesLocalS3() {
+        String bucket = "cfn-template-url-bucket";
+        String key = "template.json";
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-template-url-queue"
+                  }
+                }
+              }
+            }
+            """;
+
+        // Create S3 bucket and upload template
+        given().when().put("/" + bucket).then().statusCode(200);
+        given()
+            .contentType("application/json")
+            .body(template)
+        .when()
+            .put("/" + bucket + "/" + key)
+        .then()
+            .statusCode(200);
+
+        // CreateStack using a CDK-style path-style AWS S3 TemplateURL
+        String templateUrl = "https://s3.us-east-1.amazonaws.com/" + bucket + "/" + key;
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-template-url-stack")
+            .formParam("TemplateURL", templateUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // Verify stack and its resource were provisioned from the S3 template
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-template-url-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("CREATE_COMPLETE"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", "cfn-template-url-queue")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    void createStack_templateUrlVirtualHosted_resolvesLocalS3() {
+        String bucket = "cfn-vhost-template-bucket";
+        String key = "template.json";
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-vhost-template-queue"
+                  }
+                }
+              }
+            }
+            """;
+
+        given().when().put("/" + bucket).then().statusCode(200);
+        given()
+            .contentType("application/json")
+            .body(template)
+        .when()
+            .put("/" + bucket + "/" + key)
+        .then()
+            .statusCode(200);
+
+        // Virtual-hosted style: bucket.s3.region.amazonaws.com/key
+        String templateUrl = "https://" + bucket + ".s3.us-east-1.amazonaws.com/" + key;
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "cfn-vhost-template-stack")
+            .formParam("TemplateURL", templateUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "cfn-vhost-template-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("CREATE_COMPLETE"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", "cfn-vhost-template-queue")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
     }
 }

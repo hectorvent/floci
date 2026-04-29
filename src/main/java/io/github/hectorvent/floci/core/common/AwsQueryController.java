@@ -121,6 +121,7 @@ public class AwsQueryController {
             "RunInstances", "DescribeInstances", "TerminateInstances", "StartInstances", "StopInstances",
             "RebootInstances", "DescribeInstanceStatus", "DescribeInstanceAttribute", "ModifyInstanceAttribute",
             "CreateVpc", "DescribeVpcs", "DeleteVpc", "ModifyVpcAttribute", "DescribeVpcAttribute",
+            "DescribeVpcEndpointServices",
             "CreateDefaultVpc", "AssociateVpcCidrBlock", "DisassociateVpcCidrBlock",
             "CreateSubnet", "DescribeSubnets", "DeleteSubnet", "ModifySubnetAttribute",
             "CreateSecurityGroup", "DescribeSecurityGroups", "DeleteSecurityGroup",
@@ -278,7 +279,9 @@ public class AwsQueryController {
             "SetIdentityNotificationTopic", "GetIdentityNotificationAttributes",
             "GetIdentityDkimAttributes",
             "CreateTemplate", "UpdateTemplate", "GetTemplate", "DeleteTemplate",
-            "ListTemplates", "SendTemplatedEmail"
+            "ListTemplates", "SendTemplatedEmail", "SendBulkTemplatedEmail",
+            "CreateConfigurationSet", "DescribeConfigurationSet",
+            "ListConfigurationSets", "DeleteConfigurationSet"
     );
 
     private static final Set<String> COGNITO_ACTIONS = Set.of(

@@ -4,6 +4,9 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.AwsQueryResponse;
 import io.github.hectorvent.floci.core.common.XmlBuilder;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntry;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntryResult;
+import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -62,6 +65,11 @@ public class SesQueryHandler {
                 case "DeleteTemplate" -> handleDeleteTemplate(params, region);
                 case "ListTemplates" -> handleListTemplates(region);
                 case "SendTemplatedEmail" -> handleSendTemplatedEmail(params, region);
+                case "SendBulkTemplatedEmail" -> handleSendBulkTemplatedEmail(params, region);
+                case "CreateConfigurationSet" -> handleCreateConfigurationSet(params, region);
+                case "DescribeConfigurationSet" -> handleDescribeConfigurationSet(params, region);
+                case "ListConfigurationSets" -> handleListConfigurationSets(region);
+                case "DeleteConfigurationSet" -> handleDeleteConfigurationSet(params, region);
                 default -> AwsQueryResponse.error("UnsupportedOperation",
                         "Operation " + action + " is not supported by SES.", AwsNamespaces.SES, 400);
             };
@@ -132,6 +140,10 @@ public class SesQueryHandler {
     }
 
     private Response handleSendEmail(MultivaluedMap<String, String> params, String region) {
+        if (!sesService.isAccountSendingEnabled(region)) {
+            throw new AwsException("AccountSendingPausedException",
+                    "Account sending is disabled.", 400);
+        }
         String source = getParam(params, "Source");
         List<String> toAddresses = extractMembers(params, "Destination.ToAddresses");
         List<String> ccAddresses = extractMembers(params, "Destination.CcAddresses");
@@ -149,6 +161,10 @@ public class SesQueryHandler {
     }
 
     private Response handleSendRawEmail(MultivaluedMap<String, String> params, String region) {
+        if (!sesService.isAccountSendingEnabled(region)) {
+            throw new AwsException("AccountSendingPausedException",
+                    "Account sending is disabled.", 400);
+        }
         String source = getParam(params, "Source");
         List<String> destinations = extractMembers(params, "Destinations");
         String rawMessage = getParam(params, "RawMessage.Data");
@@ -311,6 +327,10 @@ public class SesQueryHandler {
     }
 
     private Response handleSendTemplatedEmail(MultivaluedMap<String, String> params, String region) {
+        if (!sesService.isAccountSendingEnabled(region)) {
+            throw new AwsException("AccountSendingPausedException",
+                    "Account sending is disabled.", 400);
+        }
         String source = getParam(params, "Source");
         List<String> toAddresses = extractMembers(params, "Destination.ToAddresses");
         List<String> ccAddresses = extractMembers(params, "Destination.CcAddresses");
@@ -334,6 +354,105 @@ public class SesQueryHandler {
 
         String result = new XmlBuilder().elem("MessageId", messageId).build();
         return Response.ok(AwsQueryResponse.envelope("SendTemplatedEmail", AwsNamespaces.SES, result)).build();
+    }
+
+    private Response handleSendBulkTemplatedEmail(MultivaluedMap<String, String> params, String region) {
+        if (!sesService.isAccountSendingEnabled(region)) {
+            throw new AwsException("AccountSendingPausedException",
+                    "Account sending is disabled.", 400);
+        }
+        String source = getParam(params, "Source");
+        List<String> replyToAddresses = extractMembers(params, "ReplyToAddresses");
+        String templateName = getParam(params, "Template");
+        String templateArn = getParam(params, "TemplateArn");
+        String defaultDataRaw = getParam(params, "DefaultTemplateData");
+
+        boolean hasName = templateName != null && !templateName.isBlank();
+        boolean hasArn = templateArn != null && !templateArn.isBlank();
+        if (!hasName && !hasArn) {
+            throw new AwsException("InvalidParameterValue",
+                    "Template or TemplateArn is required.", 400);
+        }
+        String resolvedName = hasName ? templateName : SesService.templateNameFromArn(templateArn);
+        EmailTemplate template = sesService.getTemplate(resolvedName, region);
+        JsonNode defaultTemplateData = parseTemplateData(defaultDataRaw);
+
+        List<BulkEmailEntry> entries = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String destPrefix = "Destinations.member." + i;
+            List<String> to = extractMembers(params, destPrefix + ".Destination.ToAddresses");
+            List<String> cc = extractMembers(params, destPrefix + ".Destination.CcAddresses");
+            List<String> bcc = extractMembers(params, destPrefix + ".Destination.BccAddresses");
+            String replacementRaw = getParam(params, destPrefix + ".ReplacementTemplateData");
+            if (to.isEmpty() && cc.isEmpty() && bcc.isEmpty() && replacementRaw == null) {
+                break;
+            }
+            entries.add(new BulkEmailEntry(to, cc, bcc, parseTemplateData(replacementRaw)));
+        }
+        if (entries.isEmpty()) {
+            throw new AwsException("InvalidParameterValue",
+                    "At least one destination is required.", 400);
+        }
+
+        List<BulkEmailEntryResult> results = sesService.sendBulkTemplatedEmail(source, replyToAddresses,
+                template.getSubject(), template.getTextPart(), template.getHtmlPart(),
+                defaultTemplateData, entries, region);
+
+        XmlBuilder xml = new XmlBuilder().start("Status");
+        for (BulkEmailEntryResult result : results) {
+            xml.start("member").elem("Status", result.getStatus().toV1String());
+            if (result.getMessageId() != null) {
+                xml.elem("MessageId", result.getMessageId());
+            }
+            if (result.getError() != null) {
+                xml.elem("Error", result.getError());
+            }
+            xml.end("member");
+        }
+        xml.end("Status");
+        return Response.ok(AwsQueryResponse.envelope("SendBulkTemplatedEmail", AwsNamespaces.SES, xml.build())).build();
+    }
+
+    private Response handleCreateConfigurationSet(MultivaluedMap<String, String> params, String region) {
+        String name = getParam(params, "ConfigurationSet.Name");
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ConfigurationSet.Name is required.", 400);
+        }
+        sesService.createConfigurationSet(new ConfigurationSet(name), region);
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult("CreateConfigurationSet", AwsNamespaces.SES)).build();
+    }
+
+    private Response handleDescribeConfigurationSet(MultivaluedMap<String, String> params, String region) {
+        String name = getParam(params, "ConfigurationSetName");
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ConfigurationSetName is required.", 400);
+        }
+        ConfigurationSet cs = sesService.getConfigurationSet(name, region);
+        String result = new XmlBuilder()
+                .start("ConfigurationSet")
+                    .elem("Name", cs.getName())
+                .end("ConfigurationSet")
+                .build();
+        return Response.ok(AwsQueryResponse.envelope("DescribeConfigurationSet", AwsNamespaces.SES, result)).build();
+    }
+
+    private Response handleListConfigurationSets(String region) {
+        List<ConfigurationSet> all = sesService.listConfigurationSets(region);
+        XmlBuilder xml = new XmlBuilder().start("ConfigurationSets");
+        for (ConfigurationSet cs : all) {
+            xml.start("member").elem("Name", cs.getName()).end("member");
+        }
+        xml.end("ConfigurationSets");
+        return Response.ok(AwsQueryResponse.envelope("ListConfigurationSets", AwsNamespaces.SES, xml.build())).build();
+    }
+
+    private Response handleDeleteConfigurationSet(MultivaluedMap<String, String> params, String region) {
+        String name = getParam(params, "ConfigurationSetName");
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "ConfigurationSetName is required.", 400);
+        }
+        sesService.deleteConfigurationSet(name, region);
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult("DeleteConfigurationSet", AwsNamespaces.SES)).build();
     }
 
     private EmailTemplate readTemplateParams(MultivaluedMap<String, String> params) {

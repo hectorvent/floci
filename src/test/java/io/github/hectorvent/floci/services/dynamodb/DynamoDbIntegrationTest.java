@@ -1,5 +1,7 @@
 package io.github.hectorvent.floci.services.dynamodb;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
@@ -9,6 +11,10 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.zip.CRC32;
 
 import static io.restassured.RestAssured.given;
@@ -1767,5 +1773,130 @@ given()
         CRC32 crc = new CRC32();
         crc.update(bytes);
         return crc.getValue();
+    }
+
+    @Test
+    @Order(33)
+    void gsiQueryPaginationWithSharedSortKey() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String tableName = "gsi-pagination-test";
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "%s",
+                    "KeySchema": [
+                        {"AttributeName": "PK", "KeyType": "HASH"},
+                        {"AttributeName": "SK", "KeyType": "RANGE"}
+                    ],
+                    "AttributeDefinitions": [
+                        {"AttributeName": "PK",     "AttributeType": "S"},
+                        {"AttributeName": "SK",     "AttributeType": "S"},
+                        {"AttributeName": "GSI1PK", "AttributeType": "S"},
+                        {"AttributeName": "GSI1SK", "AttributeType": "S"}
+                    ],
+                    "BillingMode": "PAY_PER_REQUEST",
+                    "GlobalSecondaryIndexes": [{
+                        "IndexName": "GSI1",
+                        "KeySchema": [
+                            {"AttributeName": "GSI1PK", "KeyType": "HASH"},
+                            {"AttributeName": "GSI1SK", "KeyType": "RANGE"}
+                        ],
+                        "Projection": {"ProjectionType": "ALL"}
+                    }]
+                }
+                """.formatted(tableName))
+        .when().post("/")
+        .then().statusCode(200);
+
+        // 5 items all sharing (GSI1PK="ITEM", GSI1SK="SAME"), unique base-table PK/SK
+        for (String id : new String[]{"ITEM_a", "ITEM_b", "ITEM_c", "ITEM_d", "ITEM_e"}) {
+            given()
+                .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+                .contentType(DYNAMODB_CONTENT_TYPE)
+                .body("""
+                    {
+                        "TableName": "%s",
+                        "Item": {
+                            "PK":     {"S": "%s"},
+                            "SK":     {"S": "DETAIL"},
+                            "GSI1PK": {"S": "ITEM"},
+                            "GSI1SK": {"S": "SAME"}
+                        }
+                    }
+                    """.formatted(tableName, id))
+            .when().post("/")
+            .then().statusCode(200);
+        }
+
+        List<String> allCollected = new ArrayList<>();
+        Set<String> seenLeks = new HashSet<>();
+        JsonNode exclusiveStartKey = null;
+        int pages = 0;
+
+        do {
+            String body;
+            if (exclusiveStartKey == null) {
+                body = """
+                    {
+                        "TableName": "%s",
+                        "IndexName": "GSI1",
+                        "KeyConditionExpression": "GSI1PK = :pk",
+                        "ExpressionAttributeValues": {":pk": {"S": "ITEM"}},
+                        "Limit": 2
+                    }
+                    """.formatted(tableName);
+            } else {
+                body = """
+                    {
+                        "TableName": "%s",
+                        "IndexName": "GSI1",
+                        "KeyConditionExpression": "GSI1PK = :pk",
+                        "ExpressionAttributeValues": {":pk": {"S": "ITEM"}},
+                        "Limit": 2,
+                        "ExclusiveStartKey": %s
+                    }
+                    """.formatted(tableName, mapper.writeValueAsString(exclusiveStartKey));
+            }
+
+            String responseBody = given()
+                .header("X-Amz-Target", "DynamoDB_20120810.Query")
+                .contentType(DYNAMODB_CONTENT_TYPE)
+                .body(body)
+            .when().post("/")
+            .then().statusCode(200).extract().body().asString();
+
+            JsonNode root = mapper.readTree(responseBody);
+            pages++;
+
+            for (JsonNode item : root.path("Items")) {
+                allCollected.add(item.path("PK").path("S").asText());
+            }
+
+            JsonNode lek = root.path("LastEvaluatedKey");
+            if (lek.isMissingNode() || lek.isNull()) {
+                exclusiveStartKey = null;
+            } else {
+                // LEK must contain all four keys
+                assertNotNull(lek.get("GSI1PK"), "LastEvaluatedKey missing GSI1PK");
+                assertNotNull(lek.get("GSI1SK"), "LastEvaluatedKey missing GSI1SK");
+                assertNotNull(lek.get("PK"),     "LastEvaluatedKey missing PK");
+                assertNotNull(lek.get("SK"),     "LastEvaluatedKey missing SK");
+
+                // LEK must be unique across pages — cursor must advance
+                String lekStr = lek.toString();
+                assertEquals(false, seenLeks.contains(lekStr),
+                        "LastEvaluatedKey repeated — infinite pagination loop: " + lekStr);
+                seenLeks.add(lekStr);
+                exclusiveStartKey = lek;
+            }
+        } while (exclusiveStartKey != null && pages < 10);
+
+        // All 5 distinct items returned exactly once
+        assertEquals(5, allCollected.size(), "Expected 5 items total, got: " + allCollected);
+        assertEquals(Set.of("ITEM_a", "ITEM_b", "ITEM_c", "ITEM_d", "ITEM_e"), new HashSet<>(allCollected));
+        assertEquals(3, pages, "Expected ceil(5/2)=3 pages");
     }
 }

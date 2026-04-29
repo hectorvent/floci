@@ -363,11 +363,14 @@ public class CognitoJsonHandler {
     private Response handleInitiateAuth(JsonNode request) {
         Map<String, String> params = new HashMap<>();
         request.path("AuthParameters").fields().forEachRemaining(e -> params.put(e.getKey(), e.getValue().asText()));
+        Map<String, String> clientMetadata = new HashMap<>();
+        request.path("ClientMetadata").fields().forEachRemaining(e -> clientMetadata.put(e.getKey(), e.getValue().asText()));
 
         Map<String, Object> result = service.initiateAuth(
                 request.path("ClientId").asText(),
                 request.path("AuthFlow").asText(),
-                params
+                params,
+                clientMetadata
         );
         return Response.ok(objectMapper.valueToTree(result)).build();
     }
@@ -375,12 +378,15 @@ public class CognitoJsonHandler {
     private Response handleAdminInitiateAuth(JsonNode request) {
         Map<String, String> params = new HashMap<>();
         request.path("AuthParameters").fields().forEachRemaining(e -> params.put(e.getKey(), e.getValue().asText()));
+        Map<String, String> clientMetadata = new HashMap<>();
+        request.path("ClientMetadata").fields().forEachRemaining(e -> clientMetadata.put(e.getKey(), e.getValue().asText()));
 
         Map<String, Object> result = service.adminInitiateAuth(
                 request.path("UserPoolId").asText(),
                 request.path("ClientId").asText(),
                 request.path("AuthFlow").asText(),
-                params
+                params,
+                clientMetadata
         );
         return Response.ok(objectMapper.valueToTree(result)).build();
     }
@@ -388,12 +394,15 @@ public class CognitoJsonHandler {
     private Response handleRespondToAuthChallenge(JsonNode request) {
         Map<String, String> responses = new HashMap<>();
         request.path("ChallengeResponses").fields().forEachRemaining(e -> responses.put(e.getKey(), e.getValue().asText()));
+        Map<String, String> clientMetadata = new HashMap<>();
+        request.path("ClientMetadata").fields().forEachRemaining(e -> clientMetadata.put(e.getKey(), e.getValue().asText()));
 
         Map<String, Object> result = service.respondToAuthChallenge(
                 request.path("ClientId").asText(),
                 request.path("ChallengeName").asText(),
                 request.path("Session").asText(null),
-                responses
+                responses,
+                clientMetadata
         );
         return Response.ok(objectMapper.valueToTree(result)).build();
     }
@@ -495,7 +504,7 @@ public class CognitoJsonHandler {
         node.set("Policies", objectMapper.valueToTree(p.getPolicies() != null ? p.getPolicies() : new HashMap<>()));
         node.put("DeletionProtection", p.getDeletionProtection() != null ? p.getDeletionProtection() : "INACTIVE");
         node.set("LambdaConfig", objectMapper.valueToTree(p.getLambdaConfig() != null ? p.getLambdaConfig() : new HashMap<>()));
-        node.set("SchemaAttributes", objectMapper.valueToTree(p.getSchemaAttributes() != null ? p.getSchemaAttributes() : new java.util.ArrayList<>()));
+        node.set("SchemaAttributes", objectMapper.valueToTree(CognitoStandardAttributes.merge(p.getSchemaAttributes())));
         node.set("AutoVerifiedAttributes", objectMapper.valueToTree(p.getAutoVerifiedAttributes() != null ? p.getAutoVerifiedAttributes() : new java.util.ArrayList<>()));
         node.set("AliasAttributes", objectMapper.valueToTree(p.getAliasAttributes() != null ? p.getAliasAttributes() : new java.util.ArrayList<>()));
         node.set("UsernameAttributes", objectMapper.valueToTree(p.getUsernameAttributes() != null ? p.getUsernameAttributes() : new java.util.ArrayList<>()));

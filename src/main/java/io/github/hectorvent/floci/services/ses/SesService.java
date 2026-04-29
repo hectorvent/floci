@@ -3,11 +3,15 @@ package io.github.hectorvent.floci.services.ses;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntry;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntryResult;
+import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import io.github.hectorvent.floci.services.ses.model.SentEmail;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -29,10 +33,14 @@ public class SesService {
 
     private static final Pattern TEMPLATE_VARIABLE = Pattern.compile("\\{\\{\\s*([\\w-]+)\\s*\\}\\}");
 
+    private static final int MAX_BULK_DESTINATIONS = 50;
+    private static final int MAX_RECIPIENTS_PER_DESTINATION = 50;
+
     private final StorageBackend<String, Identity> identityStore;
     private final StorageBackend<String, SentEmail> emailStore;
     private final StorageBackend<String, Boolean> accountSettingsStore;
     private final StorageBackend<String, EmailTemplate> templateStore;
+    private final StorageBackend<String, ConfigurationSet> configSetStore;
     private final SmtpRelay smtpRelay;
 
     @Inject
@@ -45,6 +53,8 @@ public class SesService {
                 new TypeReference<Map<String, Boolean>>() {});
         this.templateStore = storageFactory.create("ses", "ses-templates.json",
                 new TypeReference<Map<String, EmailTemplate>>() {});
+        this.configSetStore = storageFactory.create("ses", "ses-config-sets.json",
+                new TypeReference<Map<String, ConfigurationSet>>() {});
         this.smtpRelay = smtpRelay;
     }
 
@@ -52,11 +62,13 @@ public class SesService {
                StorageBackend<String, SentEmail> emailStore,
                StorageBackend<String, Boolean> accountSettingsStore,
                StorageBackend<String, EmailTemplate> templateStore,
+               StorageBackend<String, ConfigurationSet> configSetStore,
                SmtpRelay smtpRelay) {
         this.identityStore = identityStore;
         this.emailStore = emailStore;
         this.accountSettingsStore = accountSettingsStore;
         this.templateStore = templateStore;
+        this.configSetStore = configSetStore;
         this.smtpRelay = smtpRelay;
     }
 
@@ -308,6 +320,93 @@ public class SesService {
         return all;
     }
 
+    public ConfigurationSet createConfigurationSet(ConfigurationSet configSet, String region) {
+        if (configSet == null) {
+            throw new AwsException("InvalidParameterValue",
+                    "ConfigurationSetName is required.", 400);
+        }
+        String key = configSetKey(region, configSet.getName());
+        if (configSet.getTags() != null) {
+            for (ConfigurationSet.Tag tag : configSet.getTags()) {
+                validateTag(tag);
+            }
+        }
+        if (configSetStore.get(key).isPresent()) {
+            throw new AwsException("ConfigurationSetAlreadyExists",
+                    "Configuration set " + configSet.getName() + " already exists.", 400);
+        }
+        if (configSet.getCreatedTimestamp() == null) {
+            configSet.setCreatedTimestamp(Instant.now());
+        }
+        configSetStore.put(key, configSet);
+        LOG.infov("Created SES configuration set: {0} in region {1}", configSet.getName(), region);
+        return configSet;
+    }
+
+    public ConfigurationSet getConfigurationSet(String name, String region) {
+        return configSetStore.get(configSetKey(region, name))
+                .orElseThrow(() -> new AwsException("ConfigurationSetDoesNotExist",
+                        "Configuration set " + name + " does not exist.", 400));
+    }
+
+    public List<ConfigurationSet> listConfigurationSets(String region) {
+        String prefix = "configSet::" + region + "::";
+        List<ConfigurationSet> all = new ArrayList<>(configSetStore.scan(k -> k.startsWith(prefix)));
+        all.sort(Comparator.comparing(ConfigurationSet::getCreatedTimestamp,
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(ConfigurationSet::getName,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
+        return all;
+    }
+
+    public void deleteConfigurationSet(String name, String region) {
+        String key = configSetKey(region, name);
+        if (configSetStore.get(key).isEmpty()) {
+            throw new AwsException("ConfigurationSetDoesNotExist",
+                    "Configuration set " + name + " does not exist.", 400);
+        }
+        configSetStore.delete(key);
+        LOG.infov("Deleted SES configuration set: {0} in region {1}", name, region);
+    }
+
+    private static final Pattern CONFIG_SET_NAME = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
+
+    private static String configSetKey(String region, String name) {
+        validateConfigurationSetName(name);
+        return "configSet::" + region + "::" + name;
+    }
+
+    static void validateConfigurationSetName(String name) {
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue",
+                    "ConfigurationSetName is required.", 400);
+        }
+        if (!CONFIG_SET_NAME.matcher(name).matches()) {
+            throw new AwsException("InvalidParameterValue",
+                    "ConfigurationSetName must be 1-64 characters and may only contain "
+                            + "alphanumeric characters, underscores, and hyphens.", 400);
+        }
+    }
+
+    static void validateTag(ConfigurationSet.Tag tag) {
+        if (tag == null) {
+            throw new AwsException("InvalidParameterValue", "Tag must not be null.", 400);
+        }
+        String key = tag.key();
+        if (key == null || key.isEmpty()) {
+            throw new AwsException("InvalidParameterValue", "Tag Key is required.", 400);
+        }
+        if (key.length() > 128) {
+            throw new AwsException("InvalidParameterValue",
+                    "Tag Key must be 1-128 characters.", 400);
+        }
+        String value = tag.value();
+        if (value != null && value.length() > 256) {
+            throw new AwsException("InvalidParameterValue",
+                    "Tag Value must be 0-256 characters.", 400);
+        }
+    }
+
     public String sendTemplatedEmail(String source, List<String> toAddresses, List<String> ccAddresses,
                                      List<String> bccAddresses, List<String> replyToAddresses,
                                      String templateName, JsonNode templateData, String region) {
@@ -333,6 +432,98 @@ public class SesService {
                 applyTemplateData(textPart, templateData),
                 applyTemplateData(htmlPart, templateData),
                 region);
+    }
+
+    public List<BulkEmailEntryResult> sendBulkTemplatedEmail(String source,
+                                                              List<String> replyToAddresses,
+                                                              String subject, String textPart, String htmlPart,
+                                                              JsonNode defaultTemplateData,
+                                                              List<BulkEmailEntry> entries,
+                                                              String region) {
+        if (source == null || source.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "Source email is required.", 400);
+        }
+        boolean hasSubject = subject != null && !subject.isBlank();
+        boolean hasText = textPart != null && !textPart.isBlank();
+        boolean hasHtml = htmlPart != null && !htmlPart.isBlank();
+        if (!hasSubject && !hasText && !hasHtml) {
+            throw new AwsException("InvalidTemplate",
+                    "Template must have at least a subject, text, or html part.", 400);
+        }
+        if (entries == null || entries.isEmpty()) {
+            throw new AwsException("InvalidParameterValue",
+                    "At least one destination entry is required.", 400);
+        }
+        if (entries.size() > MAX_BULK_DESTINATIONS) {
+            throw new AwsException("MessageRejected",
+                    "Number of destinations (" + entries.size() + ") exceeds the maximum of "
+                            + MAX_BULK_DESTINATIONS + ".", 400);
+        }
+        for (BulkEmailEntry entry : entries) {
+            int recipientCount = sizeOf(entry.toAddresses())
+                    + sizeOf(entry.ccAddresses())
+                    + sizeOf(entry.bccAddresses());
+            if (recipientCount > MAX_RECIPIENTS_PER_DESTINATION) {
+                throw new AwsException("MessageRejected",
+                        "Recipient count (" + recipientCount + ") in a destination exceeds the maximum of "
+                                + MAX_RECIPIENTS_PER_DESTINATION + ".", 400);
+            }
+        }
+
+        List<BulkEmailEntryResult> results = new ArrayList<>(entries.size());
+        for (BulkEmailEntry entry : entries) {
+            try {
+                JsonNode merged = mergeTemplateData(defaultTemplateData, entry.replacementTemplateData());
+                String messageId = sendEmail(source,
+                        entry.toAddresses(), entry.ccAddresses(), entry.bccAddresses(),
+                        replyToAddresses,
+                        applyTemplateData(subject, merged),
+                        applyTemplateData(textPart, merged),
+                        applyTemplateData(htmlPart, merged),
+                        region);
+                results.add(BulkEmailEntryResult.success(messageId));
+            } catch (AwsException e) {
+                results.add(BulkEmailEntryResult.failure(
+                        mapErrorCodeToBulkStatus(e.getErrorCode()), e.getMessage()));
+            } catch (Exception e) {
+                results.add(BulkEmailEntryResult.failure(BulkEmailEntryResult.Status.FAILED, e.getMessage()));
+            }
+        }
+        return results;
+    }
+
+    private static int sizeOf(List<?> list) {
+        return list == null ? 0 : list.size();
+    }
+
+    static BulkEmailEntryResult.Status mapErrorCodeToBulkStatus(String errorCode) {
+        if ("InvalidParameterValue".equals(errorCode)) {
+            return BulkEmailEntryResult.Status.INVALID_PARAMETER;
+        }
+        return BulkEmailEntryResult.Status.FAILED;
+    }
+
+    static JsonNode mergeTemplateData(JsonNode defaults, JsonNode replacement) {
+        boolean hasDefault = defaults != null && defaults.isObject();
+        boolean hasReplacement = replacement != null && replacement.isObject();
+        if (!hasDefault && !hasReplacement) {
+            return null;
+        }
+        if (!hasReplacement) {
+            return defaults;
+        }
+        if (!hasDefault) {
+            return replacement;
+        }
+        if (replacement.isEmpty()) {
+            return defaults;
+        }
+        if (defaults.isEmpty()) {
+            return replacement;
+        }
+        ObjectNode merged = ((ObjectNode) defaults).deepCopy();
+        replacement.fields().forEachRemaining(e -> merged.set(e.getKey(), e.getValue()));
+        return merged;
     }
 
     static String applyTemplateData(String text, JsonNode data) {

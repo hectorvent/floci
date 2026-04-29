@@ -533,11 +533,19 @@ public class DynamoDbService {
 
         // Apply ExclusiveStartKey offset
         if (exclusiveStartKey != null) {
-            TableDefinition finalTable = table;
-            String startItemKey = buildItemKeyFromNode(exclusiveStartKey, pkName, skName);
+            String tablePkName = table.getPartitionKeyName();
+            String tableSkName = table.getSortKeyName();
+            boolean hasTableKeys = exclusiveStartKey.has(tablePkName);
+
+            String startItemKey = hasTableKeys
+                    ? buildItemKeyFromNode(exclusiveStartKey, tablePkName, tableSkName)
+                    : buildItemKeyFromNode(exclusiveStartKey, pkName, skName);
+
             int startIdx = -1;
             for (int i = 0; i < results.size(); i++) {
-                String thisKey = buildItemKeyFromNode(results.get(i), pkName, skName);
+                String thisKey = hasTableKeys
+                        ? buildItemKeyFromNode(results.get(i), tablePkName, tableSkName)
+                        : buildItemKeyFromNode(results.get(i), pkName, skName);
                 if (thisKey.equals(startItemKey)) {
                     startIdx = i;
                     break;
@@ -553,7 +561,7 @@ public class DynamoDbService {
 
         if (limit != null && limit > 0 && evaluatedItems.size() > limit) {
             JsonNode lastItem = evaluatedItems.get(limit - 1);
-            lastEvaluatedKey = buildKeyNode(table, lastItem, pkName, skName);
+            lastEvaluatedKey = buildKeyNode(table, lastItem, pkName, skName, indexName != null);
             evaluatedItems = new ArrayList<>(evaluatedItems.subList(0, limit));
         }
 
@@ -1775,6 +1783,11 @@ public class DynamoDbService {
     }
 
     JsonNode buildKeyNode(TableDefinition table, JsonNode item, String pkName, String skName) {
+        return buildKeyNode(table, item, pkName, skName, false);
+    }
+
+    JsonNode buildKeyNode(TableDefinition table, JsonNode item,
+                          String pkName, String skName, boolean isIndexQuery) {
         com.fasterxml.jackson.databind.node.ObjectNode keyNode =
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
         JsonNode pkAttr = item.get(pkName);
@@ -1785,6 +1798,16 @@ public class DynamoDbService {
             JsonNode skAttr = item.get(skName);
             if (skAttr != null) {
                 keyNode.set(skName, skAttr);
+            }
+        }
+        if (isIndexQuery) {
+            String tablePk = table.getPartitionKeyName();
+            String tableSk = table.getSortKeyName();
+            if (!tablePk.equals(pkName) && item.get(tablePk) != null) {
+                keyNode.set(tablePk, item.get(tablePk));
+            }
+            if (tableSk != null && !tableSk.equals(skName) && item.get(tableSk) != null) {
+                keyNode.set(tableSk, item.get(tableSk));
             }
         }
         return keyNode;
