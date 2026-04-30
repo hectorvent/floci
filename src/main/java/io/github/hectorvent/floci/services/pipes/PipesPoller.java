@@ -12,6 +12,7 @@ import io.github.hectorvent.floci.services.pipes.model.DesiredState;
 import io.github.hectorvent.floci.services.pipes.model.Pipe;
 import io.github.hectorvent.floci.services.sqs.SqsService;
 import io.github.hectorvent.floci.services.sqs.model.Message;
+import io.github.hectorvent.floci.services.sqs.model.MessageAttributeValue;
 import io.vertx.core.Vertx;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -19,6 +20,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -403,7 +405,18 @@ public class PipesPoller {
             ObjectNode attrs = record.putObject("attributes");
             attrs.put("ApproximateReceiveCount", String.valueOf(msg.getReceiveCount()));
             attrs.put("SentTimestamp", String.valueOf(System.currentTimeMillis()));
-            record.putObject("messageAttributes");
+            ObjectNode msgAttrs = record.putObject("messageAttributes");
+            for (Map.Entry<String, MessageAttributeValue> entry : msg.getMessageAttributes().entrySet()) {
+                ObjectNode attrNode = msgAttrs.putObject(entry.getKey());
+                MessageAttributeValue val = entry.getValue();
+                attrNode.put("stringValue", val.getStringValue());
+                if (val.getBinaryValue() != null) {
+                    attrNode.put("binaryValue", Base64.getEncoder().encodeToString(val.getBinaryValue()));
+                }
+                attrNode.putArray("stringListValues");
+                attrNode.putArray("binaryListValues");
+                attrNode.put("dataType", val.getDataType());
+            }
             record.put("md5OfBody", msg.getMd5OfBody() != null ? msg.getMd5OfBody() : "");
             record.put("eventSource", "aws:sqs");
             record.put("eventSourceARN", pipe.getSource());
