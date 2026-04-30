@@ -17,9 +17,12 @@ class LambdaPayloadSizeLimitTest {
     private static final int _1_MB = 1 * 1024 * 1024;
     private static final int _6_MB = 6 * 1024 * 1024;
 
-    private static final String FN         = "sdk-size-limit-fn";
-    private static final String FN_LARGE   = "sdk-size-limit-large-response-fn";
-    private static final String ROLE       = "arn:aws:iam::000000000000:role/lambda-role";
+    private static final int _5_MB = 5 * 1024 * 1024;
+
+    private static final String FN          = "sdk-size-limit-fn";
+    private static final String FN_LARGE    = "sdk-size-limit-large-response-fn";
+    private static final String FN_5MB      = "sdk-size-limit-5mb-response-fn";
+    private static final String ROLE        = "arn:aws:iam::000000000000:role/lambda-role";
 
     private static LambdaClient lambda;
 
@@ -40,7 +43,7 @@ class LambdaPayloadSizeLimitTest {
     @AfterAll
     static void cleanup() {
         if (lambda == null) return;
-        for (String name : new String[]{FN, FN_LARGE}) {
+        for (String name : new String[]{FN, FN_LARGE, FN_5MB}) {
             try { lambda.deleteFunction(DeleteFunctionRequest.builder().functionName(name).build()); }
             catch (Exception ignored) {}
         }
@@ -124,5 +127,36 @@ class LambdaPayloadSizeLimitTest {
                 .build()))
                 .isInstanceOf(RequestTooLargeException.class)
                 .satisfies(ex -> assertThat(((RequestTooLargeException) ex).statusCode()).isEqualTo(413));
+    }
+
+    @Test
+    @DisplayName("sync invoke returning a 5 MB response succeeds (regression: RuntimeApiServer crashed on bodies > 8 KB via form-limit bug)")
+    void syncInvoke_5MBResponse_isReturnedSuccessfully() {
+        Assumptions.assumeTrue(TestFixtures.isLambdaDispatchAvailable(),
+                "skipping: Lambda dispatch (Docker) not available in this environment");
+
+        // 5 MB is within the 6 MB AWS limit but well above the 8 KB Netty form-attribute
+        // cap that previously caused "Size exceed allowed maximum capacity" when the Lambda
+        // runtime POSTed a large response body back to the RuntimeApiServer.
+        lambda.createFunction(CreateFunctionRequest.builder()
+                .functionName(FN_5MB)
+                .runtime(Runtime.NODEJS20_X)
+                .role(ROLE)
+                .handler("index.handler")
+                .code(FunctionCode.builder()
+                        .zipFile(SdkBytes.fromByteArray(LambdaUtils.largeResponseZip(_5_MB)))
+                        .build())
+                .build());
+
+        InvokeResponse resp = lambda.invoke(InvokeRequest.builder()
+                .functionName(FN_5MB)
+                .invocationType(InvocationType.REQUEST_RESPONSE)
+                .payload(SdkBytes.fromUtf8String("{}"))
+                .overrideConfiguration(c -> c.apiCallTimeout(Duration.ofSeconds(60)))
+                .build());
+
+        assertThat(resp.statusCode()).isEqualTo(200);
+        assertThat(resp.functionError()).isNull();
+        assertThat(resp.payload().asByteArray().length).isGreaterThan(_5_MB - 100);
     }
 }
