@@ -1,22 +1,12 @@
 package io.github.hectorvent.floci.services.glue.schemaregistry;
 
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
-import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
-import software.amazon.awssdk.services.glue.GlueClient;
-import software.amazon.awssdk.services.glue.model.EntityNotFoundException;
-import software.amazon.awssdk.services.glue.model.GetSchemaRequest;
-import software.amazon.awssdk.services.glue.model.SchemaId;
-
-import java.net.URI;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
@@ -26,7 +16,6 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -44,9 +33,6 @@ class GlueSchemaRegistryAdminIntegrationTest {
             "{\\\"type\\\":\\\"record\\\",\\\"name\\\":\\\"User\\\",\\\"namespace\\\":\\\"x\\\","
                     + "\\\"fields\\\":[{\\\"name\\\":\\\"id\\\",\\\"type\\\":\\\"long\\\"},"
                     + "{\\\"name\\\":\\\"email\\\",\\\"type\\\":[\\\"null\\\",\\\"string\\\"],\\\"default\\\":null}]}";
-
-    @TestHTTPResource("/")
-    URI endpoint;
 
     @BeforeAll
     static void configureRestAssured() {
@@ -203,19 +189,11 @@ class GlueSchemaRegistryAdminIntegrationTest {
             .statusCode(200)
             .body("Status", equalTo("DELETING"));
 
-        try (GlueClient glue = glueClient()) {
-            assertThrows(EntityNotFoundException.class, () ->
-                    glue.getSchema(GetSchemaRequest.builder()
-                            .schemaId(SchemaId.builder().registryName(REGISTRY).schemaName(SCHEMA).build())
-                            .build()));
-        }
-    }
-
-    private GlueClient glueClient() {
-        return GlueClient.builder()
-                .endpointOverride(endpoint)
-                .region(Region.US_EAST_1)
-                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
-                .build();
+        given().contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.GetSchema")
+            .body("{ \"SchemaId\": { \"RegistryName\": \"" + REGISTRY + "\", \"SchemaName\": \"" + SCHEMA + "\" } }")
+        .when().post("/").then()
+            .statusCode(400)
+            .body("__type", equalTo("EntityNotFoundException"));
     }
 }

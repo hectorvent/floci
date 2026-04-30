@@ -1,34 +1,17 @@
 package io.github.hectorvent.floci.services.glue.schemaregistry;
 
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
-import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
-import software.amazon.awssdk.services.glue.GlueClient;
-import software.amazon.awssdk.services.glue.model.Compatibility;
-import software.amazon.awssdk.services.glue.model.CreateSchemaRequest;
-import software.amazon.awssdk.services.glue.model.DataFormat;
-import software.amazon.awssdk.services.glue.model.EntityNotFoundException;
-import software.amazon.awssdk.services.glue.model.GetSchemaByDefinitionRequest;
-import software.amazon.awssdk.services.glue.model.InvalidInputException;
-import software.amazon.awssdk.services.glue.model.RegisterSchemaVersionRequest;
-import software.amazon.awssdk.services.glue.model.RegistryId;
-import software.amazon.awssdk.services.glue.model.SchemaId;
-
-import java.net.URI;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -52,21 +35,7 @@ class GlueSchemaRegistrySchemaIntegrationTest {
                     + "\\\"fields\\\":[{\\\"name\\\":\\\"id\\\",\\\"type\\\":\\\"long\\\"},"
                     + "{\\\"name\\\":\\\"email\\\",\\\"type\\\":\\\"string\\\"}]}";
 
-    // Same logical Avro definitions as the constants above, but in plain form for SDK calls.
-    private static final String AVRO_V2_OK_PLAIN =
-            "{\"type\":\"record\",\"name\":\"User\",\"namespace\":\"x\","
-                    + "\"fields\":[{\"name\":\"id\",\"type\":\"long\"},"
-                    + "{\"name\":\"email\",\"type\":[\"null\",\"string\"],\"default\":null}]}";
-    private static final String AVRO_V2_BAD_PLAIN =
-            "{\"type\":\"record\",\"name\":\"User\",\"namespace\":\"x\","
-                    + "\"fields\":[{\"name\":\"id\",\"type\":\"long\"},"
-                    + "{\"name\":\"email\",\"type\":\"string\"}]}";
-    private static final String AVRO_INVALID_PLAIN = "{not-valid-avro";
-
     private static String createdSchemaVersionId;
-
-    @TestHTTPResource("/")
-    URI endpoint;
 
     @BeforeAll
     static void configureRestAssured() {
@@ -136,13 +105,16 @@ class GlueSchemaRegistrySchemaIntegrationTest {
     @Test
     @Order(4)
     void getSchemaByDefinitionMissingReturnsNotFound() {
-        try (GlueClient glue = glueClient()) {
-            assertThrows(EntityNotFoundException.class, () ->
-                    glue.getSchemaByDefinition(GetSchemaByDefinitionRequest.builder()
-                            .schemaId(SchemaId.builder().registryName(REGISTRY).schemaName(SCHEMA).build())
-                            .schemaDefinition(AVRO_V2_OK_PLAIN)
-                            .build()));
-        }
+        given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.GetSchemaByDefinition")
+            .body("{ \"SchemaId\": { \"RegistryName\": \"" + REGISTRY + "\", \"SchemaName\": \"" + SCHEMA + "\" },"
+                    + " \"SchemaDefinition\": \"" + AVRO_V2_OK + "\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("EntityNotFoundException"));
     }
 
     @Test
@@ -165,13 +137,16 @@ class GlueSchemaRegistrySchemaIntegrationTest {
     @Test
     @Order(6)
     void registerSchemaVersionRejectsIncompatibleEvolution() {
-        try (GlueClient glue = glueClient()) {
-            assertThrows(InvalidInputException.class, () ->
-                    glue.registerSchemaVersion(RegisterSchemaVersionRequest.builder()
-                            .schemaId(SchemaId.builder().registryName(REGISTRY).schemaName(SCHEMA).build())
-                            .schemaDefinition(AVRO_V2_BAD_PLAIN)
-                            .build()));
-        }
+        given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.RegisterSchemaVersion")
+            .body("{ \"SchemaId\": { \"RegistryName\": \"" + REGISTRY + "\", \"SchemaName\": \"" + SCHEMA + "\" },"
+                    + " \"SchemaDefinition\": \"" + AVRO_V2_BAD + "\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidInputException"));
     }
 
     @Test
@@ -242,23 +217,20 @@ class GlueSchemaRegistrySchemaIntegrationTest {
     @Test
     @Order(11)
     void createSchemaWithInvalidAvroDefinitionReturns400() {
-        try (GlueClient glue = glueClient()) {
-            assertThrows(InvalidInputException.class, () ->
-                    glue.createSchema(CreateSchemaRequest.builder()
-                            .registryId(RegistryId.builder().registryName(REGISTRY).build())
-                            .schemaName("bad")
-                            .dataFormat(DataFormat.AVRO)
-                            .compatibility(Compatibility.BACKWARD)
-                            .schemaDefinition(AVRO_INVALID_PLAIN)
-                            .build()));
-        }
-    }
-
-    private GlueClient glueClient() {
-        return GlueClient.builder()
-                .endpointOverride(endpoint)
-                .region(Region.US_EAST_1)
-                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
-                .build();
+        given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.CreateSchema")
+            .body("{"
+                    + " \"RegistryId\": { \"RegistryName\": \"" + REGISTRY + "\" },"
+                    + " \"SchemaName\": \"bad\","
+                    + " \"DataFormat\": \"AVRO\","
+                    + " \"Compatibility\": \"BACKWARD\","
+                    + " \"SchemaDefinition\": \"{not-valid-avro\""
+                    + " }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidInputException"));
     }
 }

@@ -1,32 +1,17 @@
 package io.github.hectorvent.floci.services.glue.schemaregistry;
 
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
-import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
-import software.amazon.awssdk.services.glue.GlueClient;
-import software.amazon.awssdk.services.glue.model.AlreadyExistsException;
-import software.amazon.awssdk.services.glue.model.EntityNotFoundException;
-import software.amazon.awssdk.services.glue.model.GetTagsRequest;
-import software.amazon.awssdk.services.glue.model.InvalidInputException;
-import software.amazon.awssdk.services.glue.model.MetadataKeyValuePair;
-import software.amazon.awssdk.services.glue.model.PutSchemaVersionMetadataRequest;
-import software.amazon.awssdk.services.glue.model.RemoveSchemaVersionMetadataRequest;
-
-import java.net.URI;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -41,9 +26,6 @@ class GlueSchemaRegistryMetadataAndTagsIntegrationTest {
 
     private static String registryArn;
     private static String schemaVersionId;
-
-    @TestHTTPResource("/")
-    URI endpoint;
 
     @BeforeAll
     static void configureRestAssured() {
@@ -127,14 +109,13 @@ class GlueSchemaRegistryMetadataAndTagsIntegrationTest {
     @Test
     @Order(6)
     void putDuplicateMetadataReturnsAlreadyExists() {
-        try (GlueClient glue = glueClient()) {
-            assertThrows(AlreadyExistsException.class, () ->
-                    glue.putSchemaVersionMetadata(PutSchemaVersionMetadataRequest.builder()
-                            .schemaVersionId(schemaVersionId)
-                            .metadataKeyValue(MetadataKeyValuePair.builder()
-                                    .metadataKey("owner").metadataValue("alice").build())
-                            .build()));
-        }
+        given().contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.PutSchemaVersionMetadata")
+            .body("{ \"SchemaVersionId\": \"" + schemaVersionId + "\","
+                    + " \"MetadataKeyValue\": { \"MetadataKey\": \"owner\", \"MetadataValue\": \"alice\" } }")
+        .when().post("/").then()
+            .statusCode(400)
+            .body("__type", equalTo("AlreadyExistsException"));
     }
 
     @Test
@@ -171,32 +152,23 @@ class GlueSchemaRegistryMetadataAndTagsIntegrationTest {
     @Test
     @Order(9)
     void removeUnknownMetadataReturnsNotFound() {
-        try (GlueClient glue = glueClient()) {
-            assertThrows(EntityNotFoundException.class, () ->
-                    glue.removeSchemaVersionMetadata(RemoveSchemaVersionMetadataRequest.builder()
-                            .schemaVersionId(schemaVersionId)
-                            .metadataKeyValue(MetadataKeyValuePair.builder()
-                                    .metadataKey("missing").metadataValue("x").build())
-                            .build()));
-        }
+        given().contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.RemoveSchemaVersionMetadata")
+            .body("{ \"SchemaVersionId\": \"" + schemaVersionId + "\","
+                    + " \"MetadataKeyValue\": { \"MetadataKey\": \"missing\", \"MetadataValue\": \"x\" } }")
+        .when().post("/").then()
+            .statusCode(400)
+            .body("__type", equalTo("EntityNotFoundException"));
     }
 
     @Test
     @Order(10)
     void getTagsOnUnknownArnReturnsInvalidInput() {
-        try (GlueClient glue = glueClient()) {
-            assertThrows(InvalidInputException.class, () ->
-                    glue.getTags(GetTagsRequest.builder()
-                            .resourceArn("not-an-arn")
-                            .build()));
-        }
-    }
-
-    private GlueClient glueClient() {
-        return GlueClient.builder()
-                .endpointOverride(endpoint)
-                .region(Region.US_EAST_1)
-                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")))
-                .build();
+        given().contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.GetTags")
+            .body("{ \"ResourceArn\": \"not-an-arn\" }")
+        .when().post("/").then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidInputException"));
     }
 }
