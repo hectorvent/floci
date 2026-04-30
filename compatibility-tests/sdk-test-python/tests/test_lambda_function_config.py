@@ -280,3 +280,83 @@ class TestUpdateFunctionConfiguration:
             )
         finally:
             lambda_client.delete_function(FunctionName=fn)
+
+
+class TestImageConfigWorkingDirectory:
+    """ImageConfig.WorkingDirectory is persisted and returned correctly."""
+
+    IMAGE_URI = "000000000000.dkr.ecr.us-east-1.amazonaws.com/fake-repo:latest"
+
+    def test_create_image_function_with_working_directory(
+        self, lambda_client, unique_name
+    ):
+        fn = f"pytest-imgwd-{unique_name}"
+        try:
+            resp = lambda_client.create_function(
+                FunctionName=fn,
+                PackageType="Image",
+                Role=ROLE,
+                Code={"ImageUri": self.IMAGE_URI},
+                ImageConfig={"WorkingDirectory": "/app"},
+            )
+            wd = (
+                resp.get("ImageConfigResponse", {})
+                    .get("ImageConfig", {})
+                    .get("WorkingDirectory")
+            )
+            assert wd == "/app", (
+                f"CreateFunction response must include ImageConfig.WorkingDirectory='/app', got: {wd!r}"
+            )
+        finally:
+            lambda_client.delete_function(FunctionName=fn)
+
+    def test_get_function_configuration_persists_working_directory(
+        self, lambda_client, unique_name
+    ):
+        fn = f"pytest-imgwd-get-{unique_name}"
+        try:
+            lambda_client.create_function(
+                FunctionName=fn,
+                PackageType="Image",
+                Role=ROLE,
+                Code={"ImageUri": self.IMAGE_URI},
+                ImageConfig={"WorkingDirectory": "/workspace"},
+            )
+            resp = lambda_client.get_function_configuration(FunctionName=fn)
+            wd = (
+                resp.get("ImageConfigResponse", {})
+                    .get("ImageConfig", {})
+                    .get("WorkingDirectory")
+            )
+            assert wd == "/workspace", (
+                f"GetFunctionConfiguration must persist WorkingDirectory='/workspace', got: {wd!r}"
+            )
+        finally:
+            lambda_client.delete_function(FunctionName=fn)
+
+    def test_update_function_configuration_updates_working_directory(
+        self, lambda_client, unique_name
+    ):
+        fn = f"pytest-imgwd-upd-{unique_name}"
+        try:
+            lambda_client.create_function(
+                FunctionName=fn,
+                PackageType="Image",
+                Role=ROLE,
+                Code={"ImageUri": self.IMAGE_URI},
+                ImageConfig={"WorkingDirectory": "/initial"},
+            )
+            resp = lambda_client.update_function_configuration(
+                FunctionName=fn,
+                ImageConfig={"WorkingDirectory": "/updated"},
+            )
+            wd = (
+                resp.get("ImageConfigResponse", {})
+                    .get("ImageConfig", {})
+                    .get("WorkingDirectory")
+            )
+            assert wd == "/updated", (
+                f"UpdateFunctionConfiguration must update WorkingDirectory to '/updated', got: {wd!r}"
+            )
+        finally:
+            lambda_client.delete_function(FunctionName=fn)

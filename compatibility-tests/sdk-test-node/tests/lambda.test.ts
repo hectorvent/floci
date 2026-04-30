@@ -7,6 +7,8 @@ import {
   LambdaClient,
   CreateFunctionCommand,
   GetFunctionCommand,
+  GetFunctionConfigurationCommand,
+  UpdateFunctionConfigurationCommand,
   ListFunctionsCommand,
   DeleteFunctionCommand,
   CreateAliasCommand,
@@ -126,5 +128,60 @@ describe('Lambda', () => {
     await expect(
       lambda.send(new GetFunctionCommand({ FunctionName: `test-fn-${uniqueName()}` }))
     ).rejects.toThrow();
+  });
+});
+
+describe('Lambda ImageConfig.WorkingDirectory', () => {
+  let lambda: LambdaClient;
+  const IMAGE_URI = '000000000000.dkr.ecr.us-east-1.amazonaws.com/fake-repo:latest';
+  const ROLE = 'arn:aws:iam::000000000000:role/lambda-role';
+
+  beforeAll(() => {
+    lambda = makeClient(LambdaClient);
+  });
+
+  it('round-trips WorkingDirectory through create and get', async () => {
+    const fnName = `test-imgwd-${uniqueName()}`;
+    try {
+      const createResp = await lambda.send(new CreateFunctionCommand({
+        FunctionName: fnName,
+        PackageType: 'Image',
+        Role: ROLE,
+        Code: { ImageUri: IMAGE_URI },
+        ImageConfig: { WorkingDirectory: '/app' },
+      }));
+
+      expect(createResp.ImageConfigResponse?.ImageConfig?.WorkingDirectory).toBe('/app');
+
+      const getResp = await lambda.send(new GetFunctionConfigurationCommand({
+        FunctionName: fnName,
+      }));
+
+      expect(getResp.ImageConfigResponse?.ImageConfig?.WorkingDirectory).toBe('/app');
+    } finally {
+      await lambda.send(new DeleteFunctionCommand({ FunctionName: fnName })).catch(() => {});
+    }
+  });
+
+  it('updates WorkingDirectory via updateFunctionConfiguration', async () => {
+    const fnName = `test-imgwd-upd-${uniqueName()}`;
+    try {
+      await lambda.send(new CreateFunctionCommand({
+        FunctionName: fnName,
+        PackageType: 'Image',
+        Role: ROLE,
+        Code: { ImageUri: IMAGE_URI },
+        ImageConfig: { WorkingDirectory: '/initial' },
+      }));
+
+      const updateResp = await lambda.send(new UpdateFunctionConfigurationCommand({
+        FunctionName: fnName,
+        ImageConfig: { WorkingDirectory: '/updated' },
+      }));
+
+      expect(updateResp.ImageConfigResponse?.ImageConfig?.WorkingDirectory).toBe('/updated');
+    } finally {
+      await lambda.send(new DeleteFunctionCommand({ FunctionName: fnName })).catch(() => {});
+    }
   });
 });
