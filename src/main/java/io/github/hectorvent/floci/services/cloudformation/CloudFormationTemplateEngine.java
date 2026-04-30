@@ -3,12 +3,14 @@ package io.github.hectorvent.floci.services.cloudformation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.TextNode;
+import io.github.hectorvent.floci.core.common.AwsException;
 import org.jboss.logging.Logger;
 
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Resolves CloudFormation intrinsic functions and pseudo-parameters in template nodes.
@@ -29,6 +31,7 @@ public class CloudFormationTemplateEngine {
     private final Map<String, Boolean> conditions;
     private final Map<String, JsonNode> mappings;
     private final ObjectMapper objectMapper;
+    private final Function<String, String> importValueResolver;
 
     CloudFormationTemplateEngine(String accountId, String region, String stackName, String stackId,
                                  Map<String, String> parameters,
@@ -36,7 +39,8 @@ public class CloudFormationTemplateEngine {
                                  Map<String, Map<String, String>> resourceAttributes,
                                  Map<String, Boolean> conditions,
                                  Map<String, JsonNode> mappings,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 Function<String, String> importValueResolver) {
         this.accountId = accountId;
         this.region = region;
         this.stackName = stackName;
@@ -47,6 +51,7 @@ public class CloudFormationTemplateEngine {
         this.conditions = conditions;
         this.mappings = mappings;
         this.objectMapper = objectMapper;
+        this.importValueResolver = importValueResolver;
     }
 
     public String resolve(JsonNode node) {
@@ -88,7 +93,7 @@ public class CloudFormationTemplateEngine {
                 return resolveGetAtt(node.get("Fn::GetAtt"));
             }
             if (node.has("Fn::ImportValue")) {
-                return resolve(node.get("Fn::ImportValue"));
+                return resolveImportValue(node.get("Fn::ImportValue"));
             }
             if (node.has("Fn::FindInMap")) {
                 return resolveFindInMap(node.get("Fn::FindInMap"));
@@ -270,5 +275,17 @@ public class CloudFormationTemplateEngine {
             }
         }
         return "";
+    }
+
+    private String resolveImportValue(JsonNode node) {
+        String exportName = resolve(node);
+        if (importValueResolver != null) {
+            String value = importValueResolver.apply(exportName);
+            if (value != null) {
+                return value;
+            }
+        }
+        LOG.warnv("Unresolved Fn::ImportValue: {0}", exportName);
+        throw new AwsException("ValidationError", "No export named " + exportName + " found", 400);
     }
 }
