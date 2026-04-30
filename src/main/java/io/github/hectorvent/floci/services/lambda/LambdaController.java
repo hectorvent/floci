@@ -359,7 +359,9 @@ public class LambdaController {
             String name = (String) req.get("Name");
             String functionVersion = (String) req.get("FunctionVersion");
             String description = (String) req.get("Description");
-            LambdaAlias alias = lambdaService.createAlias(region, functionName, name, functionVersion, description);
+            @SuppressWarnings("unchecked")
+            Map<String, Double> routingConfig = extractRoutingConfig((Map<String, Object>) req.get("RoutingConfig"));
+            LambdaAlias alias = lambdaService.createAlias(region, functionName, name, functionVersion, description, routingConfig);
             return Response.status(201).entity(buildAliasResponse(alias)).build();
         } catch (AwsException e) {
             throw e;
@@ -404,7 +406,9 @@ public class LambdaController {
             Map<String, Object> req = objectMapper.readValue(body, Map.class);
             String functionVersion = (String) req.get("FunctionVersion");
             String description = (String) req.get("Description");
-            LambdaAlias alias = lambdaService.updateAlias(region, functionName, aliasName, functionVersion, description);
+            @SuppressWarnings("unchecked")
+            Map<String, Double> routingConfig = extractRoutingConfig((Map<String, Object>) req.get("RoutingConfig"));
+            LambdaAlias alias = lambdaService.updateAlias(region, functionName, aliasName, functionVersion, description, routingConfig);
             return Response.ok(buildAliasResponse(alias)).build();
         } catch (AwsException e) {
             throw e;
@@ -486,8 +490,25 @@ public class LambdaController {
         node.put("AliasArn", alias.getAliasArn());
         if (alias.getDescription() != null) node.put("Description", alias.getDescription());
         node.put("RevisionId", alias.getRevisionId());
+        if (alias.getRoutingConfig() != null && !alias.getRoutingConfig().isEmpty()) {
+            ObjectNode rc = node.putObject("RoutingConfig");
+            ObjectNode weights = rc.putObject("AdditionalVersionWeights");
+            alias.getRoutingConfig().forEach(weights::put);
+        }
         @SuppressWarnings("unchecked")
         Map<String, Object> result = objectMapper.convertValue(node, Map.class);
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Double> extractRoutingConfig(Map<String, Object> rc) {
+        if (rc == null) return null;
+        Object weights = rc.get("AdditionalVersionWeights");
+        if (!(weights instanceof Map)) return null;
+        Map<String, Object> raw = (Map<String, Object>) weights;
+        if (raw.isEmpty()) return null;
+        java.util.Map<String, Double> result = new java.util.HashMap<>();
+        raw.forEach((k, v) -> result.put(k, ((Number) v).doubleValue()));
         return result;
     }
 

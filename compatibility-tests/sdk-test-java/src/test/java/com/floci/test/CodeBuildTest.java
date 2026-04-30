@@ -28,6 +28,14 @@ import software.amazon.awssdk.services.codebuild.model.ReportType;
 import software.amazon.awssdk.services.codebuild.model.AuthType;
 import software.amazon.awssdk.services.codebuild.model.ServerType;
 import software.amazon.awssdk.services.codebuild.model.SourceType;
+import software.amazon.awssdk.services.codebuild.model.BatchGetBuildsResponse;
+import software.amazon.awssdk.services.codebuild.model.Build;
+import software.amazon.awssdk.services.codebuild.model.ListBuildsForProjectResponse;
+import software.amazon.awssdk.services.codebuild.model.ListBuildsResponse;
+import software.amazon.awssdk.services.codebuild.model.RetryBuildResponse;
+import software.amazon.awssdk.services.codebuild.model.StartBuildResponse;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.codebuild.model.Tag;
 import software.amazon.awssdk.services.codebuild.model.UpdateProjectResponse;
 
@@ -40,6 +48,7 @@ class CodeBuildTest {
     static CodeBuildClient codebuild;
     static String reportGroupArn;
     static String sourceCredentialsArn;
+    static String buildId;
 
     @BeforeAll
     static void setup() {
@@ -184,5 +193,231 @@ class CodeBuildTest {
 
         ListProjectsResponse after = codebuild.listProjects(r -> r.build());
         assertThat(after.projects()).doesNotContain("sdk-test-project");
+    }
+
+    // ---- Phase 2: Real Build Execution ----
+
+    @Test
+    @Order(20)
+    void setupBuildProject() {
+        codebuild.createProject(r -> r
+                .name("build-exec-project")
+                .source(ProjectSource.builder()
+                        .type(SourceType.NO_SOURCE)
+                        .build())
+                .artifacts(ProjectArtifacts.builder()
+                        .type(ArtifactsType.NO_ARTIFACTS)
+                        .build())
+                .environment(ProjectEnvironment.builder()
+                        .type(EnvironmentType.LINUX_CONTAINER)
+                        .image("public.ecr.aws/docker/library/alpine:latest")
+                        .computeType(ComputeType.BUILD_GENERAL1_SMALL)
+                        .build())
+                .serviceRole("arn:aws:iam::000000000000:role/codebuild-role"));
+    }
+
+    @Test
+    @Order(21)
+    void startBuild_noSource() {
+        String buildspec = "version: 0.2\nphases:\n  build:\n    commands:\n      - echo hello-from-codebuild\n";
+
+        StartBuildResponse resp = codebuild.startBuild(r -> r
+                .projectName("build-exec-project")
+                .buildspecOverride(buildspec));
+
+        assertThat(resp.build().id()).contains("build-exec-project:");
+        assertThat(resp.build().arn()).contains(":build/build-exec-project:");
+        assertThat(resp.build().buildStatusAsString()).isEqualTo("IN_PROGRESS");
+        assertThat(resp.build().buildComplete()).isFalse();
+        buildId = resp.build().id();
+    }
+
+    @Test
+    @Order(22)
+    void batchGetBuilds_eventuallySucceeds() throws InterruptedException {
+        assertThat(buildId).isNotNull();
+
+        Build build = null;
+        for (int i = 0; i < 30; i++) {
+            BatchGetBuildsResponse resp = codebuild.batchGetBuilds(r -> r.ids(buildId));
+            assertThat(resp.builds()).hasSize(1);
+            build = resp.builds().get(0);
+            if (Boolean.TRUE.equals(build.buildComplete())) {
+                break;
+            }
+            Thread.sleep(2000);
+        }
+
+        assertThat(build).isNotNull();
+        assertThat(build.buildComplete()).isTrue();
+        assertThat(build.buildStatusAsString()).isEqualTo("SUCCEEDED");
+        assertThat(build.currentPhase()).isEqualTo("COMPLETED");
+        assertThat(build.phases()).isNotEmpty();
+    }
+
+    @Test
+    @Order(23)
+    void listBuilds_containsBuildId() {
+        assertThat(buildId).isNotNull();
+        ListBuildsResponse resp = codebuild.listBuilds(r -> r.build());
+        assertThat(resp.ids()).contains(buildId);
+    }
+
+    @Test
+    @Order(24)
+    void listBuildsForProject() {
+        ListBuildsForProjectResponse resp = codebuild.listBuildsForProject(r -> r
+                .projectName("build-exec-project"));
+        assertThat(resp.ids()).contains(buildId);
+    }
+
+    @Test
+    @Order(25)
+    void retryBuild() {
+        assertThat(buildId).isNotNull();
+        RetryBuildResponse resp = codebuild.retryBuild(r -> r.id(buildId));
+        assertThat(resp.build().id()).contains("build-exec-project:");
+        assertThat(resp.build().id()).isNotEqualTo(buildId);
+        assertThat(resp.build().buildStatusAsString()).isEqualTo("IN_PROGRESS");
+    }
+
+    @Test
+    @Order(26)
+    void stopBuild() throws InterruptedException {
+        // Start a new long-running build, then stop it
+        String longBuildspec = "version: 0.2\nphases:\n  build:\n    commands:\n      - sleep 60\n";
+        StartBuildResponse startResp = codebuild.startBuild(r -> r
+                .projectName("build-exec-project")
+                .buildspecOverride(longBuildspec));
+        String longBuildId = startResp.build().id();
+
+        // Give it a moment to start the container
+        Thread.sleep(3000);
+
+        codebuild.stopBuild(r -> r.id(longBuildId));
+
+        // Poll until stopped
+        Build build = null;
+        for (int i = 0; i < 20; i++) {
+            BatchGetBuildsResponse resp = codebuild.batchGetBuilds(r -> r.ids(longBuildId));
+            build = resp.builds().get(0);
+            if (Boolean.TRUE.equals(build.buildComplete())) {
+                break;
+            }
+            Thread.sleep(1000);
+        }
+
+        assertThat(build).isNotNull();
+        assertThat(build.buildComplete()).isTrue();
+        assertThat(build.buildStatusAsString()).isEqualTo("STOPPED");
+    }
+
+    @Test
+    @Order(27)
+    void deleteBuildProject() {
+        codebuild.deleteProject(r -> r.name("build-exec-project"));
+    }
+
+    // ---- OS demo: list OS family + directory tree, upload to S3 ----
+
+    @Test
+    @Order(30)
+    void createOsBucket() {
+        S3Client s3 = TestFixtures.s3Client();
+        s3.createBucket(r -> r.bucket("os-bucket"));
+        s3.close();
+    }
+
+    @Test
+    @Order(31)
+    void setupOsDemoProject() {
+        codebuild.createProject(r -> r
+                .name("os-demo-project")
+                .source(ProjectSource.builder()
+                        .type(SourceType.NO_SOURCE)
+                        .build())
+                .artifacts(ProjectArtifacts.builder()
+                        .type(ArtifactsType.S3)
+                        .location("os-bucket")
+                        .packaging("NONE")
+                        .build())
+                .environment(ProjectEnvironment.builder()
+                        .type(EnvironmentType.LINUX_CONTAINER)
+                        .image("public.ecr.aws/docker/library/alpine:latest")
+                        .computeType(ComputeType.BUILD_GENERAL1_SMALL)
+                        .build())
+                .serviceRole("arn:aws:iam::000000000000:role/codebuild-role"));
+    }
+
+    @Test
+    @Order(32)
+    void startOsDemoBuild() {
+        String buildspec = String.join("\n",
+                "version: 0.2",
+                "phases:",
+                "  build:",
+                "    commands:",
+                "      - echo '=== OS Family ===' > command-output.txt",
+                "      - cat /etc/os-release >> command-output.txt",
+                "      - echo '' >> command-output.txt",
+                "      - echo '=== Directory Tree (depth 3) ===' >> command-output.txt",
+                "      - find / -maxdepth 3 -type d 2>/dev/null >> command-output.txt",
+                "artifacts:",
+                "  files:",
+                "    - command-output.txt"
+        );
+
+        StartBuildResponse resp = codebuild.startBuild(r -> r
+                .projectName("os-demo-project")
+                .buildspecOverride(buildspec));
+
+        buildId = resp.build().id();
+        assertThat(buildId).contains("os-demo-project:");
+    }
+
+    @Test
+    @Order(33)
+    void osDemoBuild_eventuallySucceeds() throws InterruptedException {
+        assertThat(buildId).isNotNull();
+
+        Build build = null;
+        for (int i = 0; i < 30; i++) {
+            BatchGetBuildsResponse resp = codebuild.batchGetBuilds(r -> r.ids(buildId));
+            build = resp.builds().get(0);
+            if (Boolean.TRUE.equals(build.buildComplete())) {
+                break;
+            }
+            Thread.sleep(2000);
+        }
+
+        assertThat(build).isNotNull();
+        assertThat(build.buildComplete()).isTrue();
+        assertThat(build.buildStatusAsString()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    @Order(34)
+    void osDemoBuild_outputUploadedToS3() {
+        S3Client s3 = TestFixtures.s3Client();
+
+        byte[] data = s3.getObjectAsBytes(GetObjectRequest.builder()
+                .bucket("os-bucket")
+                .key("command-output.txt")
+                .build()).asByteArray();
+
+        String content = new String(data);
+        System.out.println("=== command-output.txt from os-bucket ===");
+        System.out.println(content);
+
+        assertThat(content).contains("NAME=");
+        assertThat(content).contains("/usr");
+
+        s3.close();
+    }
+
+    @Test
+    @Order(35)
+    void cleanupOsDemo() {
+        codebuild.deleteProject(r -> r.name("os-demo-project"));
     }
 }

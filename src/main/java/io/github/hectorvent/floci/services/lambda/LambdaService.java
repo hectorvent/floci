@@ -546,8 +546,55 @@ public class LambdaService {
     }
 
     public InvokeResult invoke(String region, String functionName, byte[] payload, InvocationType type) {
-        LambdaFunction fn = getFunction(region, functionName);
+        LambdaArnUtils.ResolvedFunctionRef ref = LambdaArnUtils.resolve(functionName);
+        enforceRegion(region, ref);
+        String name = ref.name();
+        String qualifier = ref.qualifier();
+        LambdaFunction fn = resolveInvokeTarget(region, name, qualifier);
         return executorService.invoke(fn, payload, type);
+    }
+
+    private LambdaFunction resolveInvokeTarget(String region, String name, String qualifier) {
+        if (qualifier == null || qualifier.equals("$LATEST")) {
+            return functionStore.get(region, name)
+                    .orElseThrow(() -> new AwsException("ResourceNotFoundException", "Function not found: " + name, 404));
+        }
+        if (qualifier.chars().allMatch(Character::isDigit)) {
+            return functionStore.get(region, name, qualifier)
+                    .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                            "Function version not found: " + name + ":" + qualifier, 404));
+        }
+        // qualifier is an alias name
+        LambdaAlias alias = getAlias(region, name, qualifier);
+        String version = pickAliasVersion(alias);
+        if (version == null || version.equals("$LATEST")) {
+            return functionStore.get(region, name)
+                    .orElseThrow(() -> new AwsException("ResourceNotFoundException", "Function not found: " + name, 404));
+        }
+        return functionStore.get(region, name, version)
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                        "Function version not found: " + name + ":" + version, 404));
+    }
+
+    private String pickAliasVersion(LambdaAlias alias) {
+        java.util.Map<String, Double> weights = alias.getRoutingConfig();
+        if (weights == null || weights.isEmpty()) {
+            return alias.getFunctionVersion();
+        }
+        double rand = java.util.concurrent.ThreadLocalRandom.current().nextDouble();
+        double additionalTotal = weights.values().stream().mapToDouble(Double::doubleValue).sum();
+        double primaryWeight = Math.max(0.0, 1.0 - additionalTotal);
+        if (rand < primaryWeight) {
+            return alias.getFunctionVersion();
+        }
+        double cumulative = primaryWeight;
+        for (java.util.Map.Entry<String, Double> entry : weights.entrySet()) {
+            cumulative += entry.getValue();
+            if (rand < cumulative) {
+                return entry.getKey();
+            }
+        }
+        return alias.getFunctionVersion();
     }
 
     // ──────────────────────────── Event Source Mapping (SQS) ────────────────────────────
@@ -785,7 +832,8 @@ public class LambdaService {
     // ──────────────────────────── Aliases ────────────────────────────
 
     public LambdaAlias createAlias(String region, String functionName, String aliasName,
-                                   String functionVersion, String description) {
+                                   String functionVersion, String description,
+                                   java.util.Map<String, Double> routingConfig) {
         LambdaFunction fn = getFunction(region, functionName);
         functionName = fn.getFunctionName();
         if (aliasStore != null && aliasStore.get(region, functionName, aliasName).isPresent()) {
@@ -796,6 +844,7 @@ public class LambdaService {
         alias.setFunctionName(functionName);
         alias.setFunctionVersion(functionVersion != null ? functionVersion : "$LATEST");
         alias.setDescription(description);
+        alias.setRoutingConfig(routingConfig);
         alias.setAliasArn(fn.getFunctionArn() + ":" + aliasName);
         long now = System.currentTimeMillis() / 1000L;
         alias.setCreatedDate(now);
@@ -823,10 +872,12 @@ public class LambdaService {
     }
 
     public LambdaAlias updateAlias(String region, String functionName, String aliasName,
-                                   String functionVersion, String description) {
+                                   String functionVersion, String description,
+                                   java.util.Map<String, Double> routingConfig) {
         LambdaAlias alias = getAlias(region, functionName, aliasName);
         if (functionVersion != null) alias.setFunctionVersion(functionVersion);
         if (description != null) alias.setDescription(description);
+        if (routingConfig != null) alias.setRoutingConfig(routingConfig.isEmpty() ? null : routingConfig);
         alias.setLastModifiedDate(System.currentTimeMillis() / 1000L);
         alias.setRevisionId(UUID.randomUUID().toString());
         if (aliasStore != null) aliasStore.save(region, alias);

@@ -1,6 +1,9 @@
 package io.github.hectorvent.floci.services.codebuild;
 
+import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.services.codebuild.model.Build;
+import io.github.hectorvent.floci.services.codebuild.model.BuildPhase;
 import io.github.hectorvent.floci.services.codebuild.model.Project;
 import io.github.hectorvent.floci.services.codebuild.model.ProjectArtifacts;
 import io.github.hectorvent.floci.services.codebuild.model.ProjectEnvironment;
@@ -8,6 +11,7 @@ import io.github.hectorvent.floci.services.codebuild.model.ProjectSource;
 import io.github.hectorvent.floci.services.codebuild.model.ReportGroup;
 import io.github.hectorvent.floci.services.codebuild.model.SourceCredential;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -15,6 +19,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 @ApplicationScoped
@@ -26,6 +32,19 @@ public class CodeBuildService {
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, ReportGroup>> reportGroups = new ConcurrentHashMap<>();
     // key: region -> arn -> source credential (token is stored but never returned)
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, SourceCredential>> sourceCredentials = new ConcurrentHashMap<>();
+    // key: region -> buildId -> build
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, Build>> builds = new ConcurrentHashMap<>();
+    // key: region:projectName -> build counter
+    private final ConcurrentHashMap<String, AtomicLong> buildCounters = new ConcurrentHashMap<>();
+
+    private final CodeBuildRunner runner;
+    private final EmulatorConfig config;
+
+    @Inject
+    public CodeBuildService(CodeBuildRunner runner, EmulatorConfig config) {
+        this.runner = runner;
+        this.config = config;
+    }
 
     private Map<String, Project> projectsFor(String region) {
         return projects.computeIfAbsent(region, r -> new ConcurrentHashMap<>());
@@ -37,6 +56,10 @@ public class CodeBuildService {
 
     private Map<String, SourceCredential> sourceCredentialsFor(String region) {
         return sourceCredentials.computeIfAbsent(region, r -> new ConcurrentHashMap<>());
+    }
+
+    private Map<String, Build> buildsFor(String region) {
+        return builds.computeIfAbsent(region, r -> new ConcurrentHashMap<>());
     }
 
     // ---- Projects ----
@@ -314,5 +337,116 @@ public class CodeBuildService {
             throw new AwsException("InvalidInputException",
                     "Project name must be between 2 and 150 characters", 400);
         }
+    }
+
+    // ---- Builds ----
+
+    public Build startBuild(String region, String account, String projectName,
+                            String buildspecOverride,
+                            ProjectEnvironment environmentOverride,
+                            ProjectArtifacts artifactsOverride,
+                            String sourceVersion,
+                            Integer timeoutOverride,
+                            String imageOverride,
+                            String computeTypeOverride) {
+        Project project = projectsFor(region).get(projectName);
+        if (project == null) {
+            throw new AwsException("ResourceNotFoundException", "Project not found: " + projectName, 400);
+        }
+
+        String counterKey = region + ":" + projectName;
+        long buildNumber = buildCounters
+                .computeIfAbsent(counterKey, k -> new AtomicLong(0))
+                .incrementAndGet();
+
+        String buildId = projectName + ":" + buildNumber;
+        String arn = "arn:aws:codebuild:" + region + ":" + account + ":build/" + buildId;
+
+        Build build = new Build();
+        build.setId(buildId);
+        build.setArn(arn);
+        build.setBuildNumber(buildNumber);
+        build.setBuildStatus("IN_PROGRESS");
+        build.setBuildComplete(false);
+        build.setCurrentPhase("SUBMITTED");
+        build.setProjectName(projectName);
+        build.setInitiator("user");
+        build.setStartTime(Instant.now().toEpochMilli() / 1000.0);
+        build.setSource(project.getSource());
+        build.setArtifacts(artifactsOverride != null ? artifactsOverride : project.getArtifacts());
+        build.setTimeoutInMinutes(timeoutOverride != null ? timeoutOverride : project.getTimeoutInMinutes());
+        build.setQueuedTimeoutInMinutes(project.getQueuedTimeoutInMinutes());
+        build.setEncryptionKey(project.getEncryptionKey());
+
+        ProjectEnvironment env = environmentOverride != null ? environmentOverride : project.getEnvironment();
+        if (imageOverride != null || computeTypeOverride != null) {
+            ProjectEnvironment merged = new ProjectEnvironment();
+            merged.setType(env != null ? env.getType() : null);
+            merged.setImage(imageOverride != null ? imageOverride : (env != null ? env.getImage() : null));
+            merged.setComputeType(computeTypeOverride != null ? computeTypeOverride : (env != null ? env.getComputeType() : null));
+            merged.setEnvironmentVariables(env != null ? env.getEnvironmentVariables() : null);
+            merged.setPrivilegedMode(env != null ? env.getPrivilegedMode() : null);
+            build.setEnvironment(merged);
+        } else {
+            build.setEnvironment(env);
+        }
+
+        build.setPhases(new CopyOnWriteArrayList<>());
+
+        buildsFor(region).put(buildId, build);
+
+        runner.startBuild(region, build, project, buildspecOverride);
+
+        return build;
+    }
+
+    public Build getBuild(String region, String buildId) {
+        Build build = buildsFor(region).get(buildId);
+        if (build == null) {
+            throw new AwsException("ResourceNotFoundException", "Build not found: " + buildId, 400);
+        }
+        return build;
+    }
+
+    public List<Build> batchGetBuilds(String region, List<String> buildIds) {
+        Map<String, Build> store = buildsFor(region);
+        return buildIds.stream()
+                .map(store::get)
+                .filter(b -> b != null)
+                .collect(Collectors.toList());
+    }
+
+    public List<String> listBuilds(String region) {
+        return buildsFor(region).values().stream()
+                .sorted((a, b) -> Double.compare(
+                        b.getStartTime() != null ? b.getStartTime() : 0,
+                        a.getStartTime() != null ? a.getStartTime() : 0))
+                .map(Build::getId)
+                .collect(Collectors.toList());
+    }
+
+    public List<String> listBuildsForProject(String region, String projectName) {
+        return buildsFor(region).values().stream()
+                .filter(b -> projectName.equals(b.getProjectName()))
+                .sorted((a, b) -> Double.compare(
+                        b.getStartTime() != null ? b.getStartTime() : 0,
+                        a.getStartTime() != null ? a.getStartTime() : 0))
+                .map(Build::getId)
+                .collect(Collectors.toList());
+    }
+
+    public void stopBuild(String region, String buildId) {
+        Build build = buildsFor(region).get(buildId);
+        if (build == null) {
+            throw new AwsException("ResourceNotFoundException", "Build not found: " + buildId, 400);
+        }
+        runner.stopBuild(buildId);
+    }
+
+    public Build retryBuild(String region, String account, String buildId) {
+        Build original = getBuild(region, buildId);
+        return startBuild(region, account, original.getProjectName(),
+                null, original.getEnvironment(), original.getArtifacts(),
+                null, original.getTimeoutInMinutes(), null, null);
     }
 }

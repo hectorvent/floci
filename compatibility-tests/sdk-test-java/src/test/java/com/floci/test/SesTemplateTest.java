@@ -10,6 +10,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.services.ses.SesClient;
+import software.amazon.awssdk.services.ses.model.BulkEmailDestination;
 import software.amazon.awssdk.services.ses.model.CreateTemplateRequest;
 import software.amazon.awssdk.services.ses.model.DeleteIdentityRequest;
 import software.amazon.awssdk.services.ses.model.DeleteTemplateRequest;
@@ -17,12 +18,16 @@ import software.amazon.awssdk.services.ses.model.GetTemplateRequest;
 import software.amazon.awssdk.services.ses.model.GetTemplateResponse;
 import software.amazon.awssdk.services.ses.model.ListTemplatesRequest;
 import software.amazon.awssdk.services.ses.model.ListTemplatesResponse;
+import software.amazon.awssdk.services.ses.model.SendBulkTemplatedEmailRequest;
+import software.amazon.awssdk.services.ses.model.SendBulkTemplatedEmailResponse;
 import software.amazon.awssdk.services.ses.model.SendTemplatedEmailRequest;
 import software.amazon.awssdk.services.ses.model.SendTemplatedEmailResponse;
 import software.amazon.awssdk.services.ses.model.UpdateTemplateRequest;
 import software.amazon.awssdk.services.ses.model.VerifyEmailIdentityRequest;
 
 import software.amazon.awssdk.services.sesv2.SesV2Client;
+import software.amazon.awssdk.services.sesv2.model.BulkEmailContent;
+import software.amazon.awssdk.services.sesv2.model.BulkEmailEntry;
 import software.amazon.awssdk.services.sesv2.model.CreateEmailIdentityRequest;
 import software.amazon.awssdk.services.sesv2.model.CreateEmailTemplateRequest;
 import software.amazon.awssdk.services.sesv2.model.DeleteEmailIdentityRequest;
@@ -34,6 +39,8 @@ import software.amazon.awssdk.services.sesv2.model.GetEmailTemplateRequest;
 import software.amazon.awssdk.services.sesv2.model.GetEmailTemplateResponse;
 import software.amazon.awssdk.services.sesv2.model.ListEmailTemplatesRequest;
 import software.amazon.awssdk.services.sesv2.model.ListEmailTemplatesResponse;
+import software.amazon.awssdk.services.sesv2.model.SendBulkEmailRequest;
+import software.amazon.awssdk.services.sesv2.model.SendBulkEmailResponse;
 import software.amazon.awssdk.services.sesv2.model.SendEmailRequest;
 import software.amazon.awssdk.services.sesv2.model.SendEmailResponse;
 import software.amazon.awssdk.services.sesv2.model.Template;
@@ -437,6 +444,139 @@ class SesTemplateTest {
         } finally {
             safelyDeleteV1Template(name);
         }
+    }
+
+    // ───────────────────────── Bulk send (V2 / V1) ─────────────────────────
+
+    @Test
+    @Order(25)
+    void v2SendBulkEmailWithStoredTemplateAndPerEntryReplacement() {
+        String name = "sdk-v2-bulk-" + TestFixtures.uniqueName();
+        try {
+            sesV2.createEmailTemplate(CreateEmailTemplateRequest.builder()
+                    .templateName(name)
+                    .templateContent(EmailTemplateContent.builder()
+                            .subject("Hello {{name}}")
+                            .text("Hi {{name}}, team {{team}}!")
+                            .build())
+                    .build());
+
+            SendBulkEmailResponse response = sesV2.sendBulkEmail(SendBulkEmailRequest.builder()
+                    .fromEmailAddress(v2Sender)
+                    .defaultContent(BulkEmailContent.builder()
+                            .template(Template.builder()
+                                    .templateName(name)
+                                    .templateData("{\"team\":\"floci\"}")
+                                    .build())
+                            .build())
+                    .bulkEmailEntries(
+                            BulkEmailEntry.builder()
+                                    .destination(Destination.builder()
+                                            .toAddresses("alice@example.com")
+                                            .build())
+                                    .replacementEmailContent(rec -> rec
+                                            .replacementTemplate(rt -> rt
+                                                    .replacementTemplateData("{\"name\":\"Alice\"}")))
+                                    .build(),
+                            BulkEmailEntry.builder()
+                                    .destination(Destination.builder()
+                                            .toAddresses("bob@example.com")
+                                            .build())
+                                    .replacementEmailContent(rec -> rec
+                                            .replacementTemplate(rt -> rt
+                                                    .replacementTemplateData(
+                                                            "{\"name\":\"Bob\",\"team\":\"override\"}")))
+                                    .build())
+                    .build());
+
+            assertThat(response.bulkEmailEntryResults()).hasSize(2);
+            assertThat(response.bulkEmailEntryResults().get(0).statusAsString()).isEqualTo("SUCCESS");
+            assertThat(response.bulkEmailEntryResults().get(0).messageId()).isNotBlank();
+            assertThat(response.bulkEmailEntryResults().get(1).statusAsString()).isEqualTo("SUCCESS");
+            assertThat(response.bulkEmailEntryResults().get(1).messageId()).isNotBlank();
+            assertThat(response.bulkEmailEntryResults().get(0).messageId())
+                    .isNotEqualTo(response.bulkEmailEntryResults().get(1).messageId());
+        } finally {
+            safelyDeleteV2Template(name);
+        }
+    }
+
+    @Test
+    @Order(26)
+    void v2SendBulkEmailWithUnknownTemplateReturns404() {
+        assertThatThrownBy(() -> sesV2.sendBulkEmail(SendBulkEmailRequest.builder()
+                .fromEmailAddress(v2Sender)
+                .defaultContent(BulkEmailContent.builder()
+                        .template(Template.builder()
+                                .templateName("sdk-v2-bulk-missing-" + System.currentTimeMillis())
+                                .build())
+                        .build())
+                .bulkEmailEntries(BulkEmailEntry.builder()
+                        .destination(Destination.builder()
+                                .toAddresses("alice@example.com")
+                                .build())
+                        .build())
+                .build()))
+                .isInstanceOf(AwsServiceException.class)
+                .extracting(e -> ((AwsServiceException) e).statusCode())
+                .isEqualTo(404);
+    }
+
+    @Test
+    @Order(35)
+    void v1SendBulkTemplatedEmailWithPerEntryReplacement() {
+        String name = "sdk-v1-bulk-" + TestFixtures.uniqueName();
+        try {
+            sesV1.createTemplate(CreateTemplateRequest.builder()
+                    .template(software.amazon.awssdk.services.ses.model.Template.builder()
+                            .templateName(name)
+                            .subjectPart("Hello {{name}}")
+                            .textPart("Hi {{name}}, team {{team}}!")
+                            .build())
+                    .build());
+
+            SendBulkTemplatedEmailResponse response = sesV1.sendBulkTemplatedEmail(
+                    SendBulkTemplatedEmailRequest.builder()
+                            .source(v1Sender)
+                            .template(name)
+                            .defaultTemplateData("{\"team\":\"floci\"}")
+                            .destinations(
+                                    BulkEmailDestination.builder()
+                                            .destination(d -> d.toAddresses("alice@example.com"))
+                                            .replacementTemplateData("{\"name\":\"Alice\"}")
+                                            .build(),
+                                    BulkEmailDestination.builder()
+                                            .destination(d -> d.toAddresses("bob@example.com"))
+                                            .replacementTemplateData(
+                                                    "{\"name\":\"Bob\",\"team\":\"override\"}")
+                                            .build())
+                            .build());
+
+            assertThat(response.status()).hasSize(2);
+            assertThat(response.status().get(0).statusAsString()).isEqualTo("Success");
+            assertThat(response.status().get(0).messageId()).isNotBlank();
+            assertThat(response.status().get(1).statusAsString()).isEqualTo("Success");
+            assertThat(response.status().get(1).messageId()).isNotBlank();
+            assertThat(response.status().get(0).messageId())
+                    .isNotEqualTo(response.status().get(1).messageId());
+        } finally {
+            safelyDeleteV1Template(name);
+        }
+    }
+
+    @Test
+    @Order(36)
+    void v1SendBulkTemplatedEmailWithUnknownTemplateRaises() {
+        assertThatThrownBy(() -> sesV1.sendBulkTemplatedEmail(SendBulkTemplatedEmailRequest.builder()
+                .source(v1Sender)
+                .template("sdk-v1-bulk-missing-" + System.currentTimeMillis())
+                .destinations(BulkEmailDestination.builder()
+                        .destination(d -> d.toAddresses("alice@example.com"))
+                        .build())
+                .build()))
+                .isInstanceOf(AwsServiceException.class)
+                .extracting(e -> ((AwsServiceException) e).statusCode())
+                .isEqualTo(400);
     }
 
     // ─────────────────────────────── Helpers ───────────────────────────────

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.codedeploy.model.Application;
+import io.github.hectorvent.floci.services.codedeploy.model.Deployment;
 import io.github.hectorvent.floci.services.codedeploy.model.DeploymentConfig;
 import io.github.hectorvent.floci.services.codedeploy.model.DeploymentGroup;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -48,6 +49,15 @@ public class CodeDeployJsonHandler {
             case "TagResource" -> tagResource(request);
             case "UntagResource" -> untagResource(request);
             case "ListTagsForResource" -> listTagsForResource(request);
+            case "CreateDeployment" -> createDeployment(request, region);
+            case "GetDeployment" -> getDeployment(request, region);
+            case "ListDeployments" -> listDeployments(request, region);
+            case "StopDeployment" -> stopDeployment(request, region);
+            case "ContinueDeployment" -> Response.ok(Map.of()).build();
+            case "BatchGetDeployments" -> batchGetDeployments(request, region);
+            case "ListDeploymentTargets" -> listDeploymentTargets(request, region);
+            case "BatchGetDeploymentTargets" -> batchGetDeploymentTargets(request, region);
+            case "PutLifecycleEventHookExecutionStatus" -> putLifecycleEventHookExecutionStatus(request);
             case "AddTagsToOnPremisesInstances", "RemoveTagsFromOnPremisesInstances" ->
                     Response.ok(Map.of()).build();
             default -> throw new AwsException("InvalidAction", "Action " + action + " is not supported", 400);
@@ -194,6 +204,67 @@ public class CodeDeployJsonHandler {
         String arn = req.path("ResourceArn").asText(null);
         List<Map<String, String>> tags = service.listTagsForResource(arn);
         return Response.ok(Map.of("Tags", tags)).build();
+    }
+
+    private Response createDeployment(JsonNode req, String region) throws Exception {
+        String appName = req.path("applicationName").asText(null);
+        String groupName = req.path("deploymentGroupName").asText(null);
+        String configName = req.has("deploymentConfigName") ? req.path("deploymentConfigName").asText() : null;
+        String description = req.has("description") ? req.path("description").asText() : null;
+        Map<String, Object> revision = req.has("revision")
+                ? mapper.treeToValue(req.get("revision"), Map.class) : null;
+        String deploymentId = service.createDeployment(region, appName, groupName, configName, revision, description);
+        return Response.ok(Map.of("deploymentId", deploymentId)).build();
+    }
+
+    private Response getDeployment(JsonNode req, String region) {
+        String id = req.path("deploymentId").asText(null);
+        Deployment d = service.getDeployment(region, id);
+        return Response.ok(Map.of("deploymentInfo", d)).build();
+    }
+
+    private Response listDeployments(JsonNode req, String region) {
+        String appName = req.has("applicationName") ? req.path("applicationName").asText() : null;
+        String groupName = req.has("deploymentGroupName") ? req.path("deploymentGroupName").asText() : null;
+        List<String> statuses = new ArrayList<>();
+        req.path("includeOnlyStatuses").forEach(n -> statuses.add(n.asText()));
+        List<String> ids = service.listDeployments(region, appName, groupName, statuses);
+        return Response.ok(Map.of("deployments", ids)).build();
+    }
+
+    private Response stopDeployment(JsonNode req, String region) {
+        String id = req.path("deploymentId").asText(null);
+        Map<String, String> result = service.stopDeployment(region, id);
+        return Response.ok(result).build();
+    }
+
+    private Response batchGetDeployments(JsonNode req, String region) {
+        List<String> ids = new ArrayList<>();
+        req.path("deploymentIds").forEach(n -> ids.add(n.asText()));
+        List<Deployment> deploymentList = service.batchGetDeployments(region, ids);
+        return Response.ok(Map.of("deploymentsInfo", deploymentList)).build();
+    }
+
+    private Response listDeploymentTargets(JsonNode req, String region) {
+        String deploymentId = req.path("deploymentId").asText(null);
+        List<String> targetIds = service.listDeploymentTargets(region, deploymentId);
+        return Response.ok(Map.of("targetIds", targetIds)).build();
+    }
+
+    private Response batchGetDeploymentTargets(JsonNode req, String region) {
+        String deploymentId = req.path("deploymentId").asText(null);
+        List<String> targetIds = new ArrayList<>();
+        req.path("targetIds").forEach(n -> targetIds.add(n.asText()));
+        List<Map<String, Object>> targets = service.batchGetDeploymentTargets(region, deploymentId, targetIds);
+        return Response.ok(Map.of("deploymentTargets", targets)).build();
+    }
+
+    private Response putLifecycleEventHookExecutionStatus(JsonNode req) {
+        String deploymentId = req.path("deploymentId").asText(null);
+        String executionId = req.path("lifecycleEventHookExecutionId").asText(null);
+        String status = req.path("status").asText("Succeeded");
+        String id = service.putLifecycleEventHookExecutionStatus(deploymentId, executionId, status);
+        return Response.ok(Map.of("lifecycleEventHookExecutionId", id)).build();
     }
 
     @SuppressWarnings("unchecked")

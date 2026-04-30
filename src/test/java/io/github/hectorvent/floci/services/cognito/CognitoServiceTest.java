@@ -37,7 +37,8 @@ class CognitoServiceTest {
                 new InMemoryStorage<>(),
                 groupStore,
                 "http://localhost:4566",
-                regionResolver
+                regionResolver,
+                null
         );
     }
 
@@ -986,5 +987,213 @@ class CognitoServiceTest {
 
         assertThrows(AwsException.class, () ->
                 service.adminEnableUser(pool.getId(), "ghost"));
+    }
+
+    // =========================================================================
+    // CUSTOM_AUTH flow (no Lambda triggers — falls back to deterministic stub)
+    // =========================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void customAuthInitiateReturnsCustomChallenge() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "CUSTOM_AUTH",
+                Map.of("USERNAME", "alice", "CHALLENGE_NAME", "SRP_A"));
+
+        assertEquals("CUSTOM_CHALLENGE", result.get("ChallengeName"));
+        assertNotNull(result.get("Session"));
+        Map<String, String> params = (Map<String, String>) result.get("ChallengeParameters");
+        assertEquals("alice", params.get("USERNAME"));
+        assertEquals("SRP_A", params.get("CHALLENGE_NAME"),
+                "InitiateAuth-supplied metadata should pass through to ChallengeParameters");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void customAuthAcceptsAnyAnswerWhenNoExpectedAttribute() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        Map<String, Object> initResult = service.initiateAuth(client.getClientId(), "CUSTOM_AUTH",
+                Map.of("USERNAME", "alice"));
+        String session = (String) initResult.get("Session");
+
+        Map<String, Object> tokenResult = service.respondToAuthChallenge(
+                client.getClientId(), "CUSTOM_CHALLENGE", session,
+                Map.of("USERNAME", "alice", "ANSWER", "any-non-empty-answer"));
+
+        Map<String, Object> auth = (Map<String, Object>) tokenResult.get("AuthenticationResult");
+        assertNotNull(auth, "AuthenticationResult should be present after correct answer");
+        assertNotNull(auth.get("AccessToken"));
+        assertNotNull(auth.get("RefreshToken"));
+    }
+
+    @Test
+    void customAuthRejectsWhenAnswerDoesNotMatchExpectedAttribute() {
+        UserPool pool = createPoolAndUser();
+        // Stamp an expected answer attribute on the user
+        service.adminUpdateUserAttributes(pool.getId(), "alice",
+                Map.of("custom:expectedAuthAnswer", "secret-otp"));
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        Map<String, Object> initResult = service.initiateAuth(client.getClientId(), "CUSTOM_AUTH",
+                Map.of("USERNAME", "alice"));
+        String session = (String) initResult.get("Session");
+
+        // First wrong attempt — flow should request another challenge, not fail outright
+        Map<String, Object> retryResult = service.respondToAuthChallenge(
+                client.getClientId(), "CUSTOM_CHALLENGE", session,
+                Map.of("USERNAME", "alice", "ANSWER", "wrong"));
+        assertEquals("CUSTOM_CHALLENGE", retryResult.get("ChallengeName"));
+        String session2 = (String) retryResult.get("Session");
+
+        // Eventually correct answer issues tokens
+        @SuppressWarnings("unchecked")
+        Map<String, Object> tokenResult = service.respondToAuthChallenge(
+                client.getClientId(), "CUSTOM_CHALLENGE", session2,
+                Map.of("USERNAME", "alice", "ANSWER", "secret-otp"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> auth = (Map<String, Object>) tokenResult.get("AuthenticationResult");
+        assertNotNull(auth);
+        assertNotNull(auth.get("AccessToken"));
+    }
+
+    @Test
+    void customAuthRequiresNonEmptyAnswer() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+        Map<String, Object> initResult = service.initiateAuth(client.getClientId(), "CUSTOM_AUTH",
+                Map.of("USERNAME", "alice"));
+        String session = (String) initResult.get("Session");
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.respondToAuthChallenge(client.getClientId(), "CUSTOM_CHALLENGE", session,
+                        Map.of("USERNAME", "alice", "ANSWER", "")));
+        assertEquals("InvalidParameterException", ex.getErrorCode());
+    }
+
+    @Test
+    void customChallengeWithUnknownSessionThrows() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.respondToAuthChallenge(client.getClientId(), "CUSTOM_CHALLENGE",
+                        "not-a-real-session", Map.of("USERNAME", "alice", "ANSWER", "x")));
+        assertEquals("NotAuthorizedException", ex.getErrorCode());
+    }
+
+    // =========================================================================
+    // NEW_PASSWORD_REQUIRED — challenge response shape + userAttributes updates
+    // =========================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void newPasswordRequiredChallengeReturnsUserAttributesJson() {
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
+        service.adminCreateUser(pool.getId(), "carol",
+                Map.of("email", "carol@example.com", "given_name", "Carol"), "TempPass1!");
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "carol", "PASSWORD", "TempPass1!"));
+
+        assertEquals("NEW_PASSWORD_REQUIRED", result.get("ChallengeName"));
+        Map<String, String> params = (Map<String, String>) result.get("ChallengeParameters");
+        String userAttrsJson = params.get("userAttributes");
+        assertNotNull(userAttrsJson);
+        assertTrue(userAttrsJson.contains("\"email\":\"carol@example.com\""),
+                "userAttributes JSON should include user's email; was: " + userAttrsJson);
+        assertTrue(userAttrsJson.contains("\"given_name\":\"Carol\""),
+                "userAttributes JSON should include given_name; was: " + userAttrsJson);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void newPasswordRequiredAppliesUserAttributeUpdates() {
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
+        service.adminCreateUser(pool.getId(), "carol", Map.of("email", "carol@example.com"), "TempPass1!");
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", false, false, List.of(), List.of());
+
+        Map<String, Object> challengeResp = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "carol", "PASSWORD", "TempPass1!"));
+        String session = (String) challengeResp.get("Session");
+
+        Map<String, String> responses = new HashMap<>();
+        responses.put("USERNAME", "carol");
+        responses.put("NEW_PASSWORD", "Permanent99!");
+        responses.put("userAttributes.given_name", "Carolyn");
+        responses.put("userAttributes.family_name", "Smith");
+
+        Map<String, Object> tokens = service.respondToAuthChallenge(
+                client.getClientId(), "NEW_PASSWORD_REQUIRED", session, responses);
+        assertNotNull(((Map<String, Object>) tokens.get("AuthenticationResult")).get("AccessToken"));
+
+        CognitoUser user = service.adminGetUser(pool.getId(), "carol");
+        assertEquals("Carolyn", user.getAttributes().get("given_name"));
+        assertEquals("Smith", user.getAttributes().get("family_name"));
+        assertEquals("CONFIRMED", user.getUserStatus());
+    }
+
+    // =========================================================================
+    // SECRET_HASH validation
+    // =========================================================================
+
+    @Test
+    void initiateAuthRejectsMissingSecretHashWhenClientHasSecret() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", true, false, List.of(), List.of());
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                        Map.of("USERNAME", "alice", "PASSWORD", "Perm1234!")));
+        assertEquals("InvalidParameterException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("SECRET_HASH"));
+    }
+
+    @Test
+    void initiateAuthRejectsWrongSecretHash() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", true, false, List.of(), List.of());
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                        Map.of("USERNAME", "alice",
+                                "PASSWORD", "Perm1234!",
+                                "SECRET_HASH", "wrong-hash")));
+        assertEquals("NotAuthorizedException", ex.getErrorCode());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void initiateAuthAcceptsCorrectSecretHash() throws Exception {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "c", true, false, List.of(), List.of());
+
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(
+                client.getClientSecret().getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        String secretHash = Base64.getEncoder().encodeToString(
+                mac.doFinal(("alice" + client.getClientId()).getBytes(StandardCharsets.UTF_8)));
+
+        Map<String, Object> result = service.initiateAuth(client.getClientId(), "USER_PASSWORD_AUTH",
+                Map.of("USERNAME", "alice",
+                        "PASSWORD", "Perm1234!",
+                        "SECRET_HASH", secretHash));
+        Map<String, Object> auth = (Map<String, Object>) result.get("AuthenticationResult");
+        assertNotNull(auth);
+        assertNotNull(auth.get("AccessToken"));
     }
 }

@@ -3,6 +3,9 @@
 
 ### Features
 
+* **cloudformation:** support `AWS::Lambda::EventSourceMapping` resource type — provisions and deletes ESMs backed by SQS, Kinesis, or DynamoDB Streams as part of a stack ([#593](https://github.com/floci-io/floci/issues/593))
+* **dynamodb:** implement `ExportTableToPointInTime`, `DescribeExport`, and `ListExports` — exports run asynchronously and write gzip NDJSON data files plus manifests to S3 in the standard AWS layout ([#612](https://github.com/floci-io/floci/issues/612))
+* **iam:** seed 23 additional AWS managed execution-role policies (`AWSLambdaKinesisExecutionRole`, `AWSLambdaSQSQueueExecutionRole`, `AWSLambdaVPCAccessExecutionRole`, `AmazonECSTaskExecutionRolePolicy`, and others) with correct ARN path components ([#614](https://github.com/floci-io/floci/issues/614))
 * **athena:** real SQL execution via `floci-duck` DuckDB sidecar — queries run against actual S3 data; Glue tables are auto-registered as DuckDB views at query time
 * **athena:** lazy sidecar lifecycle — `floci/floci-duck:latest` container is started on first query and reused for subsequent executions; `FLOCI_SERVICES_ATHENA_DUCK_URL` bypasses container management
 * **athena:** `mock` mode (`FLOCI_SERVICES_ATHENA_MOCK=true`) keeps the previous behavior for unit tests that only verify the state machine

@@ -69,8 +69,8 @@
 | ECS (clusters, services, tasks) | ✅ | ❌ |
 | EKS (clusters, mock + real k3s) | ✅ | ❌ |
 | EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
-| CodeBuild (projects, report groups, credentials) | ✅ | ❌ |
-| CodeDeploy (applications, groups, configs + 17 built-ins) | ✅ | ❌ |
+| CodeBuild (real Docker build execution, S3 artifacts, CloudWatch logs) | ✅ | ❌ |
+| CodeDeploy (Lambda traffic shifting, lifecycle hooks, auto-rollback) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
 **Broad AWS coverage. Free forever.**
@@ -214,8 +214,8 @@ All default images are configurable via environment variables, useful for pinnin
 | **Bedrock Runtime** | In-process (stub) | Dummy Converse and InvokeModel responses for local development; streaming returns 501 |
 | **EKS** | **Real Docker containers** (mock mode available) | Clusters, tagging; real mode starts k3s per cluster with a live Kubernetes API server |
 | **ELB v2** | In-process | Application and Network Load Balancers, target groups, listeners, path/host-based routing rules, tags |
-| **CodeBuild** | In-process | Projects, report groups, source credentials, curated environment images |
-| **CodeDeploy** | In-process | Applications, deployment groups, deployment configs; 17 AWS built-in `CodeDeployDefault.*` configs pre-seeded |
+| **CodeBuild** | In-process + **real Docker containers** | Projects, report groups, source credentials; `StartBuild` runs real Docker containers, streams logs to CloudWatch, uploads artifacts to S3 via `docker cp` (works in Docker-in-Docker) |
+| **CodeDeploy** | In-process + **Lambda traffic shifting** | Applications, deployment groups, deployment configs; 17 `CodeDeployDefault.*` built-ins pre-seeded; `CreateDeployment` shifts Lambda alias `RoutingConfig` weights, invokes lifecycle hooks, auto-rolls back on failure |
 
 > **Lambda, ElastiCache, RDS, MSK, ECS, EKS, and OpenSearch** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >

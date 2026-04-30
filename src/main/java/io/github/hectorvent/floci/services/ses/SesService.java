@@ -3,12 +3,15 @@ package io.github.hectorvent.floci.services.ses;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntry;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntryResult;
 import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import io.github.hectorvent.floci.services.ses.model.SentEmail;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -29,6 +32,9 @@ public class SesService {
     private static final Logger LOG = Logger.getLogger(SesService.class);
 
     private static final Pattern TEMPLATE_VARIABLE = Pattern.compile("\\{\\{\\s*([\\w-]+)\\s*\\}\\}");
+
+    private static final int MAX_BULK_DESTINATIONS = 50;
+    private static final int MAX_RECIPIENTS_PER_DESTINATION = 50;
 
     private final StorageBackend<String, Identity> identityStore;
     private final StorageBackend<String, SentEmail> emailStore;
@@ -426,6 +432,98 @@ public class SesService {
                 applyTemplateData(textPart, templateData),
                 applyTemplateData(htmlPart, templateData),
                 region);
+    }
+
+    public List<BulkEmailEntryResult> sendBulkTemplatedEmail(String source,
+                                                              List<String> replyToAddresses,
+                                                              String subject, String textPart, String htmlPart,
+                                                              JsonNode defaultTemplateData,
+                                                              List<BulkEmailEntry> entries,
+                                                              String region) {
+        if (source == null || source.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "Source email is required.", 400);
+        }
+        boolean hasSubject = subject != null && !subject.isBlank();
+        boolean hasText = textPart != null && !textPart.isBlank();
+        boolean hasHtml = htmlPart != null && !htmlPart.isBlank();
+        if (!hasSubject && !hasText && !hasHtml) {
+            throw new AwsException("InvalidTemplate",
+                    "Template must have at least a subject, text, or html part.", 400);
+        }
+        if (entries == null || entries.isEmpty()) {
+            throw new AwsException("InvalidParameterValue",
+                    "At least one destination entry is required.", 400);
+        }
+        if (entries.size() > MAX_BULK_DESTINATIONS) {
+            throw new AwsException("MessageRejected",
+                    "Number of destinations (" + entries.size() + ") exceeds the maximum of "
+                            + MAX_BULK_DESTINATIONS + ".", 400);
+        }
+        for (BulkEmailEntry entry : entries) {
+            int recipientCount = sizeOf(entry.toAddresses())
+                    + sizeOf(entry.ccAddresses())
+                    + sizeOf(entry.bccAddresses());
+            if (recipientCount > MAX_RECIPIENTS_PER_DESTINATION) {
+                throw new AwsException("MessageRejected",
+                        "Recipient count (" + recipientCount + ") in a destination exceeds the maximum of "
+                                + MAX_RECIPIENTS_PER_DESTINATION + ".", 400);
+            }
+        }
+
+        List<BulkEmailEntryResult> results = new ArrayList<>(entries.size());
+        for (BulkEmailEntry entry : entries) {
+            try {
+                JsonNode merged = mergeTemplateData(defaultTemplateData, entry.replacementTemplateData());
+                String messageId = sendEmail(source,
+                        entry.toAddresses(), entry.ccAddresses(), entry.bccAddresses(),
+                        replyToAddresses,
+                        applyTemplateData(subject, merged),
+                        applyTemplateData(textPart, merged),
+                        applyTemplateData(htmlPart, merged),
+                        region);
+                results.add(BulkEmailEntryResult.success(messageId));
+            } catch (AwsException e) {
+                results.add(BulkEmailEntryResult.failure(
+                        mapErrorCodeToBulkStatus(e.getErrorCode()), e.getMessage()));
+            } catch (Exception e) {
+                results.add(BulkEmailEntryResult.failure(BulkEmailEntryResult.Status.FAILED, e.getMessage()));
+            }
+        }
+        return results;
+    }
+
+    private static int sizeOf(List<?> list) {
+        return list == null ? 0 : list.size();
+    }
+
+    static BulkEmailEntryResult.Status mapErrorCodeToBulkStatus(String errorCode) {
+        if ("InvalidParameterValue".equals(errorCode)) {
+            return BulkEmailEntryResult.Status.INVALID_PARAMETER;
+        }
+        return BulkEmailEntryResult.Status.FAILED;
+    }
+
+    static JsonNode mergeTemplateData(JsonNode defaults, JsonNode replacement) {
+        boolean hasDefault = defaults != null && defaults.isObject();
+        boolean hasReplacement = replacement != null && replacement.isObject();
+        if (!hasDefault && !hasReplacement) {
+            return null;
+        }
+        if (!hasReplacement) {
+            return defaults;
+        }
+        if (!hasDefault) {
+            return replacement;
+        }
+        if (replacement.isEmpty()) {
+            return defaults;
+        }
+        if (defaults.isEmpty()) {
+            return replacement;
+        }
+        ObjectNode merged = ((ObjectNode) defaults).deepCopy();
+        replacement.fields().forEachRemaining(e -> merged.set(e.getKey(), e.getValue()));
+        return merged;
     }
 
     static String applyTemplateData(String text, JsonNode data) {

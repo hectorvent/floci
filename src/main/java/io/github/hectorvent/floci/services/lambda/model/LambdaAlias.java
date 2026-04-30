@@ -3,6 +3,8 @@ package io.github.hectorvent.floci.services.lambda.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
+import java.util.Map;
+
 @RegisterForReflection
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LambdaAlias {
@@ -16,6 +18,7 @@ public class LambdaAlias {
     private long lastModifiedDate;
     private String revisionId;
     private LambdaUrlConfig urlConfig;
+    private Map<String, Double> routingConfig;
 
     public LambdaAlias() {}
 
@@ -45,4 +48,7 @@ public class LambdaAlias {
 
     public LambdaUrlConfig getUrlConfig() { return urlConfig; }
     public void setUrlConfig(LambdaUrlConfig urlConfig) { this.urlConfig = urlConfig; }
+
+    public Map<String, Double> getRoutingConfig() { return routingConfig; }
+    public void setRoutingConfig(Map<String, Double> routingConfig) { this.routingConfig = routingConfig; }
 }

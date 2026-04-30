@@ -37,7 +37,8 @@ class CognitoJsonHandlerTest {
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 "http://localhost:4566",
-                regionResolver
+                regionResolver,
+                null
         );
         handler = new CognitoJsonHandler(service, mapper);
     }

@@ -151,5 +151,6 @@ floci:
       enabled: true
     codebuild:
       enabled: true
+      # docker-network: floci-network
     codedeploy:
       enabled: true

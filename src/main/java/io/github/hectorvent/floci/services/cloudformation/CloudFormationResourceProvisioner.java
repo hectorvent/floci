@@ -136,6 +136,8 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::ApiGatewayV2::Stage" -> provisionApiGatewayV2Stage(resource, properties, engine, region);
                 case "AWS::ApiGatewayV2::Deployment" -> provisionApiGatewayV2Deployment(resource, properties, engine, region);
                 case "AWS::Pipes::Pipe" -> provisionPipe(resource, properties, engine, region, stackName);
+                case "AWS::Lambda::EventSourceMapping" ->
+                        provisionLambdaEventSourceMapping(resource, properties, engine, region);
                 default -> {
                     LOG.debugv("Stubbing unsupported resource type: {0} ({1})", resourceType, logicalId);
                     resource.setPhysicalId(logicalId + "-" + UUID.randomUUID().toString().substring(0, 8));
@@ -174,6 +176,7 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::ECR::Repository" ->
                         ecrService.deleteRepository(physicalId, null, true, "us-east-1");
                 case "AWS::Pipes::Pipe" -> pipesService.deletePipe(physicalId, region);
+                case "AWS::Lambda::EventSourceMapping" -> lambdaService.deleteEventSourceMapping(physicalId);
                 default -> LOG.debugv("Skipping delete of unsupported resource type: {0}", resourceType);
             }
         } catch (Exception e) {
@@ -737,6 +740,29 @@ public class CloudFormationResourceProvisioner {
         } catch (Exception e) {
             LOG.debugv("Could not delete EventBridge rule {0}: {1}", ruleName, e.getMessage());
         }
+    }
+
+    // ── Lambda EventSourceMapping ─────────────────────────────────────────────
+
+    private void provisionLambdaEventSourceMapping(StackResource r, JsonNode props,
+                                                   CloudFormationTemplateEngine engine, String region) {
+        Map<String, Object> req = new HashMap<>();
+        req.put("FunctionName", resolveOptional(props, "FunctionName", engine));
+        req.put("EventSourceArn", resolveOptional(props, "EventSourceArn", engine));
+
+        String enabledStr = resolveOptional(props, "Enabled", engine);
+        if (enabledStr != null) {
+            req.put("Enabled", Boolean.parseBoolean(enabledStr));
+        }
+
+        String batchSize = resolveOptional(props, "BatchSize", engine);
+        if (batchSize != null) {
+            try { req.put("BatchSize", Integer.parseInt(batchSize)); } catch (NumberFormatException ignored) {}
+        }
+
+        var esm = lambdaService.createEventSourceMapping(region, req);
+        r.setPhysicalId(esm.getUuid());
+        r.getAttributes().put("Id", esm.getUuid());
     }
 
     // ── Pipes ──────────────────────────────────────────────────────────────────

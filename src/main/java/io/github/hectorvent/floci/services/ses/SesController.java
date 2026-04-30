@@ -2,6 +2,8 @@ package io.github.hectorvent.floci.services.ses;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntry;
+import io.github.hectorvent.floci.services.ses.model.BulkEmailEntryResult;
 import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
@@ -271,6 +273,112 @@ public class SesController {
             LOG.infov("SES V2 SendEmail: from={0}, to={1}, messageId={2}",
                     fromEmailAddress, toAddresses, messageId);
             return Response.ok(result).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
+        } catch (Exception e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @POST
+    @Path("/outbound-bulk-emails")
+    public Response sendBulkEmail(@Context HttpHeaders headers, String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            if (!sesService.isAccountSendingEnabled(region)) {
+                throw new AwsException("SendingPausedException",
+                        "Account sending is disabled.", 400);
+            }
+
+            JsonNode request = objectMapper.readTree(body);
+            String fromEmailAddress = request.path("FromEmailAddress").asText(null);
+            if (fromEmailAddress == null || fromEmailAddress.isBlank()) {
+                throw new AwsException("BadRequestException",
+                        "FromEmailAddress is required.", 400);
+            }
+            List<String> replyToAddresses = jsonArrayToList(request.path("ReplyToAddresses"));
+
+            JsonNode template = request.path("DefaultContent").path("Template");
+            if (template.isMissingNode() || template.isNull()) {
+                throw new AwsException("BadRequestException",
+                        "DefaultContent.Template is required.", 400);
+            }
+            String templateName = template.path("TemplateName").asText(null);
+            String templateArn = template.path("TemplateArn").asText(null);
+            boolean hasName = templateName != null && !templateName.isBlank();
+            boolean hasArn = templateArn != null && !templateArn.isBlank();
+            boolean hasInline = template.has("TemplateContent");
+            int selectorCount = (hasName ? 1 : 0) + (hasArn ? 1 : 0) + (hasInline ? 1 : 0);
+            if (selectorCount > 1) {
+                throw new AwsException("BadRequestException",
+                        "DefaultContent.Template must specify exactly one of TemplateName, TemplateArn, or TemplateContent.",
+                        400);
+            }
+            if (selectorCount == 0) {
+                throw new AwsException("BadRequestException",
+                        "DefaultContent.Template requires TemplateName, TemplateArn, or TemplateContent.", 400);
+            }
+
+            String subject;
+            String text;
+            String html;
+            if (hasInline) {
+                JsonNode inline = template.path("TemplateContent");
+                subject = inline.path("Subject").asText(null);
+                text = inline.path("Text").asText(null);
+                html = inline.path("Html").asText(null);
+            } else {
+                String resolvedName = hasName
+                        ? templateName
+                        : SesService.templateNameFromArn(templateArn);
+                EmailTemplate stored = sesService.getTemplate(resolvedName, region);
+                subject = stored.getSubject();
+                text = stored.getTextPart();
+                html = stored.getHtmlPart();
+            }
+
+            JsonNode defaultTemplateData = parseTemplateData(template.path("TemplateData").asText(""));
+
+            JsonNode bulkEntries = request.path("BulkEmailEntries");
+            if (!bulkEntries.isArray() || bulkEntries.isEmpty()) {
+                throw new AwsException("BadRequestException",
+                        "BulkEmailEntries must be a non-empty array.", 400);
+            }
+
+            List<BulkEmailEntry> entries = new ArrayList<>();
+            for (JsonNode node : bulkEntries) {
+                JsonNode dest = node.path("Destination");
+                List<String> to = jsonArrayToList(dest.path("ToAddresses"));
+                List<String> cc = jsonArrayToList(dest.path("CcAddresses"));
+                List<String> bcc = jsonArrayToList(dest.path("BccAddresses"));
+                String replacementRaw = node.path("ReplacementEmailContent")
+                        .path("ReplacementTemplate")
+                        .path("ReplacementTemplateData")
+                        .asText("");
+                entries.add(new BulkEmailEntry(to, cc, bcc, parseTemplateData(replacementRaw)));
+            }
+
+            List<BulkEmailEntryResult> results = sesService.sendBulkTemplatedEmail(fromEmailAddress,
+                    replyToAddresses, subject, text, html,
+                    defaultTemplateData, entries, region);
+
+            ObjectNode response = objectMapper.createObjectNode();
+            ArrayNode arr = response.putArray("BulkEmailEntryResults");
+            for (BulkEmailEntryResult r : results) {
+                ObjectNode item = objectMapper.createObjectNode();
+                item.put("Status", r.getStatus().name());
+                if (r.getMessageId() != null) {
+                    item.put("MessageId", r.getMessageId());
+                }
+                if (r.getError() != null) {
+                    item.put("Error", r.getError());
+                }
+                arr.add(item);
+            }
+
+            LOG.infov("SES V2 SendBulkEmail: from={0}, entries={1}",
+                    fromEmailAddress, entries.size());
+            return Response.ok(response).build();
         } catch (AwsException e) {
             throw remapV1Exception(e);
         } catch (Exception e) {

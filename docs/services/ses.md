@@ -18,6 +18,7 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 | `SendEmail`                         | Send a structured email with text or HTML body            |
 | `SendRawEmail`                      | Send a raw MIME payload                                   |
 | `SendTemplatedEmail`                | Send an email by resolving a stored template             |
+| `SendBulkTemplatedEmail`            | Send a templated email to multiple destinations          |
 | `CreateTemplate`                    | Create an email template with subject / text / html parts |
 | `GetTemplate`                       | Read a stored template                                    |
 | `UpdateTemplate`                    | Replace the content of a stored template                  |
@@ -175,6 +176,7 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `PUT` | `/v2/email/identities/{emailIdentity}/dkim` | `PutEmailIdentityDkimAttributes` |
 | `PUT` | `/v2/email/identities/{emailIdentity}/feedback` | `PutEmailIdentityFeedbackAttributes` |
 | `POST` | `/v2/email/outbound-emails` | `SendEmail` (simple / raw / templated) |
+| `POST` | `/v2/email/outbound-bulk-emails` | `SendBulkEmail` (templated, multiple destinations) |
 | `GET` | `/v2/email/account` | `GetAccount` |
 | `PUT` | `/v2/email/account/sending` | `PutAccountSendingAttributes` |
 | `POST` | `/v2/email/templates` | `CreateEmailTemplate` |
