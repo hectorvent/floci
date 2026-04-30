@@ -1,0 +1,201 @@
+package com.floci.test;
+
+import org.junit.jupiter.api.*;
+import software.amazon.awssdk.services.cloudformation.CloudFormationClient;
+import software.amazon.awssdk.services.cloudformation.model.*;
+import software.amazon.awssdk.services.lambda.LambdaClient;
+import software.amazon.awssdk.services.lambda.model.ListEventSourceMappingsResponse;
+import software.amazon.awssdk.services.sqs.SqsClient;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.*;
+
+/**
+ * Verifies that CloudFormation AWS::Lambda::EventSourceMapping provisions and
+ * deletes an ESM backed by an SQS queue, matching the use-case from issue #593.
+ */
+@DisplayName("CloudFormation AWS::Lambda::EventSourceMapping")
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class CloudFormationEventSourceMappingTest {
+
+    private static final String STACK_NAME = "compat-cfn-esm-stack";
+    private static final String FUNC_NAME  = "compat-cfn-esm-func";
+    private static final String QUEUE_NAME = "compat-cfn-esm-queue";
+    private static final String ROLE       = "arn:aws:iam::000000000000:role/cfn-lambda-role";
+    private static final String ACCOUNT    = "000000000000";
+    private static final String REGION     = "us-east-1";
+
+    private static CloudFormationClient cfn;
+    private static LambdaClient lambda;
+    private static SqsClient sqs;
+
+    private static String esmUuid;
+
+    @BeforeAll
+    static void setup() {
+        cfn    = TestFixtures.cloudFormationClient();
+        lambda = TestFixtures.lambdaClient();
+        sqs    = TestFixtures.sqsClient();
+    }
+
+    @AfterAll
+    static void cleanup() {
+        try {
+            if (cfn != null) {
+                cfn.deleteStack(DeleteStackRequest.builder().stackName(STACK_NAME).build());
+            }
+        } catch (Exception ignored) {}
+        if (cfn    != null) cfn.close();
+        if (lambda != null) lambda.close();
+        if (sqs    != null) sqs.close();
+    }
+
+    @Test
+    @Order(1)
+    @DisplayName("CreateStack with Lambda + SQS + EventSourceMapping reaches CREATE_COMPLETE")
+    void createStack_withEventSourceMapping() throws InterruptedException {
+        String queueArn = "arn:aws:sqs:" + REGION + ":" + ACCOUNT + ":" + QUEUE_NAME;
+
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "%s"
+                  }
+                },
+                "MyFunction": {
+                  "Type": "AWS::Lambda::Function",
+                  "Properties": {
+                    "FunctionName": "%s",
+                    "Runtime": "nodejs20.x",
+                    "Handler": "index.handler",
+                    "Role": "%s",
+                    "Code": {
+                      "ZipFile": "exports.handler = async (e) => ({ statusCode: 200 });"
+                    }
+                  }
+                },
+                "MyESM": {
+                  "Type": "AWS::Lambda::EventSourceMapping",
+                  "Properties": {
+                    "FunctionName": "%s",
+                    "EventSourceArn": { "Fn::GetAtt": ["MyQueue", "Arn"] },
+                    "Enabled": true,
+                    "BatchSize": 5
+                  }
+                }
+              }
+            }
+            """.formatted(QUEUE_NAME, FUNC_NAME, ROLE, FUNC_NAME);
+
+        cfn.createStack(CreateStackRequest.builder()
+                .stackName(STACK_NAME)
+                .templateBody(template)
+                .build());
+
+        String status = waitForTerminal(STACK_NAME, 30);
+        assertThat(status).isEqualTo("CREATE_COMPLETE");
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("ESM resource appears in DescribeStackResources with CREATE_COMPLETE")
+    void esmResourceIsComplete() {
+        List<StackResource> resources = cfn.describeStackResources(
+                DescribeStackResourcesRequest.builder().stackName(STACK_NAME).build()
+        ).stackResources();
+
+        StackResource esmResource = resources.stream()
+                .filter(r -> "AWS::Lambda::EventSourceMapping".equals(r.resourceType()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No EventSourceMapping resource found"));
+
+        assertThat(esmResource.resourceStatusAsString()).isEqualTo("CREATE_COMPLETE");
+        assertThat(esmResource.physicalResourceId()).isNotBlank();
+
+        esmUuid = esmResource.physicalResourceId();
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("ListEventSourceMappings returns ESM linked to the Lambda function")
+    void esmAppearsInLambdaList() {
+        ListEventSourceMappingsResponse resp = lambda.listEventSourceMappings(
+                r -> r.functionName(FUNC_NAME));
+
+        assertThat(resp.eventSourceMappings()).isNotEmpty();
+
+        boolean found = resp.eventSourceMappings().stream()
+                .anyMatch(e -> e.functionArn().contains(FUNC_NAME)
+                        && e.eventSourceArn().contains(QUEUE_NAME));
+        assertThat(found).as("ESM for queue %s not found in listing", QUEUE_NAME).isTrue();
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("GetEventSourceMapping by UUID matches the created ESM")
+    void getEventSourceMappingByUuid() {
+        assertThat(esmUuid).as("ESM UUID must have been captured in earlier test").isNotNull();
+
+        var esm = lambda.getEventSourceMapping(r -> r.uuid(esmUuid));
+        assertThat(esm.uuid()).isEqualTo(esmUuid);
+        assertThat(esm.functionArn()).contains(FUNC_NAME);
+        assertThat(esm.eventSourceArn()).contains(QUEUE_NAME);
+        assertThat(esm.batchSize()).isEqualTo(5);
+        assertThat(esm.state()).isIn("Enabled", "Enabling");
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("DeleteStack removes the ESM")
+    void deleteStack_removesEsm() throws InterruptedException {
+        assertThat(esmUuid).as("ESM UUID must have been captured in earlier test").isNotNull();
+
+        cfn.deleteStack(DeleteStackRequest.builder().stackName(STACK_NAME).build());
+        waitForDeleted(STACK_NAME, 30);
+
+        assertThatThrownBy(() -> lambda.getEventSourceMapping(r -> r.uuid(esmUuid)))
+                .isInstanceOf(software.amazon.awssdk.services.lambda.model.ResourceNotFoundException.class);
+    }
+
+    private String waitForTerminal(String stackName, int maxSeconds) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + maxSeconds * 1000L;
+        while (System.currentTimeMillis() < deadline) {
+            List<Stack> stacks = cfn.describeStacks(
+                    DescribeStacksRequest.builder().stackName(stackName).build()
+            ).stacks();
+            if (!stacks.isEmpty()) {
+                String status = stacks.get(0).stackStatusAsString();
+                if (!status.endsWith("_IN_PROGRESS")) {
+                    return status;
+                }
+            }
+            Thread.sleep(500);
+        }
+        throw new AssertionError("Stack " + stackName + " did not reach terminal state within " + maxSeconds + "s");
+    }
+
+    private void waitForDeleted(String stackName, int maxSeconds) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + maxSeconds * 1000L;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                List<Stack> stacks = cfn.describeStacks(
+                        DescribeStacksRequest.builder().stackName(stackName).build()
+                ).stacks();
+                if (stacks.isEmpty() || "DELETE_COMPLETE".equals(stacks.get(0).stackStatusAsString())) {
+                    return;
+                }
+            } catch (CloudFormationException e) {
+                if (e.getMessage() != null && e.getMessage().contains("does not exist")) {
+                    return;
+                }
+                throw e;
+            }
+            Thread.sleep(500);
+        }
+        throw new AssertionError("Stack " + stackName + " was not deleted within " + maxSeconds + "s");
+    }
+}

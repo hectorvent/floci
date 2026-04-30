@@ -2390,4 +2390,126 @@ class CloudFormationIntegrationTest {
         .then()
             .statusCode(200);
     }
+
+    @Test
+    void createStack_lambdaEventSourceMapping() throws Exception {
+        String stackName = "cfn-esm-stack";
+        String funcName = "cfn-esm-func";
+        String queueName = "cfn-esm-queue";
+
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "%s"
+                  }
+                },
+                "MyFunction": {
+                  "Type": "AWS::Lambda::Function",
+                  "Properties": {
+                    "FunctionName": "%s",
+                    "Runtime": "nodejs20.x",
+                    "Handler": "index.handler",
+                    "Role": "arn:aws:iam::000000000000:role/lambda-role",
+                    "Code": {
+                      "ZipFile": "exports.handler = async (e) => ({ statusCode: 200 });"
+                    }
+                  }
+                },
+                "MyESM": {
+                  "Type": "AWS::Lambda::EventSourceMapping",
+                  "Properties": {
+                    "FunctionName": { "Ref": "MyFunction" },
+                    "EventSourceArn": { "Fn::GetAtt": ["MyQueue", "Arn"] },
+                    "Enabled": true,
+                    "BatchSize": 5
+                  }
+                }
+              }
+            }
+            """.formatted(queueName, funcName);
+
+        // 1. Create stack
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", stackName)
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // 2. Stack must reach CREATE_COMPLETE
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        // 3. ESM resource must be present with CREATE_COMPLETE
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("AWS::Lambda::EventSourceMapping"))
+            .body(containsString("CREATE_COMPLETE"));
+
+        // 4. Lambda list-event-source-mappings must return our ESM; extract UUID from JSON
+        String esmJson = given()
+        .when()
+            .get("/2015-03-31/event-source-mappings?FunctionName=" + funcName)
+        .then()
+            .statusCode(200)
+            .body(containsString(funcName))
+            .extract().body().asString();
+
+        JsonNode esmList = OBJECT_MAPPER.readTree(esmJson);
+        String esmUuid = esmList.path("EventSourceMappings").get(0).path("UUID").asText();
+
+        // 5. Delete stack and verify ESM is gone
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DeleteStack")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Wait for async stack deletion to complete
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline) {
+            String deleteStatus = given()
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "DescribeStacks")
+                .formParam("StackName", stackName)
+            .when()
+                .post("/")
+            .then()
+                .extract().body().asString();
+            if (deleteStatus.contains("DELETE_COMPLETE") || deleteStatus.contains("does not exist")) {
+                break;
+            }
+            Thread.sleep(200);
+        }
+
+        given()
+        .when()
+            .get("/2015-03-31/event-source-mappings/" + esmUuid)
+        .then()
+            .statusCode(404);
+    }
+
 }
