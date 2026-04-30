@@ -195,6 +195,10 @@ public class LambdaController {
 
     // ──────────────────────────── Invoke ────────────────────────────
 
+    private static final int SYNC_REQUEST_LIMIT  = 6 * 1024 * 1024;
+    private static final int ASYNC_REQUEST_LIMIT = 1 * 1024 * 1024;
+    private static final int SYNC_RESPONSE_LIMIT = 6 * 1024 * 1024;
+
     @POST
     @Path("/functions/{functionName}/invocations")
     @Consumes(MediaType.WILDCARD)
@@ -205,7 +209,30 @@ public class LambdaController {
         String invocationTypeHeader = headers.getHeaderString("X-Amz-Invocation-Type");
         InvocationType type = InvocationType.parse(invocationTypeHeader);
 
+        int payloadSize = payload != null ? payload.length : 0;
+        if (type == InvocationType.Event && payloadSize > ASYNC_REQUEST_LIMIT) {
+            return Response.status(413)
+                    .type(MediaType.APPLICATION_JSON)
+                    .entity("{\"__type\":\"RequestTooLargeException\",\"message\":\"The request payload exceeded the Invoke request body JSON input quota.\"}")
+                    .build();
+        }
+        if (type != InvocationType.Event && payloadSize > SYNC_REQUEST_LIMIT) {
+            return Response.status(413)
+                    .type(MediaType.APPLICATION_JSON)
+                    .entity("{\"__type\":\"RequestTooLargeException\",\"message\":\"The request payload exceeded the Invoke request body JSON input quota.\"}")
+                    .build();
+        }
+
         InvokeResult result = lambdaService.invoke(region, functionName, payload, type);
+
+        if (type != InvocationType.Event
+                && result.getPayload() != null
+                && result.getPayload().length > SYNC_RESPONSE_LIMIT) {
+            return Response.status(413)
+                    .type(MediaType.APPLICATION_JSON)
+                    .entity("{\"__type\":\"RequestTooLargeException\",\"message\":\"The response payload exceeded the maximum allowed payload size (6 MB).\"}")
+                    .build();
+        }
 
         Response.ResponseBuilder builder = Response.status(result.getStatusCode());
 
