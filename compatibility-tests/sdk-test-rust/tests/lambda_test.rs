@@ -1,6 +1,6 @@
 mod common;
 
-use aws_sdk_lambda::types::Runtime;
+use aws_sdk_lambda::types::{ImageConfig, PackageType, Runtime};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_lambda_create_function() {
@@ -175,4 +175,75 @@ async fn test_lambda_delete_function() {
 
     let result = lambda.delete_function().function_name(func_name).send().await;
     assert!(result.is_ok(), "DeleteFunction failed: {:?}", result.err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_lambda_image_config_working_directory_round_trip() {
+    let lambda = common::lambda_client().await;
+    let func_name = "rust-test-imgwd-fn";
+    let role_arn = "arn:aws:iam::000000000000:role/test-role";
+    let image_uri = "000000000000.dkr.ecr.us-east-1.amazonaws.com/fake-repo:latest";
+
+    let _guard = common::CleanupGuard::new({
+        let lambda = lambda.clone();
+        async move {
+            let _ = lambda.delete_function().function_name(func_name).send().await;
+        }
+    });
+
+    let create_resp = lambda
+        .create_function()
+        .function_name(func_name)
+        .package_type(PackageType::Image)
+        .role(role_arn)
+        .code(
+            aws_sdk_lambda::types::FunctionCode::builder()
+                .image_uri(image_uri)
+                .build(),
+        )
+        .image_config(
+            ImageConfig::builder()
+                .working_directory("/app")
+                .build(),
+        )
+        .send()
+        .await
+        .expect("CreateFunction with ImageConfig.WorkingDirectory failed");
+
+    let wd = create_resp
+        .image_config_response()
+        .and_then(|r| r.image_config())
+        .and_then(|c| c.working_directory());
+    assert_eq!(wd, Some("/app"), "CreateFunction response must include WorkingDirectory");
+
+    let get_resp = lambda
+        .get_function_configuration()
+        .function_name(func_name)
+        .send()
+        .await
+        .expect("GetFunctionConfiguration failed");
+
+    let wd = get_resp
+        .image_config_response()
+        .and_then(|r| r.image_config())
+        .and_then(|c| c.working_directory());
+    assert_eq!(wd, Some("/app"), "GetFunctionConfiguration must persist WorkingDirectory");
+
+    let update_resp = lambda
+        .update_function_configuration()
+        .function_name(func_name)
+        .image_config(
+            ImageConfig::builder()
+                .working_directory("/updated")
+                .build(),
+        )
+        .send()
+        .await
+        .expect("UpdateFunctionConfiguration failed");
+
+    let wd = update_resp
+        .image_config_response()
+        .and_then(|r| r.image_config())
+        .and_then(|c| c.working_directory());
+    assert_eq!(wd, Some("/updated"), "UpdateFunctionConfiguration must update WorkingDirectory");
 }

@@ -296,6 +296,9 @@ public class LambdaService {
             if (imageConfig.get("EntryPoint") instanceof List<?> ep) {
                 fn.setImageConfigEntryPoint(ep.stream().map(Object::toString).toList());
             }
+            if (imageConfig.get("WorkingDirectory") instanceof String wd) {
+                fn.setImageConfigWorkingDirectory(wd);
+            }
         }
 
         // Handle code deployment
@@ -508,6 +511,10 @@ public class LambdaService {
                     List<String> ep = imageConfig.get("EntryPoint") instanceof List<?>
                             ? ((List<?>) imageConfig.get("EntryPoint")).stream().map(Object::toString).toList() : null;
                     fn.setImageConfigEntryPoint(ep);
+                }
+                if (imageConfig.containsKey("WorkingDirectory")) {
+                    fn.setImageConfigWorkingDirectory(
+                            imageConfig.get("WorkingDirectory") instanceof String wd ? wd : null);
                 }
             }
         }

@@ -97,11 +97,40 @@ class LambdaImageConfigTest {
         }
 
         @Test
+        void storesImageConfigWorkingDirectory() {
+            Map<String, Object> req = imageRequest("fn-wd");
+            req.put("ImageConfig", Map.of("WorkingDirectory", "/app"));
+
+            LambdaFunction fn = service.createFunction(REGION, req);
+
+            assertEquals("/app", fn.getImageConfigWorkingDirectory());
+            assertNull(fn.getImageConfigCommand());
+            assertNull(fn.getImageConfigEntryPoint());
+        }
+
+        @Test
+        void storesAllThreeImageConfigFields() {
+            Map<String, Object> req = imageRequest("fn-all");
+            req.put("ImageConfig", Map.of(
+                    "Command", List.of("app.handler"),
+                    "EntryPoint", List.of("/entry.sh"),
+                    "WorkingDirectory", "/workspace"
+            ));
+
+            LambdaFunction fn = service.createFunction(REGION, req);
+
+            assertEquals(List.of("app.handler"), fn.getImageConfigCommand());
+            assertEquals(List.of("/entry.sh"), fn.getImageConfigEntryPoint());
+            assertEquals("/workspace", fn.getImageConfigWorkingDirectory());
+        }
+
+        @Test
         void noImageConfigLeavesFieldsNull() {
             LambdaFunction fn = service.createFunction(REGION, imageRequest("fn-none"));
 
             assertNull(fn.getImageConfigCommand());
             assertNull(fn.getImageConfigEntryPoint());
+            assertNull(fn.getImageConfigWorkingDirectory());
         }
     }
 
@@ -145,6 +174,32 @@ class LambdaImageConfigTest {
             LambdaFunction fn = service.updateFunctionConfiguration(REGION, "fn-clear-cmd", update);
 
             assertTrue(fn.getImageConfigCommand() == null || fn.getImageConfigCommand().isEmpty());
+        }
+
+        @Test
+        void updatesImageConfigWorkingDirectory() {
+            service.createFunction(REGION, imageRequest("fn-upd-wd"));
+
+            Map<String, Object> update = new HashMap<>();
+            update.put("ImageConfig", Map.of("WorkingDirectory", "/updated"));
+            LambdaFunction fn = service.updateFunctionConfiguration(REGION, "fn-upd-wd", update);
+
+            assertEquals("/updated", fn.getImageConfigWorkingDirectory());
+        }
+
+        @Test
+        void clearsWorkingDirectoryWhenNullValueProvided() {
+            Map<String, Object> req = imageRequest("fn-clear-wd");
+            req.put("ImageConfig", Map.of("WorkingDirectory", "/initial"));
+            service.createFunction(REGION, req);
+
+            Map<String, Object> update = new HashMap<>();
+            Map<String, Object> imageConfig = new HashMap<>();
+            imageConfig.put("WorkingDirectory", null);
+            update.put("ImageConfig", imageConfig);
+            LambdaFunction fn = service.updateFunctionConfiguration(REGION, "fn-clear-wd", update);
+
+            assertNull(fn.getImageConfigWorkingDirectory());
         }
     }
 
@@ -257,6 +312,31 @@ class LambdaImageConfigTest {
             ContainerSpec spec = specCaptor.getValue();
             assertNull(spec.cmd(), "CMD should not be set when ImageConfig.Command is absent");
             assertNull(spec.entrypoint());
+        }
+
+        @Test
+        void usesImageConfigWorkingDirectoryForImageFunction() {
+            LambdaFunction fn = imageFn("img-wd-fn");
+            fn.setImageConfigWorkingDirectory("/app");
+
+            launcher.launch(fn);
+
+            ArgumentCaptor<ContainerSpec> specCaptor = ArgumentCaptor.forClass(ContainerSpec.class);
+            verify(lifecycleManager).create(specCaptor.capture());
+
+            assertEquals("/app", specCaptor.getValue().workingDir());
+        }
+
+        @Test
+        void doesNotSetWorkingDirWhenNotConfigured() {
+            LambdaFunction fn = imageFn("img-no-wd-fn");
+
+            launcher.launch(fn);
+
+            ArgumentCaptor<ContainerSpec> specCaptor = ArgumentCaptor.forClass(ContainerSpec.class);
+            verify(lifecycleManager).create(specCaptor.capture());
+
+            assertNull(specCaptor.getValue().workingDir(), "workingDir must be null when not configured");
         }
 
         @Test

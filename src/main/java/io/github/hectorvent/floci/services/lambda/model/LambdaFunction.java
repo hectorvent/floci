@@ -29,6 +29,7 @@ public class LambdaFunction {
     private String imageUri;
     private List<String> imageConfigCommand;
     private List<String> imageConfigEntryPoint;
+    private String imageConfigWorkingDirectory;
     private String codeLocalPath;
     private String s3Bucket;
     private String s3Key;
@@ -105,6 +106,9 @@ public class LambdaFunction {
 
     public List<String> getImageConfigEntryPoint() { return imageConfigEntryPoint; }
     public void setImageConfigEntryPoint(List<String> imageConfigEntryPoint) { this.imageConfigEntryPoint = imageConfigEntryPoint; }
+
+    public String getImageConfigWorkingDirectory() { return imageConfigWorkingDirectory; }
+    public void setImageConfigWorkingDirectory(String imageConfigWorkingDirectory) { this.imageConfigWorkingDirectory = imageConfigWorkingDirectory; }
 
     public String getCodeLocalPath() { return codeLocalPath; }
     public void setCodeLocalPath(String codeLocalPath) { this.codeLocalPath = codeLocalPath; }
