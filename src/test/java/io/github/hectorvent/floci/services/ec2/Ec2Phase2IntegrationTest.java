@@ -124,13 +124,14 @@ class Ec2Phase2IntegrationTest {
     @Test
     @Order(20)
     void importKeyPairForSsh() {
-        // Minimal RSA public key in OpenSSH format (fake but parseable)
+        // AWS wire format: PublicKeyMaterial must be base64-encoded
         String publicKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAQQDHnLTTbpnrFWkfVt test@test";
+        String encodedKey = Base64.getEncoder().encodeToString(publicKey.getBytes());
 
         given()
             .formParam("Action", "ImportKeyPair")
             .formParam("KeyName", importedKeyName)
-            .formParam("PublicKeyMaterial", publicKey)
+            .formParam("PublicKeyMaterial", encodedKey)
             .header("Authorization", AUTH_HEADER)
         .when()
             .post("/")
