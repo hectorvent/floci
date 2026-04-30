@@ -178,6 +178,17 @@ public final class LambdaUtils {
         return createZip("index.js", code);
     }
 
+    /**
+     * ZIP containing a Node.js handler that returns a payload of {@code bytes} 'x' characters.
+     * Used to test response payload size limit enforcement.
+     */
+    public static byte[] largeResponseZip(int bytes) {
+        String code = """
+                exports.handler = async () => 'x'.repeat(%d);
+                """.formatted(bytes);
+        return createZip("index.js", code);
+    }
+
     private static byte[] createZip(String filename, String content) {
         try {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();

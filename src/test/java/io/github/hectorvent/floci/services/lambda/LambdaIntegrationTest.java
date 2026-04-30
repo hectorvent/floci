@@ -352,4 +352,67 @@ class LambdaIntegrationTest {
         .then()
             .statusCode(204);
     }
+
+    // ──────────────────────────── Invoke payload size limits ────────────────────────────
+
+    @Test
+    @Order(30)
+    void syncInvoke_payloadExceeds6MB_returns413() {
+        byte[] oversized = new byte[6 * 1024 * 1024 + 1];
+
+        given()
+            .contentType("application/octet-stream")
+            .body(oversized)
+        .when()
+            .post(BASE_PATH + "/functions/hello-world/invocations")
+        .then()
+            .statusCode(413)
+            .body("__type", equalTo("RequestTooLargeException"));
+    }
+
+    @Test
+    @Order(31)
+    void syncInvoke_payloadExactly6MB_isNotRejected() {
+        byte[] exactLimit = new byte[6 * 1024 * 1024];
+
+        given()
+            .header("X-Amz-Invocation-Type", "DryRun")
+            .contentType("application/octet-stream")
+            .body(exactLimit)
+        .when()
+            .post(BASE_PATH + "/functions/hello-world/invocations")
+        .then()
+            .statusCode(not(413));
+    }
+
+    @Test
+    @Order(32)
+    void asyncInvoke_payloadExceeds1MB_returns413() {
+        byte[] oversized = new byte[1 * 1024 * 1024 + 1];
+
+        given()
+            .header("X-Amz-Invocation-Type", "Event")
+            .contentType("application/octet-stream")
+            .body(oversized)
+        .when()
+            .post(BASE_PATH + "/functions/hello-world/invocations")
+        .then()
+            .statusCode(413)
+            .body("__type", equalTo("RequestTooLargeException"));
+    }
+
+    @Test
+    @Order(33)
+    void asyncInvoke_payloadExactly1MB_isNotRejected() {
+        byte[] exactLimit = new byte[1 * 1024 * 1024];
+
+        given()
+            .header("X-Amz-Invocation-Type", "Event")
+            .contentType("application/octet-stream")
+            .body(exactLimit)
+        .when()
+            .post(BASE_PATH + "/functions/hello-world/invocations")
+        .then()
+            .statusCode(not(413));
+    }
 }
