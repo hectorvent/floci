@@ -192,13 +192,16 @@ public class ContainerLauncher {
             specBuilder.withBind(fn.getHotReloadHostPath(), TASK_DIR);
         }
 
-        // For Image package type use ImageConfig.Command if set, otherwise fall back to Handler (Zip-style)
+        // For Image package type use ImageConfig.Command/EntryPoint/WorkingDirectory if set, otherwise fall back to Handler (Zip-style)
         if ("Image".equals(fn.getPackageType())) {
             if (fn.getImageConfigEntryPoint() != null && !fn.getImageConfigEntryPoint().isEmpty()) {
                 specBuilder.withEntrypoint(fn.getImageConfigEntryPoint());
             }
             if (fn.getImageConfigCommand() != null && !fn.getImageConfigCommand().isEmpty()) {
                 specBuilder.withCmd(fn.getImageConfigCommand());
+            }
+            if (fn.getImageConfigWorkingDirectory() != null && !fn.getImageConfigWorkingDirectory().isBlank()) {
+                specBuilder.withWorkingDir(fn.getImageConfigWorkingDirectory());
             }
         } else if (fn.getHandler() != null && !fn.getHandler().isBlank()) {
             specBuilder.withCmd(fn.getHandler());

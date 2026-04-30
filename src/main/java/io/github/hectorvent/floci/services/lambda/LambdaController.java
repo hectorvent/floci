@@ -539,6 +539,9 @@ public class LambdaController {
                 ArrayNode epNode = imageConfig.putArray("EntryPoint");
                 fn.getImageConfigEntryPoint().forEach(epNode::add);
             }
+            if (fn.getImageConfigWorkingDirectory() != null && !fn.getImageConfigWorkingDirectory().isBlank()) {
+                imageConfig.put("WorkingDirectory", fn.getImageConfigWorkingDirectory());
+            }
         }
         node.put("LastModified", DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
                 .format(Instant.ofEpochMilli(fn.getLastModified()).atOffset(ZoneOffset.UTC)));
