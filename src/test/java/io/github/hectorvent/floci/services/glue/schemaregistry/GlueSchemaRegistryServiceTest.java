@@ -78,6 +78,15 @@ class GlueSchemaRegistryServiceTest {
     }
 
     @Test
+    void createRegistryRejectsDotAndHashCharacters() {
+        for (String name : List.of("bad.name", "bad#name")) {
+            AwsException ex = assertThrows(AwsException.class,
+                    () -> service.createRegistry(name, null, null, REGION));
+            assertEquals("InvalidInputException", ex.getErrorCode());
+        }
+    }
+
+    @Test
     void createRegistryRejectsExcessiveLength() {
         String tooLong = "a".repeat(256);
         AwsException ex = assertThrows(AwsException.class,
@@ -320,6 +329,17 @@ class GlueSchemaRegistryServiceTest {
                 service.createSchema(new RegistryId("reg", null),
                         "users", "AVRO", "WAT", null, AVRO_V1, null, REGION));
         assertEquals("InvalidInputException", ex.getErrorCode());
+    }
+
+    @Test
+    void createSchemaRejectsDotAndHashCharacters() {
+        preCreateRegistry();
+        for (String name : List.of("bad.name", "bad#name")) {
+            AwsException ex = assertThrows(AwsException.class, () ->
+                    service.createSchema(new RegistryId("reg", null),
+                            name, "AVRO", "BACKWARD", null, AVRO_V1, null, REGION));
+            assertEquals("InvalidInputException", ex.getErrorCode());
+        }
     }
 
     @Test
