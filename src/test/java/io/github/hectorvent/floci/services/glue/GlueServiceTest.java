@@ -6,6 +6,7 @@ import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.glue.model.Column;
 import io.github.hectorvent.floci.services.glue.model.Database;
 import io.github.hectorvent.floci.services.glue.model.Partition;
 import io.github.hectorvent.floci.services.glue.model.SchemaReference;
@@ -60,8 +61,7 @@ class GlueServiceTest {
         Table table = new Table();
         table.setName("plain");
         StorageDescriptor sd = new StorageDescriptor();
-        sd.setColumns(java.util.List.of(
-                new io.github.hectorvent.floci.services.glue.model.Column("a", "string")));
+        sd.setColumns(java.util.List.of(new Column("a", "string")));
         table.setStorageDescriptor(sd);
         glueService.createTable("db1", table);
 
@@ -94,7 +94,14 @@ class GlueServiceTest {
         schemaRegistryService.createRegistry("r1", null, null, REGION);
         schemaRegistryService.createSchema(new RegistryId("r1", null),
                 "users", "AVRO", "BACKWARD", null, AVRO_V1, null, REGION);
-        glueService.createTable("db1", tableReferencing("r1", "users", null, null));
+        Table storedTable = tableReferencing("r1", "users", null, null);
+        glueService.createTable("db1", storedTable);
+
+        Table firstFetch = glueService.getTable("db1", "withref");
+
+        assertEquals(1, firstFetch.getStorageDescriptor().getColumns().size());
+        assertTrue(storedTable.getStorageDescriptor().getColumns() == null
+                || storedTable.getStorageDescriptor().getColumns().isEmpty());
 
         // Register v2 — adds optional email field.
         schemaRegistryService.registerSchemaVersion(

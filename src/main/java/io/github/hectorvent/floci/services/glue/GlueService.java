@@ -13,11 +13,14 @@ import io.github.hectorvent.floci.services.glue.model.StorageDescriptor;
 import io.github.hectorvent.floci.services.glue.model.Table;
 import io.github.hectorvent.floci.services.glue.schemaregistry.GlueSchemaRegistryService;
 import io.github.hectorvent.floci.services.glue.schemaregistry.SchemaToColumnsConverter;
+import io.github.hectorvent.floci.services.glue.schemaregistry.model.SchemaId;
 import io.github.hectorvent.floci.services.glue.schemaregistry.model.SchemaVersion;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -88,16 +91,16 @@ public class GlueService {
         String key = databaseName + ":" + tableName;
         Table table = tableStore.get(key)
                 .orElseThrow(() -> new AwsException("EntityNotFoundException", "Table not found: " + databaseName + "." + tableName, 400));
-        resolveSchemaReference(table);
-        return table;
+        return withResolvedSchemaReference(table);
     }
 
     public List<Table> getTables(String databaseName) {
         List<Table> tables = tableStore.scan(k -> k.startsWith(databaseName + ":"));
-        for (Table t : tables) {
-            resolveSchemaReference(t);
+        List<Table> resolved = new ArrayList<>(tables.size());
+        for (Table table : tables) {
+            resolved.add(withResolvedSchemaReference(table));
         }
-        return tables;
+        return resolved;
     }
 
     public void deleteTable(String databaseName, String tableName) {
@@ -134,10 +137,10 @@ public class GlueService {
                 ref.getSchemaVersionNumber(), latest, regionResolver.getDefaultRegion());
     }
 
-    private void resolveSchemaReference(Table table) {
+    private Table withResolvedSchemaReference(Table table) {
         SchemaReference ref = schemaReferenceOf(table);
         if (ref == null) {
-            return;
+            return table;
         }
         try {
             boolean latest = ref.getSchemaVersionId() == null && ref.getSchemaVersionNumber() == null;
@@ -147,16 +150,96 @@ public class GlueService {
             List<Column> columns = SchemaToColumnsConverter.toColumns(
                     version.getDataFormat(), version.getSchemaDefinition());
             if (!columns.isEmpty()) {
-                table.getStorageDescriptor().setColumns(columns);
+                Table resolved = copyTable(table);
+                resolved.getStorageDescriptor().setColumns(columns);
+                return resolved;
             }
         } catch (AwsException e) {
             LOG.warnv("SchemaReference resolution failed for {0}.{1}: {2}",
                     table.getDatabaseName(), table.getName(), e.getMessage());
         }
+        return table;
     }
 
     private static SchemaReference schemaReferenceOf(Table table) {
         StorageDescriptor sd = table != null ? table.getStorageDescriptor() : null;
         return sd != null ? sd.getSchemaReference() : null;
+    }
+
+    private static Table copyTable(Table source) {
+        Table copy = new Table();
+        copy.setName(source.getName());
+        copy.setDatabaseName(source.getDatabaseName());
+        copy.setDescription(source.getDescription());
+        copy.setCreateTime(source.getCreateTime());
+        copy.setUpdateTime(source.getUpdateTime());
+        copy.setLastAccessTime(source.getLastAccessTime());
+        copy.setPartitionKeys(copyColumns(source.getPartitionKeys()));
+        copy.setStorageDescriptor(copyStorageDescriptor(source.getStorageDescriptor()));
+        copy.setTableType(source.getTableType());
+        copy.setParameters(copyMap(source.getParameters()));
+        return copy;
+    }
+
+    private static StorageDescriptor copyStorageDescriptor(StorageDescriptor source) {
+        if (source == null) {
+            return null;
+        }
+        StorageDescriptor copy = new StorageDescriptor();
+        copy.setColumns(copyColumns(source.getColumns()));
+        copy.setLocation(source.getLocation());
+        copy.setInputFormat(source.getInputFormat());
+        copy.setOutputFormat(source.getOutputFormat());
+        copy.setCompressed(source.getCompressed());
+        copy.setNumberOfBuckets(source.getNumberOfBuckets());
+        copy.setSerdeInfo(copySerDeInfo(source.getSerdeInfo()));
+        copy.setParameters(copyMap(source.getParameters()));
+        copy.setSchemaReference(copySchemaReference(source.getSchemaReference()));
+        return copy;
+    }
+
+    private static StorageDescriptor.SerDeInfo copySerDeInfo(StorageDescriptor.SerDeInfo source) {
+        if (source == null) {
+            return null;
+        }
+        StorageDescriptor.SerDeInfo copy = new StorageDescriptor.SerDeInfo();
+        copy.setName(source.getName());
+        copy.setSerializationLibrary(source.getSerializationLibrary());
+        copy.setParameters(copyMap(source.getParameters()));
+        return copy;
+    }
+
+    private static SchemaReference copySchemaReference(SchemaReference source) {
+        if (source == null) {
+            return null;
+        }
+        SchemaReference copy = new SchemaReference();
+        SchemaId schemaId = source.getSchemaId();
+        if (schemaId != null) {
+            copy.setSchemaId(new SchemaId(
+                    schemaId.getRegistryName(), schemaId.getSchemaName(), schemaId.getSchemaArn()));
+        }
+        copy.setSchemaVersionId(source.getSchemaVersionId());
+        copy.setSchemaVersionNumber(source.getSchemaVersionNumber());
+        return copy;
+    }
+
+    private static List<Column> copyColumns(List<Column> source) {
+        if (source == null) {
+            return null;
+        }
+        List<Column> copy = new ArrayList<>(source.size());
+        for (Column column : source) {
+            Column columnCopy = new Column();
+            columnCopy.setName(column.getName());
+            columnCopy.setType(column.getType());
+            columnCopy.setComment(column.getComment());
+            copy.add(columnCopy);
+        }
+        return copy;
+    }
+
+    private static Map<String, String> copyMap(Map<String, String> source) {
+        return source != null ? new LinkedHashMap<>(source) : null;
     }
 }
