@@ -27,6 +27,38 @@ class SchemaCompatibilityCheckerTest {
                     + "\"fields\":[{\"name\":\"id\",\"type\":\"long\"},"
                     + "{\"name\":\"email\",\"type\":\"string\"}]}";
 
+    private static final String PROTOBUF_REQUIRED_EMAIL =
+            "syntax = \"proto2\";\n"
+                    + "package x;\n"
+                    + "message User {\n"
+                    + "  required string name = 1;\n"
+                    + "  required string email = 2;\n"
+                    + "}\n";
+
+    private static final String PROTOBUF_REMOVE_REQUIRED_EMAIL =
+            "syntax = \"proto2\";\n"
+                    + "package x;\n"
+                    + "message User {\n"
+                    + "  required string name = 1;\n"
+                    + "}\n";
+
+    private static final String PROTOBUF_OPTIONAL_EMAIL =
+            "syntax = \"proto2\";\n"
+                    + "package x;\n"
+                    + "message User {\n"
+                    + "  required string name = 1;\n"
+                    + "  optional string email = 2;\n"
+                    + "}\n";
+
+    private static final String PROTOBUF_ADD_REQUIRED_PHONE =
+            "syntax = \"proto2\";\n"
+                    + "package x;\n"
+                    + "message User {\n"
+                    + "  required string name = 1;\n"
+                    + "  optional string email = 2;\n"
+                    + "  required string phone = 3;\n"
+                    + "}\n";
+
     @Test
     void noneAlwaysCompatible() {
         var r = SchemaCompatibilityChecker.check("NONE", List.of(AVRO_V1), AVRO_ADD_REQUIRED, "AVRO");
@@ -72,6 +104,28 @@ class SchemaCompatibilityCheckerTest {
         // which old readers ignore — so it is FORWARD-compatible.
         var r = SchemaCompatibilityChecker.check("FORWARD", List.of(AVRO_V1), AVRO_ADD_REQUIRED, "AVRO");
         assertTrue(r.compatible(), () -> "expected compatible, got: " + r.reason());
+    }
+
+    @Test
+    void protobufBackwardRejectsRemovingRequiredField() {
+        var r = SchemaCompatibilityChecker.check(
+                "BACKWARD",
+                List.of(PROTOBUF_REQUIRED_EMAIL),
+                PROTOBUF_REMOVE_REQUIRED_EMAIL,
+                "PROTOBUF");
+        assertFalse(r.compatible());
+        assertNotNull(r.reason());
+    }
+
+    @Test
+    void protobufForwardRejectsAddingRequiredField() {
+        var r = SchemaCompatibilityChecker.check(
+                "FORWARD",
+                List.of(PROTOBUF_OPTIONAL_EMAIL),
+                PROTOBUF_ADD_REQUIRED_PHONE,
+                "PROTOBUF");
+        assertFalse(r.compatible());
+        assertNotNull(r.reason());
     }
 
     @Test

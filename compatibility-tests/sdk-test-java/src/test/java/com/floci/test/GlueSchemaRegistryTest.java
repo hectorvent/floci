@@ -399,7 +399,7 @@ class GlueSchemaRegistryTest {
 
                 assertSchemaEvolution(glue, registryName, "protobuf-backward-remove-required",
                         DataFormat.PROTOBUF, Compatibility.BACKWARD,
-                        PROTOBUF_COMPAT_BACKWARD_BASE, PROTOBUF_COMPAT_REMOVE_REQUIRED_EMAIL, true);
+                        PROTOBUF_COMPAT_BACKWARD_BASE, PROTOBUF_COMPAT_REMOVE_REQUIRED_EMAIL, false);
                 assertSchemaEvolution(glue, registryName, "protobuf-backward-add-required",
                         DataFormat.PROTOBUF, Compatibility.BACKWARD,
                         PROTOBUF_COMPAT_BACKWARD_BASE, PROTOBUF_COMPAT_ADD_REQUIRED_ZIP, false);
@@ -408,7 +408,7 @@ class GlueSchemaRegistryTest {
                         PROTOBUF_COMPAT_BACKWARD_BASE, PROTOBUF_COMPAT_ADD_OPTIONAL_ZIP, true);
                 assertSchemaEvolution(glue, registryName, "protobuf-forward-add-required",
                         DataFormat.PROTOBUF, Compatibility.FORWARD,
-                        PROTOBUF_COMPAT_FORWARD_BASE, PROTOBUF_COMPAT_ADD_REQUIRED_PHONE, true);
+                        PROTOBUF_COMPAT_FORWARD_BASE, PROTOBUF_COMPAT_ADD_REQUIRED_PHONE, false);
                 assertSchemaEvolution(glue, registryName, "protobuf-forward-delete-required",
                         DataFormat.PROTOBUF, Compatibility.FORWARD,
                         PROTOBUF_COMPAT_FORWARD_BASE, PROTOBUF_COMPAT_DELETE_REQUIRED_FIRST_NAME, false);
