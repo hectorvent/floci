@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.eks;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.TagHandler;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
@@ -74,7 +75,7 @@ public class EksService implements TagHandler {
 
         String region = config.defaultRegion();
         String accountId = config.defaultAccountId();
-        String arn = "arn:aws:eks:" + region + ":" + accountId + ":cluster/" + name;
+        String arn = AwsArnUtils.Arn.of("eks", region, accountId, "cluster/" + name).toString();
 
         Cluster cluster = new Cluster();
         cluster.setName(name);

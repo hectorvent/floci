@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.cloudformation;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cloudformation.model.ChangeSet;
 import io.github.hectorvent.floci.services.cloudformation.model.Stack;
@@ -32,6 +33,8 @@ public class CloudFormationService {
     private static final Logger LOG = Logger.getLogger(CloudFormationService.class);
 
     private final ConcurrentHashMap<String, Stack> stacks = new ConcurrentHashMap<>();
+    // Global exports registry: region:exportName -> exportValue
+    private final ConcurrentHashMap<String, String> exports = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
     private final CloudFormationResourceProvisioner provisioner;
@@ -80,8 +83,7 @@ public class CloudFormationService {
         });
 
         ChangeSet cs = new ChangeSet();
-        cs.setChangeSetId("arn:aws:cloudformation:" + region + ":" + config.defaultAccountId() +
-                ":changeSet/" + changeSetName + "/" + UUID.randomUUID());
+        cs.setChangeSetId(AwsArnUtils.Arn.of("cloudformation", region, config.defaultAccountId(), "changeSet/" + changeSetName + "/" + UUID.randomUUID()).toString());
         cs.setChangeSetName(changeSetName);
         cs.setStackName(stackName);
         cs.setStackId(stack.getStackId());
@@ -191,7 +193,62 @@ public class CloudFormationService {
                 .toList();
     }
 
+    // ── ListExports ─────────────────────────────────────────────────────────
+
+    public Map<String, ExportEntry> listExports(String region) {
+        Map<String, ExportEntry> result = new LinkedHashMap<>();
+        for (Stack stack : stacks.values()) {
+            if (!region.equals(stack.getRegion())) {
+                continue;
+            }
+            for (var entry : stack.getExports().entrySet()) {
+                result.put(entry.getKey(), new ExportEntry(entry.getKey(), entry.getValue(), stack.getStackId()));
+            }
+        }
+        return result;
+    }
+
+    public record ExportEntry(String name, String value, String exportingStackId) {}
+
     // ── Private ───────────────────────────────────────────────────────────────
+
+    private void removeStackExports(Stack stack, String region) {
+        for (String exportName : stack.getExports().keySet()) {
+            exports.remove(exportKey(region, exportName));
+        }
+    }
+
+    private String exportKey(String region, String exportName) {
+        return region + ":" + exportName;
+    }
+
+    private void validateExportNameAvailable(String region, String exportName,
+                                             Map<String, String> oldExports,
+                                             Map<String, String> newExports) {
+        if (newExports.containsKey(exportName)) {
+            throw new AwsException("ValidationError",
+                    "Export with name " + exportName + " is already defined by this stack", 400);
+        }
+        if (!oldExports.containsKey(exportName) && exports.containsKey(exportKey(region, exportName))) {
+            throw new AwsException("ValidationError",
+                    "Export with name " + exportName + " is already exported by another stack", 400);
+        }
+    }
+
+    private Map<String, String> resolveDefaultParameters(JsonNode template, Map<String, String> callerParams) {
+        Map<String, String> resolved = new HashMap<>(callerParams != null ? callerParams : Map.of());
+        JsonNode paramDefs = template.path("Parameters");
+        if (paramDefs.isObject()) {
+            paramDefs.fields().forEachRemaining(e -> {
+                String paramName = e.getKey();
+                JsonNode paramDef = e.getValue();
+                if (!resolved.containsKey(paramName) && paramDef.has("Default")) {
+                    resolved.put(paramName, paramDef.path("Default").asText());
+                }
+            });
+        }
+        return resolved;
+    }
 
     private void executeTemplate(Stack stack, String templateBody, Map<String, String> params,
                                  boolean isCreate, String region) {
@@ -232,7 +289,8 @@ public class CloudFormationService {
 
                     CloudFormationTemplateEngine engine = new CloudFormationTemplateEngine(
                             config.defaultAccountId(), region, stack.getStackName(),
-                            stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper);
+                            stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper,
+                            name -> exports.get(exportKey(region, name)));
 
                     StackResource resource = stack.getResources().get(logicalId);
                     if (resource == null) {
@@ -255,20 +313,47 @@ public class CloudFormationService {
                 }
             }
 
-            // Resolve outputs
-            stack.getOutputs().clear();
             CloudFormationTemplateEngine finalEngine = new CloudFormationTemplateEngine(
                     config.defaultAccountId(), region, stack.getStackName(),
-                    stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper);
+                    stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper,
+                    name -> exports.get(exportKey(region, name)));
 
+            // Resolve outputs before mutating stack/global export state, so failed updates do not
+            // leave stale or partially registered exports behind.
+            Map<String, String> oldExports = new LinkedHashMap<>(stack.getExports());
+            Map<String, String> newOutputs = new LinkedHashMap<>();
+            Map<String, String> newExports = new LinkedHashMap<>();
+            Map<String, String> newOutputExportNames = new LinkedHashMap<>();
             JsonNode outputs = template.path("Outputs");
             if (outputs.isObject()) {
                 outputs.fields().forEachRemaining(e -> {
                     JsonNode outputDef = e.getValue();
                     String value = finalEngine.resolve(outputDef.path("Value"));
-                    stack.getOutputs().put(e.getKey(), value);
+                    newOutputs.put(e.getKey(), value);
+
+                    // Register exports
+                    JsonNode exportNode = outputDef.path("Export").path("Name");
+                    if (!exportNode.isMissingNode()) {
+                        String exportName = finalEngine.resolve(exportNode);
+                        validateExportNameAvailable(region, exportName, oldExports, newExports);
+                        newExports.put(exportName, value);
+                        newOutputExportNames.put(e.getKey(), exportName);
+                    }
                 });
             }
+
+            removeStackExports(stack, region);
+            stack.getOutputs().clear();
+            stack.getOutputs().putAll(newOutputs);
+            stack.getExports().clear();
+            stack.getExports().putAll(newExports);
+            stack.getOutputExportNames().clear();
+            stack.getOutputExportNames().putAll(newOutputExportNames);
+            newExports.forEach((exportName, value) -> {
+                exports.put(exportKey(region, exportName), value);
+                LOG.infov("Registered export {0} = {1} from stack {2}",
+                        exportName, value, stack.getStackName());
+            });
 
             String completeStatus = isCreate ? "CREATE_COMPLETE" : "UPDATE_COMPLETE";
             stack.setStatus(completeStatus);
@@ -306,6 +391,7 @@ public class CloudFormationService {
             stack.setStatus("DELETE_COMPLETE");
             addEvent(stack, stack.getStackName(), stack.getStackId(),
                     "AWS::CloudFormation::Stack", "DELETE_COMPLETE", null);
+            removeStackExports(stack, region);
             stacks.remove(key(stack.getStackName(), region));
             LOG.infov("Stack {0} deleted", stack.getStackName());
 
@@ -314,21 +400,6 @@ public class CloudFormationService {
             stack.setStatus("DELETE_FAILED");
             stack.setStatusReason(e.getMessage());
         }
-    }
-
-    private Map<String, String> resolveDefaultParameters(JsonNode template, Map<String, String> callerParams) {
-        Map<String, String> resolved = new HashMap<>(callerParams != null ? callerParams : Map.of());
-        JsonNode paramDefs = template.path("Parameters");
-        if (paramDefs.isObject()) {
-            paramDefs.fields().forEachRemaining(e -> {
-                String paramName = e.getKey();
-                JsonNode paramDef = e.getValue();
-                if (!resolved.containsKey(paramName) && paramDef.has("Default")) {
-                    resolved.put(paramName, paramDef.path("Default").asText());
-                }
-            });
-        }
-        return resolved;
     }
 
     private Map<String, Boolean> resolveConditions(JsonNode template, Map<String, String> params,
@@ -473,8 +544,7 @@ public class CloudFormationService {
         stack.setStackName(stackName);
         stack.setRegion(region);
         stack.setStatus("REVIEW_IN_PROGRESS");
-        String stackId = "arn:aws:cloudformation:" + region + ":" + config.defaultAccountId() +
-                ":stack/" + stackName + "/" + UUID.randomUUID();
+        String stackId = AwsArnUtils.Arn.of("cloudformation", region, config.defaultAccountId(), "stack/" + stackName + "/" + UUID.randomUUID()).toString();
         stack.setStackId(stackId);
         stack.setCreationTime(Instant.now());
         return stack;
@@ -510,9 +580,14 @@ public class CloudFormationService {
     private String resolveChangeSetName(String changeSetNameOrArn) {
         if (changeSetNameOrArn != null && changeSetNameOrArn.startsWith("arn:")) {
             // arn:aws:cloudformation:<region>:<account>:changeSet/<name>/<uuid>
-            String[] parts = changeSetNameOrArn.split("/");
-            if (parts.length >= 2) {
-                return parts[1];
+            try {
+                String resource = AwsArnUtils.parse(changeSetNameOrArn).resource();
+                String[] parts = resource.split("/");
+                if (parts.length >= 2) {
+                    return parts[1];
+                }
+            } catch (IllegalArgumentException e) {
+                // fall through to return as-is
             }
         }
         return changeSetNameOrArn;
@@ -554,13 +629,18 @@ public class CloudFormationService {
      * Expected format: {@code arn:aws:cloudformation:REGION:ACCOUNT:stack/STACK_NAME/UUID}
      */
     private static String extractStackNameFromArn(String arn) {
-        int stackSegment = arn.indexOf(":stack/");
-        if (stackSegment < 0) {
+        try {
+            // resource is "stack/<name>/<uuid>"; split on "/" to get the name
+            String resource = AwsArnUtils.parse(arn).resource();
+            if (!resource.startsWith("stack/")) {
+                return null;
+            }
+            String afterStack = resource.substring("stack/".length());
+            int slash = afterStack.indexOf('/');
+            return slash > 0 ? afterStack.substring(0, slash) : afterStack;
+        } catch (IllegalArgumentException e) {
             return null;
         }
-        String afterStack = arn.substring(stackSegment + ":stack/".length());
-        int slash = afterStack.indexOf('/');
-        return slash > 0 ? afterStack.substring(0, slash) : afterStack;
     }
 
     private List<String> topologicalSort(JsonNode resources, Map<String, Boolean> conditions) {

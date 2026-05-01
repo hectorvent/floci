@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.ec2;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.ec2.model.*;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -87,7 +88,7 @@ public class Ec2Service {
             subnet.setMapPublicIpOnLaunch(true);
             subnet.setOwnerId(accountId);
             subnet.setRegion(region);
-            subnet.setSubnetArn("arn:aws:ec2:" + region + ":" + accountId + ":subnet/" + subnetIds[i]);
+            subnet.setSubnetArn(AwsArnUtils.Arn.of("ec2", region, accountId, "subnet/" + subnetIds[i]).toString());
             subnets.put(key(region, subnetIds[i]), subnet);
         }
 
@@ -554,7 +555,7 @@ public class Ec2Service {
         subnet.setAvailableIpAddressCount(251);
         subnet.setOwnerId(accountId);
         subnet.setRegion(region);
-        subnet.setSubnetArn("arn:aws:ec2:" + region + ":" + accountId + ":subnet/" + subnetId);
+        subnet.setSubnetArn(AwsArnUtils.Arn.of("ec2", region, accountId, "subnet/" + subnetId).toString());
         subnets.put(key(region, subnetId), subnet);
         return subnet;
     }

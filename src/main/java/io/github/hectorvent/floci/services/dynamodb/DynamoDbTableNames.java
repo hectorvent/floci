@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.dynamodb;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 
 import java.util.regex.Pattern;
@@ -57,16 +58,18 @@ public final class DynamoDbTableNames {
     }
 
     private static ResolvedTableRef parseArn(String input) {
-        String[] parts = input.split(":", 6);
-        if (parts.length != 6) {
+        AwsArnUtils.Arn base;
+        try {
+            base = AwsArnUtils.parse(input);
+        } catch (IllegalArgumentException e) {
             throw invalid("Invalid table ARN: " + input);
         }
-        if (!"arn".equals(parts[0]) || !"aws".equals(parts[1]) || !"dynamodb".equals(parts[2])) {
+        if (!"dynamodb".equals(base.service())) {
             throw invalid("Invalid table ARN: " + input);
         }
-        String region = parts[3];
-        String account = parts[4];
-        String resource = parts[5];
+        String region = base.region();
+        String account = base.accountId();
+        String resource = base.resource();
         if (region.isBlank()) {
             throw invalid("Table ARN missing region: " + input);
         }

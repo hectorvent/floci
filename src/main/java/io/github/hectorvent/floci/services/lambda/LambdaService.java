@@ -638,8 +638,7 @@ public class LambdaService {
             resolvedRegion = SqsEventSourcePoller.regionFromArn(eventSourceArn);
         } else {
             // arn:aws:kinesis:region:... or arn:aws:dynamodb:region:...
-            String[] parts = eventSourceArn.split(":");
-            resolvedRegion = parts.length > 3 ? parts[3] : region;
+            resolvedRegion = AwsArnUtils.regionOrDefault(eventSourceArn, region);
         }
 
         // If the caller supplied a full function ARN, its region must agree

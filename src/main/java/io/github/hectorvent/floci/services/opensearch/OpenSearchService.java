@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.opensearch;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -79,7 +80,7 @@ public class OpenSearchService {
         Domain domain = new Domain();
         domain.setDomainName(domainName);
         domain.setDomainId(accountId + "/" + domainName);
-        domain.setArn("arn:aws:es:" + region + ":" + accountId + ":domain/" + domainName);
+        domain.setArn(AwsArnUtils.Arn.of("es", region, accountId, "domain/" + domainName).toString());
         domain.setEngineVersion(engineVersion != null ? engineVersion : DEFAULT_ENGINE_VERSION);
         domain.setProcessing(false);
         domain.setDeleted(false);

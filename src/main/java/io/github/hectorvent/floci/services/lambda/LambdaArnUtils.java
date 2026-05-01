@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.lambda;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 
 import java.util.regex.Pattern;
@@ -69,31 +70,37 @@ public final class LambdaArnUtils {
 
     private static ResolvedFunctionRef parseFullArn(String input) {
         // arn:aws:lambda:REGION:ACCT:function:NAME[:QUALIFIER]
-        String[] parts = input.split(":", -1);
-        if (parts.length < 7 || parts.length > 8) {
+        AwsArnUtils.Arn base;
+        try {
+            base = AwsArnUtils.parse(input);
+        } catch (IllegalArgumentException e) {
             throw invalid("Invalid ARN: " + input);
         }
-        if (!"arn".equals(parts[0]) || !"aws".equals(parts[1]) || !"lambda".equals(parts[2])) {
+        if (!"lambda".equals(base.service())) {
             throw invalid("Invalid ARN: " + input);
         }
-        String region = parts[3];
-        String account = parts[4];
-        if (region.isBlank()) {
+        if (base.region().isBlank()) {
             throw invalid("ARN missing region: " + input);
         }
-        if (!ACCOUNT_PATTERN.matcher(account).matches()) {
+        if (!ACCOUNT_PATTERN.matcher(base.accountId()).matches()) {
             throw invalid("ARN has invalid account id: " + input);
         }
-        if (!"function".equals(parts[5])) {
+        // resource is "function:NAME" or "function:NAME:QUALIFIER"
+        String resource = base.resource();
+        String[] resParts = resource.split(":", -1);
+        if (resParts.length < 2 || resParts.length > 3) {
+            throw invalid("Invalid ARN: " + input);
+        }
+        if (!"function".equals(resParts[0])) {
             throw invalid("ARN resource type must be 'function': " + input);
         }
-        String name = parts[6];
+        String name = resParts[1];
         validateName(name);
-        String qualifier = parts.length == 8 ? parts[7] : null;
+        String qualifier = resParts.length == 3 ? resParts[2] : null;
         if (qualifier != null) {
             validateQualifier(qualifier);
         }
-        return new ResolvedFunctionRef(name, qualifier, region);
+        return new ResolvedFunctionRef(name, qualifier, base.region());
     }
 
     private static ResolvedFunctionRef parsePartialArn(String input) {

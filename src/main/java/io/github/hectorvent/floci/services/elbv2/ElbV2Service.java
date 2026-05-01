@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.elbv2;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.elbv2.model.*;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -56,8 +57,7 @@ public class ElbV2Service {
         String ipType = ipAddressType != null ? ipAddressType : "ipv4";
         String typePrefix = lbTypePrefix(lbType);
         String id = randomHex16();
-        String arn = "arn:aws:elasticloadbalancing:" + region + ":" + DEFAULT_ACCOUNT
-                + ":loadbalancer/" + typePrefix + "/" + name + "/" + id;
+        String arn = AwsArnUtils.Arn.of("elasticloadbalancing", region, DEFAULT_ACCOUNT, "loadbalancer/" + typePrefix + "/" + name + "/" + id).toString();
         String dnsName = name + "-" + id + ".elb.localhost";
 
         LoadBalancer lb = new LoadBalancer();
@@ -177,8 +177,7 @@ public class ElbV2Service {
         }
 
         String id = randomHex16();
-        String arn = "arn:aws:elasticloadbalancing:" + region + ":" + DEFAULT_ACCOUNT
-                + ":targetgroup/" + name + "/" + id;
+        String arn = AwsArnUtils.Arn.of("elasticloadbalancing", region, DEFAULT_ACCOUNT, "targetgroup/" + name + "/" + id).toString();
 
         TargetGroup tg = new TargetGroup();
         tg.setTargetGroupArn(arn);
@@ -302,8 +301,7 @@ public class ElbV2Service {
         String typePrefix = lbTypePrefix(lbType);
         String lbId = arnId(lbArn);
         String listenerId = randomHex16();
-        String listenerArn = "arn:aws:elasticloadbalancing:" + region + ":" + DEFAULT_ACCOUNT
-                + ":listener/" + typePrefix + "/" + lb.getLoadBalancerName() + "/" + lbId + "/" + listenerId;
+        String listenerArn = AwsArnUtils.Arn.of("elasticloadbalancing", region, DEFAULT_ACCOUNT, "listener/" + typePrefix + "/" + lb.getLoadBalancerName() + "/" + lbId + "/" + listenerId).toString();
 
         Listener listener = new Listener();
         listener.setListenerArn(listenerArn);
@@ -425,8 +423,7 @@ public class ElbV2Service {
         String lbId = arnId(listener.getLoadBalancerArn());
         String listenerId = arnId(listenerArn);
         String ruleId = randomHex16();
-        String ruleArn = "arn:aws:elasticloadbalancing:" + region + ":" + DEFAULT_ACCOUNT
-                + ":listener-rule/" + typePrefix + "/" + lb.getLoadBalancerName() + "/" + lbId + "/" + listenerId + "/" + ruleId;
+        String ruleArn = AwsArnUtils.Arn.of("elasticloadbalancing", region, DEFAULT_ACCOUNT, "listener-rule/" + typePrefix + "/" + lb.getLoadBalancerName() + "/" + lbId + "/" + listenerId + "/" + ruleId).toString();
 
         Rule rule = new Rule();
         rule.setRuleArn(ruleArn);
@@ -762,8 +759,7 @@ public class ElbV2Service {
         String lbType = lb.getType() != null ? lb.getType() : "application";
         String typePrefix = lbTypePrefix(lbType);
         String ruleId = randomHex16();
-        String ruleArn = "arn:aws:elasticloadbalancing:" + region + ":" + DEFAULT_ACCOUNT
-                + ":listener-rule/" + typePrefix + "/" + lb.getLoadBalancerName() + "/" + lbId + "/" + listenerId + "/" + ruleId;
+        String ruleArn = AwsArnUtils.Arn.of("elasticloadbalancing", region, DEFAULT_ACCOUNT, "listener-rule/" + typePrefix + "/" + lb.getLoadBalancerName() + "/" + lbId + "/" + listenerId + "/" + ruleId).toString();
 
         Rule rule = new Rule();
         rule.setRuleArn(ruleArn);

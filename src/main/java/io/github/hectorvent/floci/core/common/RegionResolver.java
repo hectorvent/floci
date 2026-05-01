@@ -52,6 +52,6 @@ public class RegionResolver {
     }
 
     public String buildArn(String service, String region, String resource) {
-        return "arn:aws:" + service + ":" + region + ":" + defaultAccountId + ":" + resource;
+        return AwsArnUtils.Arn.of(service, region, defaultAccountId, resource).toString();
     }
 }

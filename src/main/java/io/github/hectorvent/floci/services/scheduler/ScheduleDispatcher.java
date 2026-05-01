@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.scheduler;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.services.scheduler.SchedulerExpressionParser.Kind;
 import io.github.hectorvent.floci.services.scheduler.model.Schedule;
 import io.quarkus.runtime.ShutdownEvent;
@@ -189,9 +190,6 @@ public class ScheduleDispatcher {
     }
 
     private static String regionOf(Schedule schedule) {
-        String arn = schedule.getArn();
-        if (arn == null) return "us-east-1";
-        String[] parts = arn.split(":");
-        return parts.length >= 4 && !parts[3].isEmpty() ? parts[3] : "us-east-1";
+        return AwsArnUtils.regionOrDefault(schedule.getArn(), "us-east-1");
     }
 }

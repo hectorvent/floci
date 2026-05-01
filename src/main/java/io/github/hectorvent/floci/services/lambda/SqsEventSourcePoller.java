@@ -243,10 +243,6 @@ public class SqsEventSourcePoller {
      * arn:aws:sqs:REGION:ACCOUNT:QUEUE_NAME → {baseUrl}/ACCOUNT/QUEUE_NAME
      */
     public String queueArnToUrl(String arn) {
-        String[] parts = arn.split(":");
-        if (parts.length < 6) {
-            throw new IllegalArgumentException("Invalid SQS ARN: " + arn);
-        }
         return AwsArnUtils.arnToQueueUrl(arn, baseUrl);
     }
 
@@ -255,10 +251,6 @@ public class SqsEventSourcePoller {
      * arn:aws:sqs:REGION:ACCOUNT:NAME → REGION
      */
     public static String regionFromArn(String arn) {
-        String[] parts = arn.split(":");
-        if (parts.length < 4) {
-            throw new IllegalArgumentException("Invalid ARN: " + arn);
-        }
-        return parts[3];
+        return AwsArnUtils.parse(arn).region();
     }
 }

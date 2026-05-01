@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.lambda;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.kinesis.KinesisService;
 import io.github.hectorvent.floci.services.kinesis.model.KinesisRecord;
@@ -161,7 +162,7 @@ public class KinesisEventSourcePoller {
                 record.put("eventVersion", "1.0");
                 record.put("eventID", shardId + ":" + rec.getSequenceNumber());
                 record.put("eventName", "aws:kinesis:record");
-                record.put("invokeIdentityArn", "arn:aws:iam::000000000000:role/lambda-role");
+                record.put("invokeIdentityArn", AwsArnUtils.Arn.of("iam", "", "000000000000", "role/lambda-role").toString());
                 record.put("awsRegion", esm.getRegion());
                 record.put("eventSourceARN", esm.getEventSourceArn());
                 recordsArray.add(record);

@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.stepfunctions;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
 import io.github.hectorvent.floci.services.dynamodb.DynamoDbJsonHandler;
@@ -1291,8 +1292,7 @@ public class AslExecutor {
     }
 
     private String extractRegionFromArn(String arn) {
-        String[] parts = arn.split(":");
-        return parts.length > 3 ? parts[3] : "us-east-1";
+        return AwsArnUtils.regionOrDefault(arn, "us-east-1");
     }
 
     record StateResult(JsonNode output, String nextState) {}

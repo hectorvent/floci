@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.lambda;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
@@ -99,10 +100,10 @@ public class LambdaUrlInvocationController {
 
         if (target instanceof LambdaAlias alias) {
             functionName = alias.getFunctionName();
-            region = alias.getAliasArn().split(":")[3];
+            region = AwsArnUtils.parse(alias.getAliasArn()).region();
         } else if (target instanceof LambdaFunction fn) {
             functionName = fn.getFunctionName();
-            region = fn.getFunctionArn().split(":")[3];
+            region = AwsArnUtils.parse(fn.getFunctionArn()).region();
         } else {
             return Response.status(404).entity(jsonMessage("Function URL not found")).type(MediaType.APPLICATION_JSON).build();
         }

@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.sqs;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
@@ -570,13 +571,11 @@ public class SqsService {
         if (arn == null || !arn.startsWith("arn:aws:sqs:")) {
             return null;
         }
-        String[] parts = arn.split(":");
-        if (parts.length < 6) {
+        try {
+            return AwsArnUtils.arnToQueueUrl(arn, baseUrl);
+        } catch (IllegalArgumentException e) {
             return null;
         }
-        String accountId = parts[4];
-        String queueName = parts[5];
-        return baseUrl + "/" + accountId + "/" + queueName;
     }
 
     public void deleteMessage(String queueUrl, String receiptHandle) {

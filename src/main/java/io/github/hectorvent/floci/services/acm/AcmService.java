@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.acm;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
@@ -620,7 +621,7 @@ public class AcmService {
 
     private String buildCertificateArn(String region, String certId) {
         String accountId = regionResolver.getAccountId();
-        return "arn:aws:acm:" + region + ":" + accountId + ":certificate/" + certId;
+        return AwsArnUtils.Arn.of("acm", region, accountId, "certificate/" + certId).toString();
     }
 
     private String extractCertificateIdFromArn(String arn) {

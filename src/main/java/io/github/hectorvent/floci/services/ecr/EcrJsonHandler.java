@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
 import io.github.hectorvent.floci.services.ecr.model.AuthorizationData;
 import io.github.hectorvent.floci.services.ecr.model.Image;
@@ -397,10 +398,7 @@ public class EcrJsonHandler {
     }
 
     private static String accountFromArn(String arn) {
-        if (arn == null) return null;
-        // arn:aws:ecr:<region>:<account>:repository/<name>
-        String[] parts = arn.split(":");
-        return parts.length >= 5 ? parts[4] : null;
+        return AwsArnUtils.accountOrDefault(arn, null);
     }
 
     private ObjectNode buildRepository(Repository repo) {

@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.codebuild;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.codebuild.model.Build;
 import io.github.hectorvent.floci.services.codebuild.model.BuildPhase;
@@ -99,7 +100,7 @@ public class CodeBuildService {
         double now = Instant.now().toEpochMilli() / 1000.0;
         Project project = new Project();
         project.setName(name);
-        project.setArn("arn:aws:codebuild:" + region + ":" + account + ":project/" + name);
+        project.setArn(AwsArnUtils.Arn.of("codebuild", region, account, "project/" + name).toString());
         project.setDescription(description);
         project.setSource(source);
         project.setSecondarySources(secondarySources);
@@ -188,7 +189,7 @@ public class CodeBuildService {
                                          Map<String, Object> exportConfig,
                                          List<Map<String, String>> tags) {
         Map<String, ReportGroup> store = reportGroupsFor(region);
-        String arn = "arn:aws:codebuild:" + region + ":" + account + ":report-group/" + name;
+        String arn = AwsArnUtils.Arn.of("codebuild", region, account, "report-group/" + name).toString();
         if (store.containsKey(arn)) {
             throw new AwsException("ResourceAlreadyExistsException",
                     "Report group already exists: " + name, 400);
@@ -264,7 +265,7 @@ public class CodeBuildService {
                     "Source credentials already exist for " + serverType + "/" + authType, 400);
         }
 
-        String arn = "arn:aws:codebuild:" + region + ":" + account + ":token/" + serverType.toLowerCase() + "-" + UUID.randomUUID();
+        String arn = AwsArnUtils.Arn.of("codebuild", region, account, "token/" + serverType.toLowerCase() + "-" + UUID.randomUUID()).toString();
         if (existing != null) {
             arn = existing.getArn();
             store.remove(existing.getArn());
@@ -360,7 +361,7 @@ public class CodeBuildService {
                 .incrementAndGet();
 
         String buildId = projectName + ":" + buildNumber;
-        String arn = "arn:aws:codebuild:" + region + ":" + account + ":build/" + buildId;
+        String arn = AwsArnUtils.Arn.of("codebuild", region, account, "build/" + buildId).toString();
 
         Build build = new Build();
         build.setId(buildId);
