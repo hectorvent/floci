@@ -16,7 +16,7 @@ public class MetadataInfo {
     private String metadataValue;
 
     @JsonProperty("CreatedTime")
-    @JsonFormat(shape = JsonFormat.Shape.NUMBER)
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
     private Instant createdTime;
 
     @JsonProperty("OtherMetadataValueList")
@@ -47,7 +47,7 @@ public class MetadataInfo {
         private String metadataValue;
 
         @JsonProperty("CreatedTime")
-        @JsonFormat(shape = JsonFormat.Shape.NUMBER)
+        @JsonFormat(shape = JsonFormat.Shape.STRING)
         private Instant createdTime;
 
         public OtherMetadataValueListItem() {}

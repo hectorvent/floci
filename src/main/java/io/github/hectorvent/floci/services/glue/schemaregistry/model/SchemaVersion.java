@@ -30,7 +30,7 @@ public class SchemaVersion {
     private String dataFormat;
 
     @JsonProperty("CreatedTime")
-    @JsonFormat(shape = JsonFormat.Shape.NUMBER)
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
     private Instant createdTime;
 
     public SchemaVersion() {}

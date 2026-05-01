@@ -12,7 +12,7 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.matchesPattern;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -84,7 +84,7 @@ class GlueSchemaRegistryIntegrationTest {
             .body("RegistryName", equalTo(REGISTRY_NAME))
             .body("Description", equalTo("test"))
             .body("Status", equalTo("AVAILABLE"))
-            .body("CreatedTime", notNullValue());
+            .body("CreatedTime", matchesPattern("^\\d{4}-\\d{2}-\\d{2}T.*Z$"));
     }
 
     @Test

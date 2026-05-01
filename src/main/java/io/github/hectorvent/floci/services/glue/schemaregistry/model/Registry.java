@@ -25,11 +25,11 @@ public class Registry {
     private String status;
 
     @JsonProperty("CreatedTime")
-    @JsonFormat(shape = JsonFormat.Shape.NUMBER)
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
     private Instant createdTime;
 
     @JsonProperty("UpdatedTime")
-    @JsonFormat(shape = JsonFormat.Shape.NUMBER)
+    @JsonFormat(shape = JsonFormat.Shape.STRING)
     private Instant updatedTime;
 
     @JsonProperty("Tags")

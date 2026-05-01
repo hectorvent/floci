@@ -10,7 +10,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.nullValue;
 
 @QuarkusTest
@@ -128,7 +128,7 @@ class GlueSchemaRegistryMetadataAndTagsIntegrationTest {
             .statusCode(200)
             .body("SchemaVersionId", equalTo(schemaVersionId))
             .body("MetadataInfoMap.owner.MetadataValue", equalTo("alice"))
-            .body("MetadataInfoMap.owner.CreatedTime", notNullValue());
+            .body("MetadataInfoMap.owner.CreatedTime", matchesPattern("^\\d{4}-\\d{2}-\\d{2}T.*Z$"));
     }
 
     @Test

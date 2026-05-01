@@ -16,6 +16,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -219,7 +220,7 @@ public class GlueJsonHandler {
         response.put("SchemaArn", version.getSchemaArn());
         response.put("DataFormat", version.getDataFormat());
         response.put("Status", version.getStatus());
-        response.put("CreatedTime", version.getCreatedTime());
+        response.put("CreatedTime", iso(version.getCreatedTime()));
         return Response.ok(response).build();
     }
 
@@ -367,6 +368,10 @@ public class GlueJsonHandler {
             response.put("NextToken", page.nextToken());
         }
         return response;
+    }
+
+    private static String iso(Instant instant) {
+        return instant != null ? instant.toString() : null;
     }
 
     private Response handlePutSchemaVersionMetadata(JsonNode request) {
