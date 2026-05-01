@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.apigateway;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.services.apigateway.model.ApiGatewayResource;
@@ -384,9 +385,7 @@ public class ApiGatewayExecuteController {
     private String buildMethodArn(String region, String apiId, String stageName, String httpMethod, String requestPath) {
         String normalizedPath = requestPath == null ? "" : requestPath.replaceFirst("^/", "");
         String arnRegion = region == null ? regionResolver.getDefaultRegion() : region;
-        return "arn:aws:execute-api:" + arnRegion
-                + ":" + regionResolver.getAccountId()
-                + ":" + apiId + "/" + stageName + "/" + httpMethod + "/" + normalizedPath;
+        return AwsArnUtils.Arn.of("execute-api", arnRegion, regionResolver.getAccountId(), apiId + "/" + stageName + "/" + httpMethod + "/" + normalizedPath).toString();
     }
 
     /**

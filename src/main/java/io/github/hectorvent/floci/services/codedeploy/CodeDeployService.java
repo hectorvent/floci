@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.codedeploy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.codedeploy.model.Application;
 import io.github.hectorvent.floci.services.codedeploy.model.Deployment;
@@ -424,7 +425,7 @@ public class CodeDeployService {
 
         // Build initial target map
         String targetId = appSpec.functionName + ":" + appSpec.aliasName;
-        String targetArn = "arn:aws:lambda:" + region + ":000000000000:function:" + appSpec.functionName + ":" + appSpec.aliasName;
+        String targetArn = AwsArnUtils.Arn.of("lambda", region, "000000000000", "function:" + appSpec.functionName + ":" + appSpec.aliasName).toString();
         Map<String, Object> lambdaTargetMap = new ConcurrentHashMap<>();
         lambdaTargetMap.put("deploymentId", deploymentId);
         lambdaTargetMap.put("targetId", targetId);
@@ -825,11 +826,11 @@ public class CodeDeployService {
     }
 
     public String applicationArn(String region, String name) {
-        return "arn:aws:codedeploy:" + region + ":000000000000:application:" + name;
+        return AwsArnUtils.Arn.of("codedeploy", region, "000000000000", "application:" + name).toString();
     }
 
     public String deploymentGroupArn(String region, String appName, String groupName) {
-        return "arn:aws:codedeploy:" + region + ":000000000000:deploymentgroup:" + appName + "/" + groupName;
+        return AwsArnUtils.Arn.of("codedeploy", region, "000000000000", "deploymentgroup:" + appName + "/" + groupName).toString();
     }
 
     @SuppressWarnings("unchecked")

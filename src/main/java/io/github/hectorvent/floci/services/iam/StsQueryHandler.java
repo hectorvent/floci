@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.iam;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.AwsQueryController;
 import io.github.hectorvent.floci.core.common.AwsQueryResponse;
@@ -66,7 +67,7 @@ public class StsQueryHandler {
                 ? roleArn.substring(roleArn.lastIndexOf('/') + 1)
                 : "UnknownRole";
         String accountId = iamService.getAccountId();
-        String assumedRoleArn = "arn:aws:sts::" + accountId + ":assumed-role/" + roleName + "/" + sessionName;
+        String assumedRoleArn = AwsArnUtils.Arn.of("sts", "", accountId, "assumed-role/" + roleName + "/" + sessionName).toString();
         String assumedRoleId = "AROA" + randomId(16) + ":" + sessionName;
 
         // Register session so IAM enforcement can resolve the role's policies
@@ -89,7 +90,7 @@ public class StsQueryHandler {
         String result = new XmlBuilder()
                 .elem("UserId", accountId)
                 .elem("Account", accountId)
-                .elem("Arn", "arn:aws:iam::" + accountId + ":root")
+                .elem("Arn", AwsArnUtils.Arn.of("iam", "", accountId, "root").toString())
                 .build();
         return Response.ok(AwsQueryResponse.envelope("GetCallerIdentity", AwsNamespaces.STS, result)).build();
     }
@@ -122,7 +123,7 @@ public class StsQueryHandler {
 
         String roleName = roleArn.contains("/") ? roleArn.substring(roleArn.lastIndexOf('/') + 1) : "UnknownRole";
         String accountId = iamService.getAccountId();
-        String assumedRoleArn = "arn:aws:sts::" + accountId + ":assumed-role/" + roleName + "/" + sessionName;
+        String assumedRoleArn = AwsArnUtils.Arn.of("sts", "", accountId, "assumed-role/" + roleName + "/" + sessionName).toString();
         String assumedRoleId = "AROA" + randomId(16) + ":" + sessionName;
         String provider = providerId != null && !providerId.isBlank() ? providerId : "accounts.google.com";
 
@@ -159,7 +160,7 @@ public class StsQueryHandler {
 
         String roleName = roleArn.contains("/") ? roleArn.substring(roleArn.lastIndexOf('/') + 1) : "UnknownRole";
         String accountId = iamService.getAccountId();
-        String assumedRoleArn = "arn:aws:sts::" + accountId + ":assumed-role/" + roleName + "/" + sessionName;
+        String assumedRoleArn = AwsArnUtils.Arn.of("sts", "", accountId, "assumed-role/" + roleName + "/" + sessionName).toString();
         String assumedRoleId = "AROA" + randomId(16) + ":" + sessionName;
 
         iamService.registerSession(accessKeyId, roleArn, expiration, null);
@@ -194,7 +195,7 @@ public class StsQueryHandler {
         Instant expiration = Instant.now().plusSeconds(durationSeconds);
         String accountId = iamService.getAccountId();
         String federatedUserId = accountId + ":" + name;
-        String federatedUserArn = "arn:aws:sts::" + accountId + ":federated-user/" + name;
+        String federatedUserArn = AwsArnUtils.Arn.of("sts", "", accountId, "federated-user/" + name).toString();
 
         String sessionPolicy = getParam(params, "Policy");
         // Register federation token so enforcement can scope its policies via session policy

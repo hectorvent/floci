@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.dynamodb;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
@@ -1993,8 +1994,7 @@ public class DynamoDbService {
 
         long now = Instant.now().getEpochSecond();
         String exportId = System.currentTimeMillis() + "-" + UUID.randomUUID().toString().replace("-", "");
-        String exportArn = "arn:aws:dynamodb:" + tableRegion + ":" + regionResolver.getAccountId()
-                + ":table/" + table.getTableName() + "/export/" + exportId;
+        String exportArn = AwsArnUtils.Arn.of("dynamodb", tableRegion, regionResolver.getAccountId(), "table/" + table.getTableName() + "/export/" + exportId).toString();
 
         ExportDescription desc = new ExportDescription();
         desc.setExportArn(exportArn);

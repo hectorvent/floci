@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.elasticache;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.AwsQueryResponse;
@@ -288,7 +289,7 @@ public class ElastiCacheQueryHandler {
                 .elem("Engine", "redis")
                 .elem("MinimumEngineVersion", "6.0")
                 .start("UserGroupIds").end("UserGroupIds")
-                .elem("ARN", "arn:aws:elasticache:us-east-1:000000000000:user:" + u.getUserId())
+                .elem("ARN", AwsArnUtils.Arn.of("elasticache", "us-east-1", "000000000000", "user:" + u.getUserId()).toString())
                 .build();
     }
 

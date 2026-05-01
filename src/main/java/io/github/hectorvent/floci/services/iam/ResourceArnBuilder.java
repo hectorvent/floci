@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.iam;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.ws.rs.container.ContainerRequestContext;
 
@@ -35,13 +36,13 @@ public class ResourceArnBuilder {
         // path: /bucket or /bucket/key
         String stripped = path.startsWith("/") ? path.substring(1) : path;
         if (stripped.isEmpty()) {
-            return "arn:aws:s3:::*";
+            return AwsArnUtils.Arn.of("s3", "", "", "*").toString();
         }
         int slash = stripped.indexOf('/');
         if (slash < 0) {
-            return "arn:aws:s3:::" + stripped;
+            return AwsArnUtils.Arn.of("s3", "", "", stripped).toString();
         }
-        return "arn:aws:s3:::" + stripped;
+        return AwsArnUtils.Arn.of("s3", "", "", stripped).toString();
     }
 
     // ── Lambda ──────────────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ public class ResourceArnBuilder {
         // strip qualifier if present
         int colon = name.indexOf(':');
         if (colon > 0) name = name.substring(0, colon);
-        return "arn:aws:lambda:" + region + ":" + accountId + ":function:" + name;
+        return AwsArnUtils.Arn.of("lambda", region, accountId, "function:" + name).toString();
     }
 
     // ── SQS ─────────────────────────────────────────────────────────────────────
@@ -64,43 +65,43 @@ public class ResourceArnBuilder {
         }
         if (queueUrl != null) {
             String queueName = queueUrl.substring(queueUrl.lastIndexOf('/') + 1);
-            return "arn:aws:sqs:" + region + ":" + accountId + ":" + queueName;
+            return AwsArnUtils.Arn.of("sqs", region, accountId, queueName).toString();
         }
-        return "arn:aws:sqs:" + region + ":" + accountId + ":*";
+        return AwsArnUtils.Arn.of("sqs", region, accountId, "*").toString();
     }
 
     // ── SNS ─────────────────────────────────────────────────────────────────────
     private String buildSnsArn(ContainerRequestContext ctx, String region, String accountId) {
         String topicArn = firstFormParam(ctx, "TopicArn");
-        return topicArn != null ? topicArn : "arn:aws:sns:" + region + ":" + accountId + ":*";
+        return topicArn != null ? topicArn : AwsArnUtils.Arn.of("sns", region, accountId, "*").toString();
     }
 
     // ── DynamoDB ─────────────────────────────────────────────────────────────────
     private String buildDynamoDbArn(ContainerRequestContext ctx, String region, String accountId) {
         // TableName comes in the JSON body; use wildcard since we don't parse the body here
-        return "arn:aws:dynamodb:" + region + ":" + accountId + ":table/*";
+        return AwsArnUtils.Arn.of("dynamodb", region, accountId, "table/*").toString();
     }
 
     // ── Kinesis ──────────────────────────────────────────────────────────────────
     private String buildKinesisArn(ContainerRequestContext ctx, String region, String accountId) {
-        return "arn:aws:kinesis:" + region + ":" + accountId + ":stream/*";
+        return AwsArnUtils.Arn.of("kinesis", region, accountId, "stream/*").toString();
     }
 
     // ── Secrets Manager ──────────────────────────────────────────────────────────
     private String buildSecretsManagerArn(ContainerRequestContext ctx, String region, String accountId) {
-        return "arn:aws:secretsmanager:" + region + ":" + accountId + ":secret:*";
+        return AwsArnUtils.Arn.of("secretsmanager", region, accountId, "secret:*").toString();
     }
 
     // ── SSM ──────────────────────────────────────────────────────────────────────
     private String buildSsmArn(ContainerRequestContext ctx, String region, String accountId) {
-        return "arn:aws:ssm:" + region + ":" + accountId + ":parameter/*";
+        return AwsArnUtils.Arn.of("ssm", region, accountId, "parameter/*").toString();
     }
 
     // ── KMS ──────────────────────────────────────────────────────────────────────
     private String buildKmsArn(String path, String region, String accountId) {
         String keyId = extractSegmentAfter(path, "keys");
-        if (keyId == null) return "arn:aws:kms:" + region + ":" + accountId + ":key/*";
-        return "arn:aws:kms:" + region + ":" + accountId + ":key/" + keyId;
+        if (keyId == null) return AwsArnUtils.Arn.of("kms", region, accountId, "key/*").toString();
+        return AwsArnUtils.Arn.of("kms", region, accountId, "key/" + keyId).toString();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

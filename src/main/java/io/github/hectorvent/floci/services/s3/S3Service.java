@@ -1767,7 +1767,7 @@ public class S3Service {
 
             ObjectNode bucketNode = objectMapper.createObjectNode();
             bucketNode.put("name", bucketName);
-            bucketNode.put("arn", "arn:aws:s3:::" + bucketName);
+            bucketNode.put("arn", AwsArnUtils.Arn.of("s3", "", "", bucketName).toString());
 
             ObjectNode objectNode = objectMapper.createObjectNode();
             objectNode.put("key", key);

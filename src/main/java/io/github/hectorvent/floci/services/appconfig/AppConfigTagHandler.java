@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.appconfig;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.TagHandler;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -64,11 +65,13 @@ public class AppConfigTagHandler implements TagHandler {
 
     private static ResourceRef parseArn(String arn) {
         // arn:aws:appconfig:<region>:<account>:<resource>
-        String[] arnParts = arn.split(":", 6);
-        if (arnParts.length < 6) {
+        String resource;
+        try {
+            resource = AwsArnUtils.parse(arn).resource();
+        } catch (IllegalArgumentException e) {
             throw new AwsException("BadRequestException", "Invalid resource ARN: " + arn, 400);
         }
-        String[] parts = arnParts[5].split("/");
+        String[] parts = resource.split("/");
         if (parts.length >= 2 && "application".equals(parts[0])) {
             // application/<appId>
             if (parts.length == 2) return new ResourceRef("application", parts[1]);

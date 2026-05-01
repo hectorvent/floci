@@ -4,6 +4,7 @@ import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.model.Frame;
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.dns.EmbeddedDnsServer;
 import io.github.hectorvent.floci.core.common.docker.ContainerBuilder;
@@ -180,8 +181,7 @@ public class CodeBuildRunner {
             Map<String, Object> logsMap = new java.util.HashMap<>();
             logsMap.put("groupName", logGroup);
             logsMap.put("streamName", logStream);
-            logsMap.put("cloudWatchLogsArn", "arn:aws:logs:" + region + ":" + config.defaultAccountId()
-                    + ":log-group:" + logGroup + ":log-stream:" + logStream);
+            logsMap.put("cloudWatchLogsArn", AwsArnUtils.Arn.of("logs", region, config.defaultAccountId(), "log-group:" + logGroup + ":log-stream:" + logStream).toString());
             build.setLogs(logsMap);
 
             List<String> envList = buildEnvList(region, build, project, buildspec, logStream);
