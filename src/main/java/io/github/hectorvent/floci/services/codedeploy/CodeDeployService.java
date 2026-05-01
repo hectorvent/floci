@@ -738,7 +738,7 @@ public class CodeDeployService {
         }
 
         String targetId = clusterName + ":" + serviceName;
-        String targetArn = "arn:aws:ecs:" + region + ":000000000000:service/" + clusterName + "/" + serviceName;
+        String targetArn = AwsArnUtils.Arn.of("ecs", region, "000000000000", "service/" + clusterName + "/" + serviceName).toString();
 
         Map<String, Object> ecsTargetMap = new ConcurrentHashMap<>();
         ecsTargetMap.put("deploymentId", deploymentId);
