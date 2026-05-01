@@ -153,6 +153,7 @@ floci:
       enabled: true
     elbv2:
       enabled: true
+      mock: true
     codebuild:
       enabled: true
       # docker-network: floci-network

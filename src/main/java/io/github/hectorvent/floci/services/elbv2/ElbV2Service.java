@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.elbv2;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.elbv2.model.*;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 import java.time.Instant;
 import java.util.*;
@@ -11,6 +12,12 @@ import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class ElbV2Service {
+
+    @Inject
+    ElbV2DataPlane dataPlane;
+
+    @Inject
+    ElbV2HealthChecker healthChecker;
 
     private static final String CANONICAL_HOSTED_ZONE_ID = "Z35SXDOTRQ7X7K";
     private static final String DEFAULT_ACCOUNT = "000000000000";
@@ -112,6 +119,7 @@ public class ElbV2Service {
             Map<String, Listener> regionListeners = listeners.getOrDefault(region, Map.of());
             Map<String, Rule> regionRules = rules.getOrDefault(region, Map.of());
             for (String listenerArn : listenerArns) {
+                dataPlane.stopListener(listenerArn);
                 regionListeners.remove(listenerArn);
                 List<String> ruleArns = listenerToRules.remove(listenerArn);
                 if (ruleArns != null) {
@@ -199,6 +207,7 @@ public class ElbV2Service {
         if (!initialTags.isEmpty()) {
             tags.put(arn, new LinkedHashMap<>(initialTags));
         }
+        healthChecker.startMonitoring(tg);
         return tg;
     }
 
@@ -236,6 +245,7 @@ public class ElbV2Service {
             throw new AwsException("ResourceInUse",
                     "Target group '" + tg.getTargetGroupName() + "' is currently in use by a listener or rule.", 400);
         }
+        healthChecker.stopMonitoring(arn);
         targetGroups.getOrDefault(region, Map.of()).remove(arn);
         tgToLbs.remove(arn);
         tags.remove(arn);
@@ -316,6 +326,7 @@ public class ElbV2Service {
         if (!initialTags.isEmpty()) {
             tags.put(listenerArn, new LinkedHashMap<>(initialTags));
         }
+        dataPlane.startListener(listener, region, getListenerRules(region, listenerArn));
         return listener;
     }
 
@@ -341,6 +352,7 @@ public class ElbV2Service {
         if (listener == null) {
             return;
         }
+        dataPlane.stopListener(listenerArn);
         lbToListeners.getOrDefault(listener.getLoadBalancerArn(), List.of()).remove(listenerArn);
 
         Map<String, Rule> regionRules = rules.getOrDefault(region, Map.of());
@@ -380,6 +392,8 @@ public class ElbV2Service {
                     .filter(r -> r != null && r.isDefault())
                     .forEach(r -> r.setActions(new ArrayList<>(defaultActions)));
         }
+        dataPlane.stopListener(listenerArn);
+        dataPlane.startListener(requireListener(region, listenerArn), region, getListenerRules(region, listenerArn));
         return listener;
     }
 
@@ -433,6 +447,7 @@ public class ElbV2Service {
         if (!initialTags.isEmpty()) {
             tags.put(ruleArn, new LinkedHashMap<>(initialTags));
         }
+        dataPlane.recompileRules(listenerArn, getListenerRules(region, listenerArn));
         return rule;
     }
 
@@ -465,15 +480,19 @@ public class ElbV2Service {
             throw new AwsException("OperationNotPermitted",
                     "The default rule for a listener cannot be deleted.", 400);
         }
+        String listenerArn = rule.getListenerArn();
         regionRules.remove(ruleArn);
-        listenerToRules.getOrDefault(rule.getListenerArn(), List.of()).remove(ruleArn);
+        listenerToRules.getOrDefault(listenerArn, List.of()).remove(ruleArn);
         tags.remove(ruleArn);
+        dataPlane.recompileRules(listenerArn, getListenerRules(region, listenerArn));
     }
 
     public Rule modifyRule(String region, String ruleArn, List<RuleCondition> conditions, List<Action> actions) {
         Rule rule = requireRule(region, ruleArn);
+        String listenerArn = rule.getListenerArn();
         if (conditions != null) rule.setConditions(new ArrayList<>(conditions));
         if (actions != null)    rule.setActions(new ArrayList<>(actions));
+        dataPlane.recompileRules(listenerArn, getListenerRules(region, listenerArn));
         return rule;
     }
 
@@ -512,6 +531,11 @@ public class ElbV2Service {
 
         // commit
         arnToPriority.forEach((arn, priority) -> regionRules.get(arn).setPriority(String.valueOf(priority)));
+
+        Set<String> affectedListeners = arnToPriority.keySet().stream()
+                .map(arn -> regionRules.get(arn).getListenerArn())
+                .collect(Collectors.toSet());
+        affectedListeners.forEach(la -> dataPlane.recompileRules(la, getListenerRules(region, la)));
     }
 
     // ── Targets ───────────────────────────────────────────────────────────────
@@ -524,6 +548,7 @@ public class ElbV2Service {
             existing.removeIf(e -> e.getId().equals(t.getId()) && Objects.equals(e.getPort(), t.getPort()));
             existing.add(t);
         }
+        healthChecker.addTargets(tgArn, targets, tg);
     }
 
     public void deregisterTargets(String region, String tgArn, List<TargetDescription> targets) {
@@ -531,6 +556,7 @@ public class ElbV2Service {
         for (TargetDescription t : targets) {
             tg.getTargets().removeIf(e -> e.getId().equals(t.getId()) && Objects.equals(e.getPort(), t.getPort()));
         }
+        healthChecker.removeTargets(tgArn, targets, tg);
     }
 
     public List<TargetHealth> describeTargetHealth(String region, String tgArn,
@@ -542,10 +568,17 @@ public class ElbV2Service {
         return candidates.stream().map(t -> {
             TargetHealth th = new TargetHealth();
             th.setTarget(t);
-            th.setHealthCheckPort(tg.getHealthCheckPort() != null ? tg.getHealthCheckPort() : "traffic-port");
-            th.setState("initial");
-            th.setReason("Elb.RegistrationInProgress");
-            th.setDescription("Target registration is in progress");
+            int port = ElbV2HealthChecker.effectivePort(t, tg);
+            th.setHealthCheckPort(String.valueOf(port));
+            String state = healthChecker.getState(tgArn, t.getId(), port);
+            th.setState(state);
+            if ("initial".equals(state)) {
+                th.setReason("Elb.RegistrationInProgress");
+                th.setDescription("Target registration is in progress");
+            } else if ("unhealthy".equals(state)) {
+                th.setReason("Target.FailedHealthChecks");
+                th.setDescription("Health checks failed");
+            }
             return th;
         }).collect(Collectors.toList());
     }
@@ -631,6 +664,56 @@ public class ElbV2Service {
             throw new AwsException("RuleNotFound", "One or more rules not found.", 400);
         }
         return r;
+    }
+
+    public TargetGroup getTargetGroup(String region, String arn) {
+        return targetGroups.getOrDefault(region, Map.of()).get(arn);
+    }
+
+    public TargetGroup getTargetGroupByName(String region, String name) {
+        return targetGroups.getOrDefault(region, Map.of()).values().stream()
+                .filter(tg -> tg.getTargetGroupName().equals(name))
+                .findFirst()
+                .orElse(null);
+    }
+
+    public void shiftListenerForward(String region, String listenerArn,
+                                     String blueTgArn, String greenTgArn, int greenWeightPct) {
+        Rule defaultRule = listenerToRules.getOrDefault(listenerArn, List.of()).stream()
+                .map(arn -> rules.getOrDefault(region, Map.of()).get(arn))
+                .filter(r -> r != null && r.isDefault())
+                .findFirst()
+                .orElse(null);
+        if (defaultRule == null) {
+            return;
+        }
+        Action action = new Action();
+        action.setType("forward");
+        if (greenWeightPct >= 100) {
+            action.setTargetGroupArn(greenTgArn);
+        } else {
+            Action.TargetGroupTuple blueTuple = new Action.TargetGroupTuple();
+            blueTuple.setTargetGroupArn(blueTgArn);
+            blueTuple.setWeight(100 - greenWeightPct);
+            Action.TargetGroupTuple greenTuple = new Action.TargetGroupTuple();
+            greenTuple.setTargetGroupArn(greenTgArn);
+            greenTuple.setWeight(greenWeightPct);
+            action.setTargetGroups(List.of(blueTuple, greenTuple));
+        }
+        defaultRule.setActions(List.of(action));
+        dataPlane.recompileRules(listenerArn, getListenerRules(region, listenerArn));
+    }
+
+    private List<Rule> getListenerRules(String region, String listenerArn) {
+        Map<String, Rule> regionRules = rules.getOrDefault(region, Map.of());
+        return listenerToRules.getOrDefault(listenerArn, List.of()).stream()
+                .map(regionRules::get)
+                .filter(Objects::nonNull)
+                .sorted(Comparator.comparingInt(r -> {
+                    if ("default".equals(r.getPriority())) return Integer.MAX_VALUE;
+                    try { return Integer.parseInt(r.getPriority()); } catch (NumberFormatException e) { return Integer.MAX_VALUE; }
+                }))
+                .collect(Collectors.toList());
     }
 
     private static void validateName(String name, String resource) {

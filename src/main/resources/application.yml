@@ -223,6 +223,7 @@ floci:
       keep-running-on-shutdown: false
     elbv2:
       enabled: true
+      mock: false
     codebuild:
       enabled: true
       # docker-network: floci-network

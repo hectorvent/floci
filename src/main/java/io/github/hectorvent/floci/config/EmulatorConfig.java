@@ -718,6 +718,9 @@ public interface EmulatorConfig {
     interface ElbV2ServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        @WithDefault("false")
+        boolean mock();
     }
 
     interface EksServiceConfig {

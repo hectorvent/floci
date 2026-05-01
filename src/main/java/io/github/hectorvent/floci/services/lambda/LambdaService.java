@@ -548,6 +548,12 @@ public class LambdaService {
             }
             codeStore.delete(functionName);
             functionStore.delete(region, functionName);
+            versionCounters.remove(region + "::" + functionName);
+            if (aliasStore != null) {
+                for (LambdaAlias alias : aliasStore.list(region, functionName)) {
+                    aliasStore.delete(region, functionName, alias.getName());
+                }
+            }
         }
         LOG.infov("Deleted Lambda function: {0}", functionName);
     }

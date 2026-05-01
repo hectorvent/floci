@@ -7,6 +7,10 @@ import io.github.hectorvent.floci.services.codedeploy.model.Application;
 import io.github.hectorvent.floci.services.codedeploy.model.Deployment;
 import io.github.hectorvent.floci.services.codedeploy.model.DeploymentConfig;
 import io.github.hectorvent.floci.services.codedeploy.model.DeploymentGroup;
+import io.github.hectorvent.floci.services.ecs.EcsService;
+import io.github.hectorvent.floci.services.ecs.model.TaskSet;
+import io.github.hectorvent.floci.services.elbv2.ElbV2Service;
+import io.github.hectorvent.floci.services.elbv2.model.TargetGroup;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
 import io.github.hectorvent.floci.services.lambda.model.InvocationType;
 import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
@@ -33,11 +37,16 @@ public class CodeDeployService {
     private static final Logger LOG = Logger.getLogger(CodeDeployService.class);
 
     private final LambdaService lambdaService;
+    private final EcsService ecsService;
+    private final ElbV2Service elbV2Service;
     private final ObjectMapper mapper;
 
     @Inject
-    public CodeDeployService(LambdaService lambdaService, ObjectMapper mapper) {
+    public CodeDeployService(LambdaService lambdaService, EcsService ecsService,
+                             ElbV2Service elbV2Service, ObjectMapper mapper) {
         this.lambdaService = lambdaService;
+        this.ecsService = ecsService;
+        this.elbV2Service = elbV2Service;
         this.mapper = mapper;
     }
 
@@ -63,6 +72,16 @@ public class CodeDeployService {
         String aliasName;
         String currentVersion;
         String targetVersion;
+        String beforeAllowTraffic;
+        String afterAllowTraffic;
+    }
+
+    private static final class EcsAppSpecInfo {
+        String taskDefinition;
+        String containerName;
+        int containerPort;
+        String beforeInstall;
+        String afterInstall;
         String beforeAllowTraffic;
         String afterAllowTraffic;
     }
@@ -399,11 +418,19 @@ public class CodeDeployService {
 
     public String createDeployment(String region, String appName, String groupName,
                                    String configName, Map<String, Object> revision, String description) {
-        getApplication(region, appName);
-        getDeploymentGroup(region, appName, groupName);
+        Application app = getApplication(region, appName);
+        DeploymentGroup group = getDeploymentGroup(region, appName, groupName);
+        // Compute platform is authoritative on the Application; the deployment group may also carry it
+        String computePlatform = group.getComputePlatform();
+        if (computePlatform == null) {
+            computePlatform = app.getComputePlatform();
+        }
+
+        if ("ECS".equals(computePlatform)) {
+            return createEcsDeployment(region, appName, groupName, group, configName, revision, description);
+        }
 
         AppSpecInfo appSpec = parseAppSpec(revision);
-        DeploymentGroup group = getDeploymentGroup(region, appName, groupName);
         String effectiveConfig = configName != null ? configName : group.getDeploymentConfigName();
 
         String deploymentId = generateDeploymentId();
@@ -499,9 +526,7 @@ public class CodeDeployService {
         if (target == null) {
             return List.of();
         }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> lambdaTarget = (Map<String, Object>) target.get("lambdaTarget");
-        String targetId = lambdaTarget != null ? (String) lambdaTarget.get("targetId") : null;
+        String targetId = extractTargetId(target);
         return targetId != null ? List.of(targetId) : List.of();
     }
 
@@ -511,13 +536,22 @@ public class CodeDeployService {
         if (target == null) {
             return List.of();
         }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> lambdaTarget = (Map<String, Object>) target.get("lambdaTarget");
-        String targetId = lambdaTarget != null ? (String) lambdaTarget.get("targetId") : null;
+        String targetId = extractTargetId(target);
         if (targetId == null || (!targetIds.isEmpty() && !targetIds.contains(targetId))) {
             return List.of();
         }
         return List.of(target);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractTargetId(Map<String, Object> target) {
+        String type = (String) target.get("deploymentTargetType");
+        if ("ECSTarget".equals(type)) {
+            Map<String, Object> ecsTarget = (Map<String, Object>) target.get("ecsTarget");
+            return ecsTarget != null ? (String) ecsTarget.get("targetId") : null;
+        }
+        Map<String, Object> lambdaTarget = (Map<String, Object>) target.get("lambdaTarget");
+        return lambdaTarget != null ? (String) lambdaTarget.get("targetId") : null;
     }
 
     public String putLifecycleEventHookExecutionStatus(String deploymentId, String executionId, String status) {
@@ -579,6 +613,383 @@ public class CodeDeployService {
                     "AppSpec must specify Name, Alias, and TargetVersion", 400);
         }
         return info;
+    }
+
+    @SuppressWarnings("unchecked")
+    private EcsAppSpecInfo parseEcsAppSpec(Map<String, Object> revision) {
+        if (revision == null) {
+            throw new AwsException("InvalidRevisionException", "Revision is required", 400);
+        }
+        Object appSpecContent = revision.get("appSpecContent");
+        if (!(appSpecContent instanceof Map)) {
+            throw new AwsException("InvalidRevisionException", "Missing appSpecContent in revision", 400);
+        }
+        String content = (String) ((Map<String, Object>) appSpecContent).get("content");
+        if (content == null || content.isBlank()) {
+            throw new AwsException("InvalidRevisionException", "Missing content in appSpecContent", 400);
+        }
+
+        EcsAppSpecInfo info = new EcsAppSpecInfo();
+        try {
+            JsonNode root = mapper.readTree(content);
+            JsonNode resources = root.get("Resources");
+            if (resources != null && resources.isArray() && !resources.isEmpty()) {
+                JsonNode firstResource = resources.get(0);
+                if (firstResource.isObject()) {
+                    JsonNode resourceNode = firstResource.fields().next().getValue();
+                    JsonNode props = resourceNode.path("Properties");
+                    info.taskDefinition = props.path("TaskDefinition").asText(null);
+                    JsonNode lbInfo = props.path("LoadBalancerInfo");
+                    if (!lbInfo.isMissingNode()) {
+                        info.containerName = lbInfo.path("ContainerName").asText(null);
+                        info.containerPort = lbInfo.path("ContainerPort").asInt(80);
+                    }
+                }
+            }
+            JsonNode hooks = root.get("Hooks");
+            if (hooks != null && hooks.isArray()) {
+                for (JsonNode hook : hooks) {
+                    if (hook.has("BeforeInstall")) {
+                        info.beforeInstall = hook.get("BeforeInstall").asText(null);
+                    }
+                    if (hook.has("AfterInstall")) {
+                        info.afterInstall = hook.get("AfterInstall").asText(null);
+                    }
+                    if (hook.has("BeforeAllowTraffic")) {
+                        info.beforeAllowTraffic = hook.get("BeforeAllowTraffic").asText(null);
+                    }
+                    if (hook.has("AfterAllowTraffic")) {
+                        info.afterAllowTraffic = hook.get("AfterAllowTraffic").asText(null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            throw new AwsException("InvalidRevisionException", "Failed to parse ECS AppSpec: " + e.getMessage(), 400);
+        }
+
+        if (info.taskDefinition == null) {
+            throw new AwsException("InvalidRevisionException", "ECS AppSpec must specify TaskDefinition", 400);
+        }
+        return info;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String createEcsDeployment(String region, String appName, String groupName,
+                                       DeploymentGroup group, String configName,
+                                       Map<String, Object> revision, String description) {
+        EcsAppSpecInfo appSpec = parseEcsAppSpec(revision);
+        String effectiveConfig = configName != null ? configName : group.getDeploymentConfigName();
+
+        String deploymentId = generateDeploymentId();
+        double now = Instant.now().toEpochMilli() / 1000.0;
+
+        Deployment deployment = new Deployment();
+        deployment.setDeploymentId(deploymentId);
+        deployment.setApplicationName(appName);
+        deployment.setDeploymentGroupName(groupName);
+        deployment.setDeploymentConfigName(effectiveConfig);
+        deployment.setStatus("Queued");
+        deployment.setRevision(revision);
+        deployment.setCreateTime(now);
+        deployment.setDescription(description);
+        deployment.setCreator("user");
+        deployment.setComputePlatform("ECS");
+        deploymentsFor(region).put(deploymentId, deployment);
+
+        // Determine ECS cluster/service from deployment group
+        String clusterName = "default";
+        String serviceName = null;
+        List<Map<String, Object>> ecsSvcs = group.getEcsServices();
+        if (ecsSvcs != null && !ecsSvcs.isEmpty()) {
+            Map<String, Object> svc = ecsSvcs.get(0);
+            clusterName = (String) svc.getOrDefault("clusterName", "default");
+            serviceName = (String) svc.get("serviceName");
+        }
+        if (serviceName == null) {
+            throw new AwsException("InvalidDeploymentConfigException",
+                    "ECS deployment group must specify ecsServices", 400);
+        }
+
+        // Determine blue/green TG ARNs from loadBalancerInfo
+        String blueTgArn = null;
+        String greenTgArn = null;
+        List<String> listenerArns = new ArrayList<>();
+        Map<String, Object> lbInfo = group.getLoadBalancerInfo();
+        if (lbInfo != null) {
+            List<Map<String, Object>> pairList = (List<Map<String, Object>>) lbInfo.get("targetGroupPairInfoList");
+            if (pairList != null && !pairList.isEmpty()) {
+                Map<String, Object> pair = pairList.get(0);
+                List<Map<String, Object>> tgList = (List<Map<String, Object>>) pair.get("targetGroups");
+                if (tgList != null && tgList.size() >= 2) {
+                    String blueName = (String) tgList.get(0).get("name");
+                    String greenName = (String) tgList.get(1).get("name");
+                    TargetGroup blueTg = elbV2Service.getTargetGroupByName(region, blueName);
+                    TargetGroup greenTg = elbV2Service.getTargetGroupByName(region, greenName);
+                    if (blueTg != null) { blueTgArn = blueTg.getTargetGroupArn(); }
+                    if (greenTg != null) { greenTgArn = greenTg.getTargetGroupArn(); }
+                }
+                Map<String, Object> prodRoute = (Map<String, Object>) pair.get("prodTrafficRoute");
+                if (prodRoute != null) {
+                    List<String> arns = (List<String>) prodRoute.get("listenerArns");
+                    if (arns != null) { listenerArns.addAll(arns); }
+                }
+            }
+        }
+
+        String targetId = clusterName + ":" + serviceName;
+        String targetArn = "arn:aws:ecs:" + region + ":000000000000:service/" + clusterName + "/" + serviceName;
+
+        Map<String, Object> ecsTargetMap = new ConcurrentHashMap<>();
+        ecsTargetMap.put("deploymentId", deploymentId);
+        ecsTargetMap.put("targetId", targetId);
+        ecsTargetMap.put("targetArn", targetArn);
+        ecsTargetMap.put("status", "Pending");
+        ecsTargetMap.put("lastUpdatedAt", now);
+        ecsTargetMap.put("lifecycleEvents", new CopyOnWriteArrayList<>());
+        ecsTargetMap.put("taskSetsInfo", new CopyOnWriteArrayList<>());
+
+        Map<String, Object> targetMap = new ConcurrentHashMap<>();
+        targetMap.put("deploymentTargetType", "ECSTarget");
+        targetMap.put("ecsTarget", ecsTargetMap);
+        deploymentTargetsFor(region).put(deploymentId, targetMap);
+
+        AtomicBoolean stopFlag = new AtomicBoolean(false);
+        stopFlags.put(deploymentId, stopFlag);
+
+        final String finalCluster = clusterName;
+        final String finalService = serviceName;
+        final String finalBlueTgArn = blueTgArn;
+        final String finalGreenTgArn = greenTgArn;
+        final List<String> finalListenerArns = listenerArns;
+        Thread.ofVirtual().name("codedeploy-ecs-" + deploymentId).start(
+                () -> runEcsStateMachine(region, deployment, appSpec, ecsTargetMap, stopFlag,
+                        effectiveConfig, finalCluster, finalService,
+                        finalBlueTgArn, finalGreenTgArn, finalListenerArns));
+
+        return deploymentId;
+    }
+
+    private void runEcsStateMachine(String region, Deployment deployment, EcsAppSpecInfo appSpec,
+                                    Map<String, Object> ecsTargetMap, AtomicBoolean stopFlag,
+                                    String configName, String clusterName, String serviceName,
+                                    String blueTgArn, String greenTgArn,
+                                    List<String> listenerArns) {
+        String deploymentId = deployment.getDeploymentId();
+        TaskSet greenTaskSet = null;
+        TaskSet blueTaskSet = null;
+        try {
+            deployment.setStatus("InProgress");
+            deployment.setStartTime(Instant.now().toEpochMilli() / 1000.0);
+            updateEcsTargetStatus(ecsTargetMap, "InProgress");
+
+            if (stopFlag.get()) { finishEcsStopped(deployment, ecsTargetMap); return; }
+
+            // Find existing primary (blue) task set
+            List<TaskSet> existing = ecsService.describeTaskSets(clusterName, serviceName, null, region);
+            blueTaskSet = existing.stream()
+                    .filter(ts -> "PRIMARY".equals(ts.getStatus()))
+                    .findFirst()
+                    .orElse(existing.isEmpty() ? null : existing.get(0));
+
+            if (appSpec.beforeInstall != null) {
+                boolean ok = invokeHook(region, deployment, appSpec.beforeInstall,
+                        "BeforeInstall", ecsTargetMap, stopFlag);
+                if (!ok) {
+                    finishEcsFailed(deployment, ecsTargetMap, "BeforeInstallHookFailed",
+                            "Hook function reported failure: BeforeInstall");
+                    return;
+                }
+            }
+
+            if (stopFlag.get()) { finishEcsStopped(deployment, ecsTargetMap); return; }
+
+            // Install: create green task set
+            Map<String, Object> installEvent = addLifecycleEvent(ecsTargetMap, "Install");
+            try {
+                greenTaskSet = ecsService.createTaskSet(clusterName, serviceName,
+                        appSpec.taskDefinition, null, 100.0, "PERCENT", deploymentId, region);
+                appendTaskSetInfo(ecsTargetMap, greenTaskSet, greenTgArn, 0.0);
+                finishLifecycleEvent(installEvent, "Succeeded");
+            } catch (Exception e) {
+                finishLifecycleEvent(installEvent, "Failed");
+                finishEcsFailed(deployment, ecsTargetMap, "InstallFailed", e.getMessage());
+                return;
+            }
+
+            if (stopFlag.get()) { finishEcsStopped(deployment, ecsTargetMap); return; }
+
+            if (appSpec.afterInstall != null) {
+                boolean ok = invokeHook(region, deployment, appSpec.afterInstall,
+                        "AfterInstall", ecsTargetMap, stopFlag);
+                if (!ok) {
+                    finishEcsFailed(deployment, ecsTargetMap, "AfterInstallHookFailed",
+                            "Hook function reported failure: AfterInstall");
+                    return;
+                }
+            }
+
+            if (stopFlag.get()) { finishEcsStopped(deployment, ecsTargetMap); return; }
+
+            if (appSpec.beforeAllowTraffic != null) {
+                boolean ok = invokeHook(region, deployment, appSpec.beforeAllowTraffic,
+                        "BeforeAllowTraffic", ecsTargetMap, stopFlag);
+                if (!ok) {
+                    finishEcsFailed(deployment, ecsTargetMap, "BeforeAllowTrafficHookFailed",
+                            "Hook function reported failure: BeforeAllowTraffic");
+                    return;
+                }
+            }
+
+            if (stopFlag.get()) { finishEcsStopped(deployment, ecsTargetMap); return; }
+
+            // AllowTraffic: shift ELB traffic blue → green
+            if (!listenerArns.isEmpty() && blueTgArn != null && greenTgArn != null) {
+                executeEcsAllowTraffic(region, deployment, configName, ecsTargetMap,
+                        listenerArns, blueTgArn, greenTgArn, stopFlag);
+            } else {
+                Map<String, Object> allowEvent = addLifecycleEvent(ecsTargetMap, "AllowTraffic");
+                finishLifecycleEvent(allowEvent, "Succeeded");
+            }
+
+            if (stopFlag.get()) { finishEcsStopped(deployment, ecsTargetMap); return; }
+
+            if (appSpec.afterAllowTraffic != null) {
+                boolean ok = invokeHook(region, deployment, appSpec.afterAllowTraffic,
+                        "AfterAllowTraffic", ecsTargetMap, stopFlag);
+                if (!ok) {
+                    finishEcsFailed(deployment, ecsTargetMap, "AfterAllowTrafficHookFailed",
+                            "Hook function reported failure: AfterAllowTraffic");
+                    return;
+                }
+            }
+
+            // Promote green as primary
+            if (greenTaskSet != null) {
+                ecsService.updateServicePrimaryTaskSet(clusterName, serviceName,
+                        greenTaskSet.getTaskSetArn(), region);
+            }
+
+            // Terminate blue task set
+            if (blueTaskSet != null) {
+                Map<String, Object> terminateEvent = addLifecycleEvent(ecsTargetMap, "TerminateBlueInstances");
+                try {
+                    ecsService.deleteTaskSet(clusterName, serviceName,
+                            blueTaskSet.getTaskSetArn(), true, region);
+                    finishLifecycleEvent(terminateEvent, "Succeeded");
+                } catch (Exception e) {
+                    LOG.debugv("Could not delete blue task set: {0}", e.getMessage());
+                    finishLifecycleEvent(terminateEvent, "Succeeded");
+                }
+            }
+
+            updateEcsTargetStatus(ecsTargetMap, "Succeeded");
+            deployment.setStatus("Succeeded");
+            deployment.setCompleteTime(Instant.now().toEpochMilli() / 1000.0);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            finishEcsStopped(deployment, ecsTargetMap);
+        } catch (Exception e) {
+            LOG.warnv("ECS deployment {0} failed: {1}", deploymentId, e.getMessage());
+            finishEcsFailed(deployment, ecsTargetMap, "DeploymentFailed", e.getMessage());
+        } finally {
+            stopFlags.remove(deploymentId);
+        }
+    }
+
+    private void executeEcsAllowTraffic(String region, Deployment deployment, String configName,
+                                        Map<String, Object> ecsTargetMap, List<String> listenerArns,
+                                        String blueTgArn, String greenTgArn,
+                                        AtomicBoolean stopFlag) throws InterruptedException {
+        TrafficRoutingInfo trc = getTrafficRoutingInfo(region, configName);
+        Map<String, Object> event = addLifecycleEvent(ecsTargetMap, "AllowTraffic");
+        try {
+            switch (trc.type) {
+                case "TimeBasedCanary" -> {
+                    for (String listenerArn : listenerArns) {
+                        elbV2Service.shiftListenerForward(region, listenerArn,
+                                blueTgArn, greenTgArn, trc.percentage);
+                    }
+                    long waitMs = Math.min(trc.intervalSeconds * 1000L, 5000L);
+                    if (waitMs > 0 && !stopFlag.get()) {
+                        Thread.sleep(waitMs);
+                    }
+                    if (!stopFlag.get()) {
+                        for (String listenerArn : listenerArns) {
+                            elbV2Service.shiftListenerForward(region, listenerArn,
+                                    blueTgArn, greenTgArn, 100);
+                        }
+                    }
+                }
+                case "TimeBasedLinear" -> {
+                    int steps = (int) Math.ceil(100.0 / trc.percentage);
+                    for (int step = 1; step <= steps && !stopFlag.get(); step++) {
+                        int pct = Math.min(step * trc.percentage, 100);
+                        for (String listenerArn : listenerArns) {
+                            elbV2Service.shiftListenerForward(region, listenerArn,
+                                    blueTgArn, greenTgArn, pct);
+                        }
+                        if (pct < 100) {
+                            long waitMs = Math.min(trc.intervalSeconds * 1000L, 2000L);
+                            if (waitMs > 0) {
+                                Thread.sleep(waitMs);
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    for (String listenerArn : listenerArns) {
+                        elbV2Service.shiftListenerForward(region, listenerArn,
+                                blueTgArn, greenTgArn, 100);
+                    }
+                }
+            }
+            finishLifecycleEvent(event, "Succeeded");
+        } catch (InterruptedException e) {
+            finishLifecycleEvent(event, "Failed");
+            throw e;
+        } catch (Exception e) {
+            finishLifecycleEvent(event, "Failed");
+            throw e;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendTaskSetInfo(Map<String, Object> ecsTargetMap, TaskSet ts,
+                                   String tgArn, double trafficWeight) {
+        Map<String, Object> tsInfo = new ConcurrentHashMap<>();
+        tsInfo.put("identifer", ts.getId());
+        tsInfo.put("desiredCount", ts.getComputedDesiredCount());
+        tsInfo.put("pendingCount", ts.getPendingCount());
+        tsInfo.put("runningCount", ts.getRunningCount());
+        tsInfo.put("status", ts.getStatus());
+        tsInfo.put("trafficWeight", trafficWeight);
+        if (tgArn != null) {
+            tsInfo.put("targetGroup", Map.of("arn", tgArn));
+        }
+        List<Map<String, Object>> taskSetsInfo = (List<Map<String, Object>>) ecsTargetMap.get("taskSetsInfo");
+        if (taskSetsInfo != null) {
+            taskSetsInfo.add(tsInfo);
+        }
+    }
+
+    private void updateEcsTargetStatus(Map<String, Object> ecsTargetMap, String status) {
+        ecsTargetMap.put("status", status);
+        ecsTargetMap.put("lastUpdatedAt", Instant.now().toEpochMilli() / 1000.0);
+    }
+
+    private void finishEcsStopped(Deployment deployment, Map<String, Object> ecsTargetMap) {
+        updateEcsTargetStatus(ecsTargetMap, "Skipped");
+        deployment.setStatus("Stopped");
+        deployment.setCompleteTime(Instant.now().toEpochMilli() / 1000.0);
+    }
+
+    private void finishEcsFailed(Deployment deployment, Map<String, Object> ecsTargetMap,
+                                  String errorCode, String message) {
+        updateEcsTargetStatus(ecsTargetMap, "Failed");
+        deployment.setStatus("Failed");
+        deployment.setCompleteTime(Instant.now().toEpochMilli() / 1000.0);
+        deployment.setErrorInformation(Map.of("code", errorCode, "message", message != null ? message : ""));
     }
 
     @SuppressWarnings("unchecked")
