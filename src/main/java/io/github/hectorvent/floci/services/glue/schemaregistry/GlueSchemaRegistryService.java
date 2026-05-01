@@ -89,7 +89,6 @@ public class GlueSchemaRegistryService {
         this.versionStore = versionStore;
         this.metadataStore = metadataStore;
         this.regionResolver = regionResolver;
-        rebuildVersionIndexes();
     }
 
     @PostConstruct
