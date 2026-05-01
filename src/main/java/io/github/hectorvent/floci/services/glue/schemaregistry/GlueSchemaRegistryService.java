@@ -70,8 +70,8 @@ public class GlueSchemaRegistryService {
         );
     }
 
-    public GlueSchemaRegistryService(StorageBackend<String, Registry> registryStore,
-                                     RegionResolver regionResolver) {
+    GlueSchemaRegistryService(StorageBackend<String, Registry> registryStore,
+                              RegionResolver regionResolver) {
         this(registryStore,
                 new io.github.hectorvent.floci.core.storage.InMemoryStorage<>(),
                 new io.github.hectorvent.floci.core.storage.InMemoryStorage<>(),

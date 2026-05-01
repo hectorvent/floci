@@ -1,9 +1,13 @@
 package io.github.hectorvent.floci.services.glue;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.core.storage.StorageBackend;
+import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.glue.model.Database;
+import io.github.hectorvent.floci.services.glue.model.Partition;
 import io.github.hectorvent.floci.services.glue.model.SchemaReference;
 import io.github.hectorvent.floci.services.glue.model.StorageDescriptor;
 import io.github.hectorvent.floci.services.glue.model.Table;
@@ -12,6 +16,8 @@ import io.github.hectorvent.floci.services.glue.schemaregistry.model.RegistryId;
 import io.github.hectorvent.floci.services.glue.schemaregistry.model.SchemaId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -39,14 +45,12 @@ class GlueServiceTest {
     @BeforeEach
     void setUp() {
         RegionResolver regionResolver = new RegionResolver(REGION, ACCOUNT_ID);
-        schemaRegistryService = new GlueSchemaRegistryService(
-                new InMemoryStorage<String,
-                        io.github.hectorvent.floci.services.glue.schemaregistry.model.Registry>(),
-                regionResolver);
+        StorageFactory storageFactory = new InMemoryStorageFactory();
+        schemaRegistryService = new GlueSchemaRegistryService(storageFactory, regionResolver);
         glueService = new GlueService(
                 new InMemoryStorage<String, Database>(),
                 new InMemoryStorage<String, Table>(),
-                new InMemoryStorage<String, io.github.hectorvent.floci.services.glue.model.Partition>(),
+                new InMemoryStorage<String, Partition>(),
                 schemaRegistryService, regionResolver);
         glueService.createDatabase(new Database("db1"));
     }
@@ -179,5 +183,18 @@ class GlueServiceTest {
         sd.setSchemaReference(ref);
         table.setStorageDescriptor(sd);
         return table;
+    }
+
+    private static final class InMemoryStorageFactory extends StorageFactory {
+        private InMemoryStorageFactory() {
+            super(null, null);
+        }
+
+        @Override
+        public <K, V> StorageBackend<K, V> create(String serviceName,
+                                                  String fileName,
+                                                  TypeReference<Map<K, V>> typeReference) {
+            return new InMemoryStorage<>();
+        }
     }
 }
