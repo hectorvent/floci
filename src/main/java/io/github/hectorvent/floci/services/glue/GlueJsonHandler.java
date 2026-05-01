@@ -17,8 +17,11 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @ApplicationScoped
 public class GlueJsonHandler {
@@ -131,14 +134,17 @@ public class GlueJsonHandler {
 
     private Response handleListRegistries(JsonNode request) {
         var page = schemaRegistryService.listRegistries(readMaxResults(request), readNextToken(request));
-        return Response.ok(pageResponse("Registries", page)).build();
+        return Response.ok(pageResponse("Registries", registryListItems(page.items()), page.nextToken())).build();
     }
 
     private Response handleUpdateRegistry(JsonNode request, String region) throws Exception {
         RegistryId registryId = readRegistryId(request);
         String description = request.path("Description").asText(null);
         Registry registry = schemaRegistryService.updateRegistry(registryId, description, region);
-        return Response.ok(registry).build();
+        return Response.ok(Map.of(
+                "RegistryName", registry.getRegistryName(),
+                "RegistryArn", registry.getRegistryArn()
+        )).build();
     }
 
     private Response handleDeleteRegistry(JsonNode request, String region) throws Exception {
@@ -269,7 +275,7 @@ public class GlueJsonHandler {
         RegistryId registryId = readRegistryId(request);
         var page = schemaRegistryService.listSchemas(
                 registryId, region, readMaxResults(request), readNextToken(request));
-        return Response.ok(pageResponse("Schemas", page)).build();
+        return Response.ok(pageResponse("Schemas", schemaListItems(page.items()), page.nextToken())).build();
     }
 
     private Response handleListSchemaVersions(JsonNode request, String region) throws Exception {
@@ -293,9 +299,8 @@ public class GlueJsonHandler {
         SchemaId schemaId = readSchemaId(request);
         String versions = request.path("Versions").asText(null);
         var results = schemaRegistryService.deleteSchemaVersions(schemaId, versions, region);
-        Schema schema = schemaRegistryService.getSchema(schemaId, region);
 
-        java.util.List<Map<String, Object>> errors = new java.util.ArrayList<>();
+        List<Map<String, Object>> errors = new ArrayList<>();
         for (var r : results) {
             if (r.errorCode() != null) {
                 Map<String, Object> err = new LinkedHashMap<>();
@@ -308,7 +313,6 @@ public class GlueJsonHandler {
             }
         }
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("SchemaArn", schema.getSchemaArn());
         response.put("SchemaVersionErrors", errors);
         return Response.ok(response).build();
     }
@@ -362,12 +366,53 @@ public class GlueJsonHandler {
     }
 
     private Map<String, Object> pageResponse(String field, GlueSchemaRegistryService.Page<?> page) {
+        return pageResponse(field, page.items(), page.nextToken());
+    }
+
+    private Map<String, Object> pageResponse(String field, List<?> items, String nextToken) {
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put(field, page.items());
-        if (page.nextToken() != null) {
-            response.put("NextToken", page.nextToken());
+        response.put(field, items);
+        if (nextToken != null) {
+            response.put("NextToken", nextToken);
         }
         return response;
+    }
+
+    private List<Map<String, Object>> registryListItems(List<Registry> registries) {
+        return registries.stream().map(this::registryListItem).toList();
+    }
+
+    private Map<String, Object> registryListItem(Registry registry) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        putIfNotNull(item, "RegistryName", registry.getRegistryName());
+        putIfNotNull(item, "RegistryArn", registry.getRegistryArn());
+        putIfNotNull(item, "Description", registry.getDescription());
+        putIfNotNull(item, "Status", registry.getStatus());
+        putIfNotNull(item, "CreatedTime", iso(registry.getCreatedTime()));
+        putIfNotNull(item, "UpdatedTime", iso(registry.getUpdatedTime()));
+        return item;
+    }
+
+    private List<Map<String, Object>> schemaListItems(List<Schema> schemas) {
+        return schemas.stream().map(this::schemaListItem).toList();
+    }
+
+    private Map<String, Object> schemaListItem(Schema schema) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        putIfNotNull(item, "RegistryName", schema.getRegistryName());
+        putIfNotNull(item, "SchemaName", schema.getSchemaName());
+        putIfNotNull(item, "SchemaArn", schema.getSchemaArn());
+        putIfNotNull(item, "Description", schema.getDescription());
+        putIfNotNull(item, "SchemaStatus", schema.getSchemaStatus());
+        putIfNotNull(item, "CreatedTime", iso(schema.getCreatedTime()));
+        putIfNotNull(item, "UpdatedTime", iso(schema.getUpdatedTime()));
+        return item;
+    }
+
+    private static void putIfNotNull(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private static String iso(Instant instant) {
@@ -394,7 +439,7 @@ public class GlueJsonHandler {
 
     private Response handleQuerySchemaVersionMetadata(JsonNode request) {
         String svId = request.path("SchemaVersionId").asText(null);
-        java.util.List<GlueSchemaRegistryService.MetadataKeyValueFilter> filters = new java.util.ArrayList<>();
+        List<GlueSchemaRegistryService.MetadataKeyValueFilter> filters = new ArrayList<>();
         JsonNode list = request.get("MetadataList");
         if (list != null && list.isArray()) {
             for (JsonNode item : list) {
@@ -413,6 +458,10 @@ public class GlueJsonHandler {
     private Map<String, Object> buildMetadataPutResponse(GlueSchemaRegistryService.MetadataPutResult result) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("SchemaArn", result.version().getSchemaArn());
+        response.put("SchemaName", result.schema().getSchemaName());
+        response.put("RegistryName", result.schema().getRegistryName());
+        response.put("LatestVersion",
+                Objects.equals(result.version().getVersionNumber(), result.schema().getLatestSchemaVersion()));
         response.put("SchemaVersionId", result.version().getSchemaVersionId());
         response.put("VersionNumber", result.version().getVersionNumber());
         response.put("MetadataKey", result.metadataKey());
@@ -433,8 +482,8 @@ public class GlueJsonHandler {
     @SuppressWarnings("unchecked")
     private Response handleUntagResource(JsonNode request) {
         String arn = request.path("ResourceArn").asText(null);
-        java.util.List<String> tagsToRemove = request.has("TagsToRemove")
-                ? mapper.convertValue(request.get("TagsToRemove"), java.util.List.class)
+        List<String> tagsToRemove = request.has("TagsToRemove")
+                ? mapper.convertValue(request.get("TagsToRemove"), List.class)
                 : null;
         schemaRegistryService.untagResource(arn, tagsToRemove);
         return Response.ok(Map.of()).build();

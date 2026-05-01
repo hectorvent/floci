@@ -103,6 +103,9 @@ class GlueSchemaRegistryMetadataAndTagsIntegrationTest {
             .statusCode(200)
             .body("MetadataKey", equalTo("owner"))
             .body("MetadataValue", equalTo("alice"))
+            .body("RegistryName", equalTo(REGISTRY))
+            .body("SchemaName", equalTo(SCHEMA))
+            .body("LatestVersion", equalTo(true))
             .body("SchemaVersionId", equalTo(schemaVersionId));
     }
 
@@ -140,7 +143,10 @@ class GlueSchemaRegistryMetadataAndTagsIntegrationTest {
                     + " \"MetadataKeyValue\": { \"MetadataKey\": \"owner\", \"MetadataValue\": \"alice\" } }")
         .when().post("/").then()
             .statusCode(200)
-            .body("MetadataKey", equalTo("owner"));
+            .body("MetadataKey", equalTo("owner"))
+            .body("RegistryName", equalTo(REGISTRY))
+            .body("SchemaName", equalTo(SCHEMA))
+            .body("LatestVersion", equalTo(true));
 
         given().contentType(CONTENT_TYPE)
             .header("X-Amz-Target", "AWSGlue.QuerySchemaVersionMetadata")

@@ -13,6 +13,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.nullValue;
 
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -98,7 +99,10 @@ class GlueSchemaRegistryIntegrationTest {
             .post("/")
         .then()
             .statusCode(200)
-            .body("Registries.RegistryName", hasItem(REGISTRY_NAME));
+            .body("Registries.RegistryName", hasItem(REGISTRY_NAME))
+            .body("Registries.find { it.RegistryName == '" + REGISTRY_NAME + "' }.Tags", nullValue())
+            .body("Registries.find { it.RegistryName == '" + REGISTRY_NAME + "' }.CreatedTime",
+                    matchesPattern("^\\d{4}-\\d{2}-\\d{2}T.*Z$"));
     }
 
     @Test
@@ -108,6 +112,18 @@ class GlueSchemaRegistryIntegrationTest {
             .contentType(CONTENT_TYPE)
             .header("X-Amz-Target", "AWSGlue.UpdateRegistry")
             .body("{ \"RegistryId\": { \"RegistryName\": \"" + REGISTRY_NAME + "\" }, \"Description\": \"updated\" }")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("RegistryName", equalTo(REGISTRY_NAME))
+            .body("RegistryArn", containsString(":registry/" + REGISTRY_NAME))
+            .body("Description", nullValue());
+
+        given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AWSGlue.GetRegistry")
+            .body("{ \"RegistryId\": { \"RegistryName\": \"" + REGISTRY_NAME + "\" } }")
         .when()
             .post("/")
         .then()

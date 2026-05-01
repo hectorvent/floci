@@ -495,7 +495,7 @@ public class GlueSchemaRegistryService {
         }
         metadata.put(key, info);
         metadataStore.put(schemaVersionId, metadata);
-        return new MetadataPutResult(version, key, value);
+        return new MetadataPutResult(schemaForVersion(version), version, key, value);
     }
 
     public synchronized MetadataPutResult removeSchemaVersionMetadata(String schemaVersionId,
@@ -549,7 +549,7 @@ public class GlueSchemaRegistryService {
         } else {
             metadataStore.put(schemaVersionId, metadata);
         }
-        return new MetadataPutResult(version, key, value);
+        return new MetadataPutResult(schemaForVersion(version), version, key, value);
     }
 
     public Map<String, MetadataInfo> querySchemaVersionMetadata(String schemaVersionId,
@@ -659,7 +659,7 @@ public class GlueSchemaRegistryService {
 
     public record CheckValidityResult(boolean valid, String error) {}
 
-    public record MetadataPutResult(SchemaVersion version, String metadataKey, String metadataValue) {}
+    public record MetadataPutResult(Schema schema, SchemaVersion version, String metadataKey, String metadataValue) {}
 
     public record MetadataKeyValueFilter(String metadataKey, String metadataValue) {}
 
@@ -908,6 +908,14 @@ public class GlueSchemaRegistryService {
         versionByDefinitionHash.remove(key);
         schemaStore.delete(key);
         return versionsDeleted;
+    }
+
+    private Schema schemaForVersion(SchemaVersion version) {
+        String[] parts = parseSchemaArn(version.getSchemaArn());
+        String key = schemaKey(parts[0], parts[1]);
+        return schemaStore.get(key)
+                .orElseThrow(() -> new AwsException("EntityNotFoundException",
+                        "Schema not found for version: " + version.getSchemaVersionId(), 400));
     }
 
     private void indexVersion(String schemaKey, SchemaVersion version) {

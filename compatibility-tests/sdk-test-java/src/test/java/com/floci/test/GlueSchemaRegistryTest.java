@@ -660,13 +660,16 @@ class GlueSchemaRegistryTest {
                         .resourceArn(schema.schemaArn())
                         .build()).tags()).containsEntry("purpose", "metadata");
 
-                glue.putSchemaVersionMetadata(PutSchemaVersionMetadataRequest.builder()
+                var putMetadata = glue.putSchemaVersionMetadata(PutSchemaVersionMetadataRequest.builder()
                         .schemaVersionId(schema.schemaVersionId())
                         .metadataKeyValue(MetadataKeyValuePair.builder()
                                 .metadataKey("stage")
                                 .metadataValue("prod")
                                 .build())
                         .build());
+                assertThat(putMetadata.registryName()).isEqualTo(registryName);
+                assertThat(putMetadata.schemaName()).isEqualTo(schemaName);
+                assertThat(putMetadata.latestVersion()).isTrue();
                 var metadata = glue.querySchemaVersionMetadata(QuerySchemaVersionMetadataRequest.builder()
                         .schemaVersionId(schema.schemaVersionId())
                         .build());
@@ -691,13 +694,16 @@ class GlueSchemaRegistryTest {
                 assertThat(updatedMetadata.metadataInfoMap().get("stage").otherMetadataValueList())
                         .anyMatch(item -> "prod".equals(item.metadataValue()));
 
-                glue.removeSchemaVersionMetadata(RemoveSchemaVersionMetadataRequest.builder()
+                var removeMetadata = glue.removeSchemaVersionMetadata(RemoveSchemaVersionMetadataRequest.builder()
                         .schemaVersionId(schema.schemaVersionId())
                         .metadataKeyValue(MetadataKeyValuePair.builder()
                                 .metadataKey("stage")
                                 .metadataValue("qa")
                                 .build())
                         .build());
+                assertThat(removeMetadata.registryName()).isEqualTo(registryName);
+                assertThat(removeMetadata.schemaName()).isEqualTo(schemaName);
+                assertThat(removeMetadata.latestVersion()).isTrue();
                 var afterRemoval = glue.querySchemaVersionMetadata(QuerySchemaVersionMetadataRequest.builder()
                         .schemaVersionId(schema.schemaVersionId())
                         .build());

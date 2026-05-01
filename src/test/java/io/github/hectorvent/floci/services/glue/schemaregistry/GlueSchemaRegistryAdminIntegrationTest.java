@@ -103,7 +103,9 @@ class GlueSchemaRegistryAdminIntegrationTest {
             .body("{ \"RegistryId\": { \"RegistryName\": \"" + REGISTRY + "\" } }")
         .when().post("/").then()
             .statusCode(200)
-            .body("Schemas.SchemaName", hasItem(SCHEMA));
+            .body("Schemas.SchemaName", hasItem(SCHEMA))
+            .body("Schemas.find { it.SchemaName == '" + SCHEMA + "' }.DataFormat", nullValue())
+            .body("Schemas.find { it.SchemaName == '" + SCHEMA + "' }.Tags", nullValue());
     }
 
     @Test
@@ -175,7 +177,7 @@ class GlueSchemaRegistryAdminIntegrationTest {
                     + " \"Versions\": \"1\" }")
         .when().post("/").then()
             .statusCode(200)
-            .body("SchemaArn", containsString(":schema/" + REGISTRY + "/" + SCHEMA))
+            .body("SchemaArn", nullValue())
             .body("SchemaVersionErrors", hasSize(0));
     }
 
