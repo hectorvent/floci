@@ -5,6 +5,7 @@ import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
@@ -300,6 +301,42 @@ public class ContainerLifecycleManager {
      */
     public DockerClient getDockerClient() {
         return dockerClient;
+    }
+
+    /**
+     * Returns {@code true} if the container runtime (Docker, Moby, or Podman) has a volume
+     * with the given name. The volume does not need to be attached to the current container.
+     * <p>
+     * This method uses the Docker Engine API ({@code /volumes/{name}}) which is supported
+     * by Docker, Moby, and Podman runtimes on all operating systems.
+     *
+     * @param name the volume name to look up
+     * @return {@code true} if the volume exists, {@code false} otherwise
+     */
+    public boolean volumeExists(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        // Is a Unix absolute or relative path (e.g. "/var/lib/data", "./data", "../data")
+        if (name.startsWith("/") || name.startsWith(".")) {
+            return false;
+        }
+        // Is a Windows absolute path (e.g. "C:\Users\data", "D:/sources/data")
+        if (name.length() >= 3 && Character.isLetter(name.charAt(0))
+                && name.charAt(1) == ':' && (name.charAt(2) == '\\' || name.charAt(2) == '/')) {
+            return false;
+        }
+        try {
+            dockerClient.inspectVolumeCmd(name).exec();
+            LOG.debugv("Volume ''{0}'' exists in the container runtime", name);
+            return true;
+        } catch (NotFoundException e) {
+            LOG.debugv("Volume ''{0}'' not found in the container runtime", name);
+            return false;
+        } catch (DockerException e) {
+            LOG.warnv("Failed to inspect volume ''{0}'': {1}", name, e.getMessage());
+            return false;
+        }
     }
 
     private HostConfig buildHostConfig(ContainerSpec spec) {
