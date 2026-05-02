@@ -17,6 +17,9 @@ class DynamoDbTableArnIntegrationTest {
 
     private static final String DYNAMODB_CONTENT_TYPE = "application/x-amz-json-1.0";
     private static final String KINESIS_CONTENT_TYPE = "application/x-amz-json-1.1";
+    private static final String AUTH_DDB_EU_WEST_2 =
+            "AWS4-HMAC-SHA256 Credential=AKID/20260215/eu-west-2/dynamodb/aws4_request, "
+                    + "SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=abc";
 
     @BeforeAll
     static void configureRestAssured() {
@@ -304,6 +307,50 @@ class DynamoDbTableArnIntegrationTest {
     }
 
     @Test
+    void signedBatchWriteItemAcceptsTemporaryCredentialsInAuthRegion() {
+        String tableName = tableName("signed-batch");
+        createTable(tableName, AUTH_DDB_EU_WEST_2);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.BatchWriteItem")
+            .header("Authorization", AUTH_DDB_EU_WEST_2)
+            .header("X-Amz-Date", "20260215T120000Z")
+            .header("X-Amz-Security-Token", "session-token")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "RequestItems": {
+                        "%s": [
+                            {"PutRequest": {"Item": {"pk": {"S": "user-1"}, "name": {"S": "Alice"}}}}
+                        ]
+                    }
+                }
+                """.formatted(tableName))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+            .header("Authorization", AUTH_DDB_EU_WEST_2)
+            .header("X-Amz-Date", "20260215T120000Z")
+            .header("X-Amz-Security-Token", "session-token")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "%s",
+                    "Key": {"pk": {"S": "user-1"}}
+                }
+                """.formatted(tableName))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Item.name.S", equalTo("Alice"));
+    }
+
+    @Test
     void consumedCapacityReturnsCanonicalTableName() {
         String tableName = tableName("consumed-cap");
         String tableArn = createTable(tableName);
@@ -407,10 +454,20 @@ class DynamoDbTableArnIntegrationTest {
     }
 
     private static String createTable(String tableName) {
-        return given()
+        return createTable(tableName, null);
+    }
+
+    private static String createTable(String tableName, String authorization) {
+        var request = given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
-            .contentType(DYNAMODB_CONTENT_TYPE)
-            .body("""
+            .contentType(DYNAMODB_CONTENT_TYPE);
+        if (authorization != null) {
+            request.header("Authorization", authorization)
+                    .header("X-Amz-Date", "20260215T120000Z")
+                    .header("X-Amz-Security-Token", "session-token");
+        }
+
+        return request.body("""
                 {
                     "TableName": "%s",
                     "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],

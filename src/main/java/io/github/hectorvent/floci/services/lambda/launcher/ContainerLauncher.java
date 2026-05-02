@@ -143,6 +143,7 @@ public class ContainerLauncher {
         // CloudWatch log coordinates — computed here so they can be injected as env vars
         String cwLogGroup  = "/aws/lambda/" + fn.getFunctionName();
         String cwLogStream = LOG_STREAM_DATE_FMT.format(LocalDate.now()) + "/[$LATEST]" + shortId;
+        String lambdaRegion = extractRegionFromArn(fn.getFunctionArn(), config.defaultRegion());
 
         // Floci endpoint reachable from inside the container.
         // When the embedded DNS server is active, Lambda containers already have it wired as their
@@ -166,8 +167,8 @@ public class ContainerLauncher {
         if (fn.getHandler() != null && !fn.getHandler().isBlank()) {
             env.add("_HANDLER=" + fn.getHandler());
         }
-        env.add("AWS_DEFAULT_REGION=us-east-1");
-        env.add("AWS_REGION=us-east-1");
+        env.add("AWS_DEFAULT_REGION=" + lambdaRegion);
+        env.add("AWS_REGION=" + lambdaRegion);
         env.add("AWS_ACCESS_KEY_ID=test");
         env.add("AWS_SECRET_ACCESS_KEY=test");
         env.add("AWS_SESSION_TOKEN=test");
@@ -241,9 +242,8 @@ public class ContainerLauncher {
         ContainerHandle handle = new ContainerHandle(containerId, fn.getFunctionName(), runtimeApiServer, ContainerState.WARM, fn.isHotReload());
 
         // Attach log streaming
-        String region = extractRegionFromArn(fn.getFunctionArn());
         Closeable logHandle = logStreamer.attach(
-                containerId, cwLogGroup, cwLogStream, region, "lambda:" + fn.getFunctionName());
+                containerId, cwLogGroup, cwLogStream, lambdaRegion, "lambda:" + fn.getFunctionName());
         handle.setLogStream(logHandle);
 
         return handle;
@@ -324,12 +324,12 @@ public class ContainerLauncher {
         return runtime != null && runtime.startsWith("provided");
     }
 
-    private static String extractRegionFromArn(String arn) {
+    private static String extractRegionFromArn(String arn, String defaultRegion) {
         if (arn == null) {
-            return "us-east-1";
+            return defaultRegion;
         }
         String[] parts = arn.split(":");
-        return parts.length >= 4 && !parts[3].isEmpty() ? parts[3] : "us-east-1";
+        return parts.length >= 4 && !parts[3].isEmpty() ? parts[3] : defaultRegion;
     }
 
     /**
