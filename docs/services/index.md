@@ -18,7 +18,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [DynamoDB Streams](dynamodb.md#streams) | `POST /` + `X-Amz-Target: DynamoDBStreams_20120810.*` | JSON 1.1 | 4 |
 | [Lambda](lambda.md) | `/2015-03-31/functions/...` | REST JSON | 30 |
 | [API Gateway v1](api-gateway.md) | `/restapis/...` | REST JSON | 62 |
-| [API Gateway v2](api-gateway.md#v2) | `/v2/apis/...` | REST JSON | 21 |
+| [API Gateway v2](api-gateway.md#v2) | `/v2/apis/...` | REST JSON | 48 |
 | [IAM](iam.md) | `POST /` with `Action=` param | Query | 68 |
 | [STS](sts.md) | `POST /` with `Action=` param | Query | 7 |
 | [Cognito](cognito.md) | `POST /` + `X-Amz-Target: AWSCognitoIdentityProviderService.*` | JSON 1.1 | 43 |

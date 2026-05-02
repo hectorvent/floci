@@ -36,6 +36,9 @@ class ApiGatewayV2IntegrationTest {
                 .body("name", equalTo("test-http-api"))
                 .body("protocolType", equalTo("HTTP"))
                 .body("apiEndpoint", notNullValue())
+                // AWS defaults must be populated
+                .body("routeSelectionExpression", equalTo("${request.method} ${request.path}"))
+                .body("apiKeySelectionExpression", equalTo("$request.header.x-api-key"))
                 .extract().path("apiId");
     }
 
@@ -46,7 +49,9 @@ class ApiGatewayV2IntegrationTest {
                 .then()
                 .statusCode(200)
                 .body("apiId", equalTo(apiId))
-                .body("name", equalTo("test-http-api"));
+                .body("name", equalTo("test-http-api"))
+                .body("routeSelectionExpression", equalTo("${request.method} ${request.path}"))
+                .body("apiKeySelectionExpression", equalTo("$request.header.x-api-key"));
     }
 
     @Test @Order(3)

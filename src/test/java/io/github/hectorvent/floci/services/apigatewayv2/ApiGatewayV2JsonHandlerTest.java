@@ -56,6 +56,9 @@ class ApiGatewayV2JsonHandlerTest {
                 .body("ApiId", notNullValue())
                 .body("Name", equalTo("json11-test"))
                 .body("ProtocolType", equalTo("HTTP"))
+                // AWS defaults must be populated
+                .body("RouteSelectionExpression", equalTo("${request.method} ${request.path}"))
+                .body("ApiKeySelectionExpression", equalTo("$request.header.x-api-key"))
                 .extract().path("ApiId");
     }
 
