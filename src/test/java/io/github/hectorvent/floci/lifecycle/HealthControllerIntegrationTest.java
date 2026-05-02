@@ -54,7 +54,8 @@ class HealthControllerIntegrationTest {
                 "pipes": "running",
                 "elasticloadbalancing": "running",
                 "codebuild": "running",
-                "codedeploy": "running"
+                "codedeploy": "running",
+                "autoscaling": "running"
               },
               "edition": "floci-always-free",
               "version": "dev"

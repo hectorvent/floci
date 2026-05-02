@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.core.common;
 
+import io.github.hectorvent.floci.services.autoscaling.AutoScalingQueryHandler;
 import io.github.hectorvent.floci.services.cloudformation.CloudFormationQueryHandler;
 import io.github.hectorvent.floci.services.ec2.Ec2QueryHandler;
 import io.github.hectorvent.floci.services.elbv2.ElbV2QueryHandler;
@@ -103,6 +104,23 @@ public class AwsQueryController {
             "GetAccountSummary", "GetAccountAuthorizationDetails"
     );
 
+    private static final Set<String> AUTOSCALING_ACTIONS = Set.of(
+            "CreateLaunchConfiguration", "DescribeLaunchConfigurations", "DeleteLaunchConfiguration",
+            "CreateAutoScalingGroup", "UpdateAutoScalingGroup", "DeleteAutoScalingGroup",
+            "DescribeAutoScalingGroups", "SetDesiredCapacity",
+            "DescribeAutoScalingInstances", "AttachInstances", "DetachInstances",
+            "TerminateInstanceInAutoScalingGroup",
+            "AttachLoadBalancerTargetGroups", "DetachLoadBalancerTargetGroups",
+            "DescribeLoadBalancerTargetGroups", "AttachLoadBalancers", "DetachLoadBalancers",
+            "PutLifecycleHook", "DeleteLifecycleHook", "DescribeLifecycleHooks",
+            "CompleteLifecycleAction", "RecordLifecycleActionHeartbeat",
+            "PutScalingPolicy", "DeletePolicy", "DescribePolicies",
+            "DescribeScalingActivities",
+            "DescribeAutoScalingNotificationTypes", "DescribeTerminationPolicyTypes",
+            "DescribeAdjustmentTypes", "DescribeAccountLimits",
+            "DescribeLifecycleHookTypes", "DescribeMetricCollectionTypes"
+    );
+
     private static final Set<String> ELB_V2_ACTIONS = Set.of(
             "CreateLoadBalancer", "DescribeLoadBalancers", "DeleteLoadBalancer",
             "ModifyLoadBalancerAttributes", "DescribeLoadBalancerAttributes",
@@ -153,6 +171,7 @@ public class AwsQueryController {
     private final CognitoJsonHandler cognitoJsonHandler;
     private final Ec2QueryHandler ec2QueryHandler;
     private final ElbV2QueryHandler elbV2QueryHandler;
+    private final AutoScalingQueryHandler autoScalingQueryHandler;
     private final ResolvedServiceCatalog catalog;
     private final RegionResolver regionResolver;
 
@@ -167,6 +186,7 @@ public class AwsQueryController {
                               CognitoJsonHandler cognitoJsonHandler,
                               Ec2QueryHandler ec2QueryHandler,
                               ElbV2QueryHandler elbV2QueryHandler,
+                              AutoScalingQueryHandler autoScalingQueryHandler,
                               ResolvedServiceCatalog catalog,
                               RegionResolver regionResolver) {
         this.cloudFormationQueryHandler = cloudFormationQueryHandler;
@@ -181,6 +201,7 @@ public class AwsQueryController {
         this.cognitoJsonHandler = cognitoJsonHandler;
         this.ec2QueryHandler = ec2QueryHandler;
         this.elbV2QueryHandler = elbV2QueryHandler;
+        this.autoScalingQueryHandler = autoScalingQueryHandler;
         this.catalog = catalog;
         this.regionResolver = regionResolver;
     }
@@ -216,6 +237,7 @@ public class AwsQueryController {
             case "cognito-idp" -> handleCognitoQuery(action, formParams, region);
             case "ec2" -> ec2QueryHandler.handle(action, formParams, region);
             case "elasticloadbalancing" -> elbV2QueryHandler.handle(action, formParams, region);
+            case "autoscaling" -> autoScalingQueryHandler.handle(action, formParams, region);
             default -> xmlErrorResponse("UnknownService",
                     "Unknown or unsupported service: " + service, 400);
         };
@@ -344,6 +366,9 @@ public class AwsQueryController {
         }
         if (ELB_V2_ACTIONS.contains(action)) {
             return "elasticloadbalancing";
+        }
+        if (AUTOSCALING_ACTIONS.contains(action)) {
+            return "autoscaling";
         }
         // SQS actions are numerous and not enumerated — fall back to sqs only for
         // requests that arrived without an Authorization header (raw/test clients)

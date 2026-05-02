@@ -1,0 +1,746 @@
+package io.github.hectorvent.floci.services.autoscaling;
+
+import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.AwsNamespaces;
+import io.github.hectorvent.floci.core.common.AwsQueryResponse;
+import io.github.hectorvent.floci.core.common.XmlBuilder;
+import io.github.hectorvent.floci.services.autoscaling.model.*;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
+import org.jboss.logging.Logger;
+
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+
+@ApplicationScoped
+public class AutoScalingQueryHandler {
+
+    private static final Logger LOG = Logger.getLogger(AutoScalingQueryHandler.class);
+    private static final String NS = AwsNamespaces.AUTOSCALING;
+    private static final DateTimeFormatter ISO_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
+
+    private final AutoScalingService service;
+
+    @Inject
+    AutoScalingQueryHandler(AutoScalingService service) {
+        this.service = service;
+    }
+
+    public Response handle(String action, MultivaluedMap<String, String> p, String region) {
+        LOG.debugv("AutoScaling action: {0}", action);
+        try {
+            return switch (action) {
+                // Launch Configuration
+                case "CreateLaunchConfiguration"    -> handleCreateLaunchConfiguration(p, region);
+                case "DescribeLaunchConfigurations" -> handleDescribeLaunchConfigurations(p, region);
+                case "DeleteLaunchConfiguration"    -> handleDeleteLaunchConfiguration(p, region);
+                // ASG
+                case "CreateAutoScalingGroup"       -> handleCreateAutoScalingGroup(p, region);
+                case "UpdateAutoScalingGroup"       -> handleUpdateAutoScalingGroup(p, region);
+                case "DeleteAutoScalingGroup"       -> handleDeleteAutoScalingGroup(p, region);
+                case "DescribeAutoScalingGroups"    -> handleDescribeAutoScalingGroups(p, region);
+                case "SetDesiredCapacity"           -> handleSetDesiredCapacity(p, region);
+                // Instances
+                case "DescribeAutoScalingInstances" -> handleDescribeAutoScalingInstances(p, region);
+                case "AttachInstances"              -> handleAttachInstances(p, region);
+                case "DetachInstances"              -> handleDetachInstances(p, region);
+                case "TerminateInstanceInAutoScalingGroup" -> handleTerminateInstance(p, region);
+                // Load balancer attachment
+                case "AttachLoadBalancerTargetGroups"    -> handleAttachLoadBalancerTargetGroups(p, region);
+                case "DetachLoadBalancerTargetGroups"    -> handleDetachLoadBalancerTargetGroups(p, region);
+                case "DescribeLoadBalancerTargetGroups"  -> handleDescribeLoadBalancerTargetGroups(p, region);
+                case "AttachLoadBalancers"               -> handleAttachLoadBalancers(p, region);
+                case "DetachLoadBalancers"               -> handleDetachLoadBalancers(p, region);
+                case "DescribeLoadBalancers"             -> handleDescribeLoadBalancers(p, region);
+                // Lifecycle hooks
+                case "PutLifecycleHook"             -> handlePutLifecycleHook(p, region);
+                case "DeleteLifecycleHook"          -> handleDeleteLifecycleHook(p, region);
+                case "DescribeLifecycleHooks"       -> handleDescribeLifecycleHooks(p, region);
+                case "CompleteLifecycleAction"      -> handleCompleteLifecycleAction(p, region);
+                case "RecordLifecycleActionHeartbeat" -> handleRecordLifecycleActionHeartbeat();
+                // Scaling policies
+                case "PutScalingPolicy"             -> handlePutScalingPolicy(p, region);
+                case "DeletePolicy"                 -> handleDeletePolicy(p, region);
+                case "DescribePolicies"             -> handleDescribePolicies(p, region);
+                // Activities
+                case "DescribeScalingActivities"    -> handleDescribeScalingActivities(p, region);
+                // Metadata
+                case "DescribeAutoScalingNotificationTypes" -> handleDescribeNotificationTypes();
+                case "DescribeTerminationPolicyTypes"       -> handleDescribeTerminationPolicyTypes();
+                case "DescribeAdjustmentTypes"              -> handleDescribeAdjustmentTypes();
+                case "DescribeAccountLimits"                -> handleDescribeAccountLimits();
+                case "DescribeLifecycleHookTypes"           -> handleDescribeLifecycleHookTypes();
+                case "DescribeMetricCollectionTypes"        -> handleDescribeMetricCollectionTypes();
+                default -> xmlError("UnsupportedOperation",
+                        "Operation " + action + " is not supported.", 400);
+            };
+        } catch (AwsException e) {
+            return xmlError(e.getErrorCode(), e.getMessage(), e.getHttpStatus());
+        } catch (Exception e) {
+            LOG.warnv("Unexpected error in AutoScaling action {0}: {1}", action, e.getMessage());
+            return xmlError("InternalFailure", e.getMessage(), 500);
+        }
+    }
+
+    // ── Launch Configuration ──────────────────────────────────────────────────
+
+    private Response handleCreateLaunchConfiguration(MultivaluedMap<String, String> p, String region) {
+        service.createLaunchConfiguration(region,
+                p.getFirst("LaunchConfigurationName"),
+                p.getFirst("ImageId"),
+                p.getFirst("InstanceType"),
+                p.getFirst("KeyName"),
+                memberList(p, "SecurityGroups"),
+                p.getFirst("UserData"),
+                p.getFirst("IamInstanceProfile"),
+                "true".equalsIgnoreCase(p.getFirst("AssociatePublicIpAddress")));
+        String xml = new XmlBuilder()
+                .start("CreateLaunchConfigurationResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("CreateLaunchConfigurationResponse")
+                .build();
+        return ok(xml);
+    }
+
+    private Response handleDescribeLaunchConfigurations(MultivaluedMap<String, String> p, String region) {
+        List<LaunchConfiguration> lcs = service.describeLaunchConfigurations(
+                region, memberList(p, "LaunchConfigurationNames"));
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeLaunchConfigurationsResponse", NS)
+                  .start("DescribeLaunchConfigurationsResult")
+                    .start("LaunchConfigurations");
+        for (LaunchConfiguration lc : lcs) {
+            xml.start("member")
+               .elem("LaunchConfigurationName", lc.getLaunchConfigurationName())
+               .elem("LaunchConfigurationARN", lc.getLaunchConfigurationArn())
+               .elem("ImageId", lc.getImageId() != null ? lc.getImageId() : "")
+               .elem("InstanceType", lc.getInstanceType() != null ? lc.getInstanceType() : "t3.micro")
+               .elem("CreatedTime", ISO_FMT.format(lc.getCreatedTime()))
+               .elem("AssociatePublicIpAddress", String.valueOf(lc.isAssociatePublicIpAddress()));
+            if (lc.getKeyName() != null) { xml.elem("KeyName", lc.getKeyName()); }
+            if (lc.getUserData() != null) { xml.elem("UserData", lc.getUserData()); }
+            if (lc.getIamInstanceProfile() != null) { xml.elem("IamInstanceProfile", lc.getIamInstanceProfile()); }
+            xml.start("SecurityGroups");
+            for (String sg : lc.getSecurityGroups()) { xml.elem("member", sg); }
+            xml.end("SecurityGroups").end("member");
+        }
+        xml.end("LaunchConfigurations")
+           .end("DescribeLaunchConfigurationsResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribeLaunchConfigurationsResponse");
+        return ok(xml.build());
+    }
+
+    private Response handleDeleteLaunchConfiguration(MultivaluedMap<String, String> p, String region) {
+        service.deleteLaunchConfiguration(region, p.getFirst("LaunchConfigurationName"));
+        return ok(new XmlBuilder()
+                .start("DeleteLaunchConfigurationResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DeleteLaunchConfigurationResponse").build());
+    }
+
+    // ── Auto Scaling Group ────────────────────────────────────────────────────
+
+    private Response handleCreateAutoScalingGroup(MultivaluedMap<String, String> p, String region) {
+        service.createAutoScalingGroup(region,
+                p.getFirst("AutoScalingGroupName"),
+                p.getFirst("LaunchConfigurationName"),
+                p.getFirst("LaunchTemplate.LaunchTemplateName"),
+                p.getFirst("LaunchTemplate.Version"),
+                intParam(p, "MinSize", 0),
+                intParam(p, "MaxSize", 0),
+                intParam(p, "DesiredCapacity", intParam(p, "MinSize", 0)),
+                intParam(p, "DefaultCooldown", 300),
+                memberList(p, "AvailabilityZones"),
+                memberList(p, "TargetGroupARNs"),
+                memberList(p, "LoadBalancerNames"),
+                p.getFirst("HealthCheckType"),
+                intParam(p, "HealthCheckGracePeriod", 0),
+                memberList(p, "TerminationPolicies"),
+                parseTags(p));
+        return ok(new XmlBuilder()
+                .start("CreateAutoScalingGroupResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("CreateAutoScalingGroupResponse").build());
+    }
+
+    private Response handleUpdateAutoScalingGroup(MultivaluedMap<String, String> p, String region) {
+        List<String> azs = memberList(p, "AvailabilityZones");
+        List<String> tps = memberList(p, "TerminationPolicies");
+        service.updateAutoScalingGroup(region,
+                p.getFirst("AutoScalingGroupName"),
+                p.getFirst("LaunchConfigurationName"),
+                p.getFirst("LaunchTemplate.LaunchTemplateName"),
+                p.getFirst("LaunchTemplate.Version"),
+                p.getFirst("MinSize") != null ? Integer.parseInt(p.getFirst("MinSize")) : null,
+                p.getFirst("MaxSize") != null ? Integer.parseInt(p.getFirst("MaxSize")) : null,
+                p.getFirst("DesiredCapacity") != null ? Integer.parseInt(p.getFirst("DesiredCapacity")) : null,
+                p.getFirst("DefaultCooldown") != null ? Integer.parseInt(p.getFirst("DefaultCooldown")) : null,
+                azs.isEmpty() ? null : azs,
+                p.getFirst("HealthCheckType"),
+                p.getFirst("HealthCheckGracePeriod") != null ? Integer.parseInt(p.getFirst("HealthCheckGracePeriod")) : null,
+                tps.isEmpty() ? null : tps);
+        return ok(new XmlBuilder()
+                .start("UpdateAutoScalingGroupResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("UpdateAutoScalingGroupResponse").build());
+    }
+
+    private Response handleDeleteAutoScalingGroup(MultivaluedMap<String, String> p, String region) {
+        service.deleteAutoScalingGroup(region,
+                p.getFirst("AutoScalingGroupName"),
+                "true".equalsIgnoreCase(p.getFirst("ForceDelete")));
+        return ok(new XmlBuilder()
+                .start("DeleteAutoScalingGroupResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DeleteAutoScalingGroupResponse").build());
+    }
+
+    private Response handleDescribeAutoScalingGroups(MultivaluedMap<String, String> p, String region) {
+        List<AutoScalingGroup> groups = service.describeAutoScalingGroups(
+                region, memberList(p, "AutoScalingGroupNames"));
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeAutoScalingGroupsResponse", NS)
+                  .start("DescribeAutoScalingGroupsResult")
+                    .start("AutoScalingGroups");
+        for (AutoScalingGroup asg : groups) {
+            xml.start("member");
+            appendAsgXml(xml, asg);
+            xml.end("member");
+        }
+        xml.end("AutoScalingGroups")
+           .end("DescribeAutoScalingGroupsResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribeAutoScalingGroupsResponse");
+        return ok(xml.build());
+    }
+
+    private void appendAsgXml(XmlBuilder xml, AutoScalingGroup asg) {
+        xml.elem("AutoScalingGroupName", asg.getAutoScalingGroupName())
+           .elem("AutoScalingGroupARN", asg.getAutoScalingGroupArn())
+           .elem("MinSize", String.valueOf(asg.getMinSize()))
+           .elem("MaxSize", String.valueOf(asg.getMaxSize()))
+           .elem("DesiredCapacity", String.valueOf(asg.getDesiredCapacity()))
+           .elem("DefaultCooldown", String.valueOf(asg.getDefaultCooldown()))
+           .elem("HealthCheckType", asg.getHealthCheckType())
+           .elem("HealthCheckGracePeriod", String.valueOf(asg.getHealthCheckGracePeriod()))
+           .elem("CreatedTime", ISO_FMT.format(asg.getCreatedTime()));
+
+        if (asg.getLaunchConfigurationName() != null) {
+            xml.elem("LaunchConfigurationName", asg.getLaunchConfigurationName());
+        }
+        if (asg.getLaunchTemplateName() != null) {
+            xml.start("LaunchTemplate")
+               .elem("LaunchTemplateName", asg.getLaunchTemplateName());
+            if (asg.getLaunchTemplateVersion() != null) {
+                xml.elem("Version", asg.getLaunchTemplateVersion());
+            }
+            xml.end("LaunchTemplate");
+        }
+
+        xml.start("AvailabilityZones");
+        for (String az : asg.getAvailabilityZones()) { xml.elem("member", az); }
+        xml.end("AvailabilityZones");
+
+        xml.start("TargetGroupARNs");
+        for (String arn : asg.getTargetGroupARNs()) { xml.elem("member", arn); }
+        xml.end("TargetGroupARNs");
+
+        xml.start("LoadBalancerNames");
+        for (String lb : asg.getLoadBalancerNames()) { xml.elem("member", lb); }
+        xml.end("LoadBalancerNames");
+
+        xml.start("TerminationPolicies");
+        for (String tp : asg.getTerminationPolicies()) { xml.elem("member", tp); }
+        xml.end("TerminationPolicies");
+
+        xml.start("Instances");
+        for (AsgInstance inst : asg.getInstances()) {
+            xml.start("member")
+               .elem("InstanceId", inst.getInstanceId())
+               .elem("AvailabilityZone", inst.getAvailabilityZone())
+               .elem("LifecycleState", inst.getLifecycleState())
+               .elem("HealthStatus", inst.getHealthStatus())
+               .elem("ProtectedFromScaleIn", String.valueOf(inst.isProtectedFromScaleIn()));
+            if (inst.getLaunchConfigurationName() != null) {
+                xml.elem("LaunchConfigurationName", inst.getLaunchConfigurationName());
+            }
+            if (inst.getInstanceType() != null) { xml.elem("InstanceType", inst.getInstanceType()); }
+            xml.end("member");
+        }
+        xml.end("Instances");
+
+        xml.start("Tags");
+        for (Map.Entry<String, String> tag : asg.getTags().entrySet()) {
+            xml.start("member")
+               .elem("Key", tag.getKey())
+               .elem("Value", tag.getValue())
+               .elem("ResourceId", asg.getAutoScalingGroupName())
+               .elem("ResourceType", "auto-scaling-group")
+               .elem("PropagateAtLaunch", "false")
+               .end("member");
+        }
+        xml.end("Tags");
+
+        if (asg.getStatus() != null) { xml.elem("Status", asg.getStatus()); }
+    }
+
+    private Response handleSetDesiredCapacity(MultivaluedMap<String, String> p, String region) {
+        service.setDesiredCapacity(region,
+                p.getFirst("AutoScalingGroupName"),
+                intParam(p, "DesiredCapacity", 0));
+        return ok(new XmlBuilder()
+                .start("SetDesiredCapacityResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("SetDesiredCapacityResponse").build());
+    }
+
+    // ── Instances ─────────────────────────────────────────────────────────────
+
+    private Response handleDescribeAutoScalingInstances(MultivaluedMap<String, String> p, String region) {
+        List<AsgInstance> instances = service.describeAutoScalingInstances(
+                region, memberList(p, "InstanceIds"));
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeAutoScalingInstancesResponse", NS)
+                  .start("DescribeAutoScalingInstancesResult")
+                    .start("AutoScalingInstances");
+        for (AsgInstance inst : instances) {
+            xml.start("member")
+               .elem("InstanceId", inst.getInstanceId())
+               .elem("AvailabilityZone", inst.getAvailabilityZone())
+               .elem("LifecycleState", inst.getLifecycleState())
+               .elem("HealthStatus", inst.getHealthStatus())
+               .elem("ProtectedFromScaleIn", String.valueOf(inst.isProtectedFromScaleIn()));
+            if (inst.getLaunchConfigurationName() != null) {
+                xml.elem("LaunchConfigurationName", inst.getLaunchConfigurationName());
+            }
+            if (inst.getInstanceType() != null) { xml.elem("InstanceType", inst.getInstanceType()); }
+            xml.end("member");
+        }
+        xml.end("AutoScalingInstances")
+           .end("DescribeAutoScalingInstancesResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribeAutoScalingInstancesResponse");
+        return ok(xml.build());
+    }
+
+    private Response handleAttachInstances(MultivaluedMap<String, String> p, String region) {
+        service.attachInstances(region, p.getFirst("AutoScalingGroupName"), memberList(p, "InstanceIds"));
+        return ok(new XmlBuilder()
+                .start("AttachInstancesResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("AttachInstancesResponse").build());
+    }
+
+    private Response handleDetachInstances(MultivaluedMap<String, String> p, String region) {
+        service.detachInstances(region, p.getFirst("AutoScalingGroupName"),
+                memberList(p, "InstanceIds"),
+                "true".equalsIgnoreCase(p.getFirst("ShouldDecrementDesiredCapacity")));
+        return ok(new XmlBuilder()
+                .start("DetachInstancesResponse", NS)
+                  .start("DetachInstancesResult")
+                    .start("Activities").end("Activities")
+                  .end("DetachInstancesResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DetachInstancesResponse").build());
+    }
+
+    private Response handleTerminateInstance(MultivaluedMap<String, String> p, String region) {
+        service.terminateInstanceInAutoScalingGroup(region,
+                p.getFirst("InstanceId"),
+                "true".equalsIgnoreCase(p.getFirst("ShouldDecrementDesiredCapacity")));
+        return ok(new XmlBuilder()
+                .start("TerminateInstanceInAutoScalingGroupResponse", NS)
+                  .start("TerminateInstanceInAutoScalingGroupResult")
+                  .end("TerminateInstanceInAutoScalingGroupResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("TerminateInstanceInAutoScalingGroupResponse").build());
+    }
+
+    // ── Load balancer attachment ───────────────────────────────────────────────
+
+    private Response handleAttachLoadBalancerTargetGroups(MultivaluedMap<String, String> p, String region) {
+        service.attachLoadBalancerTargetGroups(region,
+                p.getFirst("AutoScalingGroupName"), memberList(p, "TargetGroupARNs"));
+        return ok(new XmlBuilder()
+                .start("AttachLoadBalancerTargetGroupsResponse", NS)
+                  .start("AttachLoadBalancerTargetGroupsResult").end("AttachLoadBalancerTargetGroupsResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("AttachLoadBalancerTargetGroupsResponse").build());
+    }
+
+    private Response handleDetachLoadBalancerTargetGroups(MultivaluedMap<String, String> p, String region) {
+        service.detachLoadBalancerTargetGroups(region,
+                p.getFirst("AutoScalingGroupName"), memberList(p, "TargetGroupARNs"));
+        return ok(new XmlBuilder()
+                .start("DetachLoadBalancerTargetGroupsResponse", NS)
+                  .start("DetachLoadBalancerTargetGroupsResult").end("DetachLoadBalancerTargetGroupsResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DetachLoadBalancerTargetGroupsResponse").build());
+    }
+
+    private Response handleDescribeLoadBalancerTargetGroups(MultivaluedMap<String, String> p, String region) {
+        List<String> tgArns = service.describeLoadBalancerTargetGroups(
+                region, p.getFirst("AutoScalingGroupName"));
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeLoadBalancerTargetGroupsResponse", NS)
+                  .start("DescribeLoadBalancerTargetGroupsResult")
+                    .start("LoadBalancerTargetGroups");
+        for (String arn : tgArns) {
+            xml.start("member")
+               .elem("LoadBalancerTargetGroupARN", arn)
+               .elem("State", "InService")
+               .end("member");
+        }
+        xml.end("LoadBalancerTargetGroups")
+           .end("DescribeLoadBalancerTargetGroupsResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribeLoadBalancerTargetGroupsResponse");
+        return ok(xml.build());
+    }
+
+    private Response handleAttachLoadBalancers(MultivaluedMap<String, String> p, String region) {
+        service.attachLoadBalancers(region,
+                p.getFirst("AutoScalingGroupName"), memberList(p, "LoadBalancerNames"));
+        return ok(new XmlBuilder()
+                .start("AttachLoadBalancersResponse", NS)
+                  .start("AttachLoadBalancersResult").end("AttachLoadBalancersResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("AttachLoadBalancersResponse").build());
+    }
+
+    private Response handleDetachLoadBalancers(MultivaluedMap<String, String> p, String region) {
+        service.detachLoadBalancers(region,
+                p.getFirst("AutoScalingGroupName"), memberList(p, "LoadBalancerNames"));
+        return ok(new XmlBuilder()
+                .start("DetachLoadBalancersResponse", NS)
+                  .start("DetachLoadBalancersResult").end("DetachLoadBalancersResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DetachLoadBalancersResponse").build());
+    }
+
+    private Response handleDescribeLoadBalancers(MultivaluedMap<String, String> p, String region) {
+        String name = p.getFirst("AutoScalingGroupName");
+        List<String> lbNames = service.describeAutoScalingGroups(region, List.of(name))
+                .stream().findFirst().map(AutoScalingGroup::getLoadBalancerNames).orElse(List.of());
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeLoadBalancersResponse", NS)
+                  .start("DescribeLoadBalancersResult")
+                    .start("LoadBalancers");
+        for (String lb : lbNames) {
+            xml.start("member")
+               .elem("LoadBalancerName", lb)
+               .elem("State", "InService")
+               .end("member");
+        }
+        xml.end("LoadBalancers")
+           .end("DescribeLoadBalancersResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribeLoadBalancersResponse");
+        return ok(xml.build());
+    }
+
+    // ── Lifecycle hooks ────────────────────────────────────────────────────────
+
+    private Response handlePutLifecycleHook(MultivaluedMap<String, String> p, String region) {
+        Integer timeout = p.getFirst("HeartbeatTimeout") != null
+                ? Integer.parseInt(p.getFirst("HeartbeatTimeout")) : null;
+        service.putLifecycleHook(region,
+                p.getFirst("AutoScalingGroupName"),
+                p.getFirst("LifecycleHookName"),
+                p.getFirst("LifecycleTransition"),
+                p.getFirst("NotificationTargetARN"),
+                p.getFirst("RoleARN"),
+                p.getFirst("NotificationMetadata"),
+                timeout,
+                p.getFirst("DefaultResult"));
+        return ok(new XmlBuilder()
+                .start("PutLifecycleHookResponse", NS)
+                  .start("PutLifecycleHookResult").end("PutLifecycleHookResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("PutLifecycleHookResponse").build());
+    }
+
+    private Response handleDeleteLifecycleHook(MultivaluedMap<String, String> p, String region) {
+        service.deleteLifecycleHook(region,
+                p.getFirst("AutoScalingGroupName"), p.getFirst("LifecycleHookName"));
+        return ok(new XmlBuilder()
+                .start("DeleteLifecycleHookResponse", NS)
+                  .start("DeleteLifecycleHookResult").end("DeleteLifecycleHookResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DeleteLifecycleHookResponse").build());
+    }
+
+    private Response handleDescribeLifecycleHooks(MultivaluedMap<String, String> p, String region) {
+        List<LifecycleHook> hooks = service.describeLifecycleHooks(region,
+                p.getFirst("AutoScalingGroupName"), memberList(p, "LifecycleHookNames"));
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeLifecycleHooksResponse", NS)
+                  .start("DescribeLifecycleHooksResult")
+                    .start("LifecycleHooks");
+        for (LifecycleHook hook : hooks) {
+            xml.start("member")
+               .elem("LifecycleHookName", hook.getLifecycleHookName())
+               .elem("AutoScalingGroupName", hook.getAutoScalingGroupName())
+               .elem("LifecycleTransition", hook.getLifecycleTransition())
+               .elem("HeartbeatTimeout", String.valueOf(hook.getHeartbeatTimeout()))
+               .elem("GlobalTimeout", String.valueOf(hook.getGlobalTimeout()))
+               .elem("DefaultResult", hook.getDefaultResult());
+            if (hook.getNotificationTargetArn() != null) {
+                xml.elem("NotificationTargetARN", hook.getNotificationTargetArn());
+            }
+            if (hook.getRoleArn() != null) { xml.elem("RoleARN", hook.getRoleArn()); }
+            xml.end("member");
+        }
+        xml.end("LifecycleHooks")
+           .end("DescribeLifecycleHooksResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribeLifecycleHooksResponse");
+        return ok(xml.build());
+    }
+
+    private Response handleCompleteLifecycleAction(MultivaluedMap<String, String> p, String region) {
+        service.completeLifecycleAction(region,
+                p.getFirst("AutoScalingGroupName"), p.getFirst("LifecycleHookName"),
+                p.getFirst("InstanceId"), p.getFirst("LifecycleActionResult"),
+                p.getFirst("LifecycleActionToken"));
+        return ok(new XmlBuilder()
+                .start("CompleteLifecycleActionResponse", NS)
+                  .start("CompleteLifecycleActionResult").end("CompleteLifecycleActionResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("CompleteLifecycleActionResponse").build());
+    }
+
+    private Response handleRecordLifecycleActionHeartbeat() {
+        return ok(new XmlBuilder()
+                .start("RecordLifecycleActionHeartbeatResponse", NS)
+                  .start("RecordLifecycleActionHeartbeatResult").end("RecordLifecycleActionHeartbeatResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("RecordLifecycleActionHeartbeatResponse").build());
+    }
+
+    // ── Scaling policies ───────────────────────────────────────────────────────
+
+    private Response handlePutScalingPolicy(MultivaluedMap<String, String> p, String region) {
+        ScalingPolicy policy = service.putScalingPolicy(region,
+                p.getFirst("AutoScalingGroupName"),
+                p.getFirst("PolicyName"),
+                p.getFirst("PolicyType"),
+                p.getFirst("AdjustmentType"),
+                intParam(p, "ScalingAdjustment", 0),
+                intParam(p, "Cooldown", 300));
+        return ok(new XmlBuilder()
+                .start("PutScalingPolicyResponse", NS)
+                  .start("PutScalingPolicyResult")
+                    .elem("PolicyARN", policy.getPolicyArn())
+                  .end("PutScalingPolicyResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("PutScalingPolicyResponse").build());
+    }
+
+    private Response handleDeletePolicy(MultivaluedMap<String, String> p, String region) {
+        service.deletePolicy(region,
+                p.getFirst("AutoScalingGroupName"), p.getFirst("PolicyName"));
+        return ok(new XmlBuilder()
+                .start("DeletePolicyResponse", NS)
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DeletePolicyResponse").build());
+    }
+
+    private Response handleDescribePolicies(MultivaluedMap<String, String> p, String region) {
+        List<ScalingPolicy> policies = service.describePolicies(
+                region, p.getFirst("AutoScalingGroupName"), memberList(p, "PolicyNames"));
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribePoliciesResponse", NS)
+                  .start("DescribePoliciesResult")
+                    .start("ScalingPolicies");
+        for (ScalingPolicy policy : policies) {
+            xml.start("member")
+               .elem("PolicyName", policy.getPolicyName())
+               .elem("PolicyARN", policy.getPolicyArn())
+               .elem("AutoScalingGroupName", policy.getAutoScalingGroupName())
+               .elem("PolicyType", policy.getPolicyType() != null ? policy.getPolicyType() : "SimpleScaling")
+               .elem("ScalingAdjustment", String.valueOf(policy.getScalingAdjustment()))
+               .elem("Cooldown", String.valueOf(policy.getCooldown()));
+            if (policy.getAdjustmentType() != null) { xml.elem("AdjustmentType", policy.getAdjustmentType()); }
+            xml.end("member");
+        }
+        xml.end("ScalingPolicies")
+           .end("DescribePoliciesResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribePoliciesResponse");
+        return ok(xml.build());
+    }
+
+    // ── Activities ────────────────────────────────────────────────────────────
+
+    private Response handleDescribeScalingActivities(MultivaluedMap<String, String> p, String region) {
+        List<ScalingActivity> activities = service.describeScalingActivities(
+                region, p.getFirst("AutoScalingGroupName"));
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeScalingActivitiesResponse", NS)
+                  .start("DescribeScalingActivitiesResult")
+                    .start("Activities");
+        for (ScalingActivity a : activities) {
+            xml.start("member")
+               .elem("ActivityId", a.getActivityId())
+               .elem("AutoScalingGroupName", a.getAutoScalingGroupName())
+               .elem("StatusCode", a.getStatusCode())
+               .elem("Progress", String.valueOf(a.getProgress()))
+               .elem("StartTime", ISO_FMT.format(a.getStartTime()));
+            if (a.getDescription() != null) { xml.elem("Description", a.getDescription()); }
+            if (a.getCause() != null) { xml.elem("Cause", a.getCause()); }
+            if (a.getEndTime() != null) { xml.elem("EndTime", ISO_FMT.format(a.getEndTime())); }
+            if (a.getStatusMessage() != null) { xml.elem("StatusMessage", a.getStatusMessage()); }
+            xml.end("member");
+        }
+        xml.end("Activities")
+           .end("DescribeScalingActivitiesResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("DescribeScalingActivitiesResponse");
+        return ok(xml.build());
+    }
+
+    // ── Metadata responses ────────────────────────────────────────────────────
+
+    private Response handleDescribeNotificationTypes() {
+        return ok(new XmlBuilder()
+                .start("DescribeAutoScalingNotificationTypesResponse", NS)
+                  .start("DescribeAutoScalingNotificationTypesResult")
+                    .start("AutoScalingNotificationTypes")
+                      .elem("member", "autoscaling:EC2_INSTANCE_LAUNCH")
+                      .elem("member", "autoscaling:EC2_INSTANCE_LAUNCH_ERROR")
+                      .elem("member", "autoscaling:EC2_INSTANCE_TERMINATE")
+                      .elem("member", "autoscaling:EC2_INSTANCE_TERMINATE_ERROR")
+                    .end("AutoScalingNotificationTypes")
+                  .end("DescribeAutoScalingNotificationTypesResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DescribeAutoScalingNotificationTypesResponse").build());
+    }
+
+    private Response handleDescribeTerminationPolicyTypes() {
+        return ok(new XmlBuilder()
+                .start("DescribeTerminationPolicyTypesResponse", NS)
+                  .start("DescribeTerminationPolicyTypesResult")
+                    .start("TerminationPolicyTypes")
+                      .elem("member", "Default")
+                      .elem("member", "OldestInstance")
+                      .elem("member", "NewestInstance")
+                      .elem("member", "OldestLaunchConfiguration")
+                      .elem("member", "ClosestToNextInstanceHour")
+                    .end("TerminationPolicyTypes")
+                  .end("DescribeTerminationPolicyTypesResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DescribeTerminationPolicyTypesResponse").build());
+    }
+
+    private Response handleDescribeAdjustmentTypes() {
+        return ok(new XmlBuilder()
+                .start("DescribeAdjustmentTypesResponse", NS)
+                  .start("DescribeAdjustmentTypesResult")
+                    .start("AdjustmentTypes")
+                      .elem("member", "ChangeInCapacity")
+                      .elem("member", "ExactCapacity")
+                      .elem("member", "PercentChangeInCapacity")
+                    .end("AdjustmentTypes")
+                  .end("DescribeAdjustmentTypesResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DescribeAdjustmentTypesResponse").build());
+    }
+
+    private Response handleDescribeAccountLimits() {
+        return ok(new XmlBuilder()
+                .start("DescribeAccountLimitsResponse", NS)
+                  .start("DescribeAccountLimitsResult")
+                    .elem("MaxNumberOfAutoScalingGroups", "200")
+                    .elem("MaxNumberOfLaunchConfigurations", "200")
+                    .elem("NumberOfAutoScalingGroups", "0")
+                    .elem("NumberOfLaunchConfigurations", "0")
+                  .end("DescribeAccountLimitsResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DescribeAccountLimitsResponse").build());
+    }
+
+    private Response handleDescribeLifecycleHookTypes() {
+        return ok(new XmlBuilder()
+                .start("DescribeLifecycleHookTypesResponse", NS)
+                  .start("DescribeLifecycleHookTypesResult")
+                    .start("LifecycleHookTypes")
+                      .elem("member", "autoscaling:EC2_INSTANCE_LAUNCHING")
+                      .elem("member", "autoscaling:EC2_INSTANCE_TERMINATING")
+                    .end("LifecycleHookTypes")
+                  .end("DescribeLifecycleHookTypesResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DescribeLifecycleHookTypesResponse").build());
+    }
+
+    private Response handleDescribeMetricCollectionTypes() {
+        return ok(new XmlBuilder()
+                .start("DescribeMetricCollectionTypesResponse", NS)
+                  .start("DescribeMetricCollectionTypesResult")
+                    .start("Metrics")
+                      .elem("member", "GroupMinSize")
+                      .elem("member", "GroupMaxSize")
+                      .elem("member", "GroupDesiredCapacity")
+                      .elem("member", "GroupInServiceInstances")
+                      .elem("member", "GroupTotalInstances")
+                    .end("Metrics")
+                    .start("Granularities")
+                      .elem("member", "1Minute")
+                    .end("Granularities")
+                  .end("DescribeMetricCollectionTypesResult")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("DescribeMetricCollectionTypesResponse").build());
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private List<String> memberList(MultivaluedMap<String, String> p, String prefix) {
+        List<String> result = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String val = p.getFirst(prefix + ".member." + i);
+            if (val == null) { break; }
+            result.add(val);
+        }
+        return result;
+    }
+
+    private Map<String, String> parseTags(MultivaluedMap<String, String> p) {
+        Map<String, String> result = new LinkedHashMap<>();
+        for (int i = 1; ; i++) {
+            String key = p.getFirst("Tags.member." + i + ".Key");
+            if (key == null) { break; }
+            String value = p.getFirst("Tags.member." + i + ".Value");
+            result.put(key, value != null ? value : "");
+        }
+        return result;
+    }
+
+    private int intParam(MultivaluedMap<String, String> p, String key, int defaultValue) {
+        String val = p.getFirst(key);
+        if (val == null || val.isBlank()) { return defaultValue; }
+        try { return Integer.parseInt(val); } catch (NumberFormatException e) { return defaultValue; }
+    }
+
+    private Response ok(String xml) {
+        return Response.ok(xml).type("application/xml").build();
+    }
+
+    private Response xmlError(String code, String message, int status) {
+        String xml = new XmlBuilder()
+                .start("ErrorResponse", NS)
+                  .start("Error")
+                    .elem("Type", "Sender")
+                    .elem("Code", code)
+                    .elem("Message", message)
+                  .end("Error")
+                  .raw(AwsQueryResponse.responseMetadata())
+                .end("ErrorResponse")
+                .build();
+        return Response.status(status).entity(xml).type("application/xml").build();
+    }
+}

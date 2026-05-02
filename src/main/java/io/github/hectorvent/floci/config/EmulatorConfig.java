@@ -272,6 +272,12 @@ public interface EmulatorConfig {
         ElbV2ServiceConfig elbv2();
         CodeBuildServiceConfig codebuild();
         CodeDeployServiceConfig codedeploy();
+        AutoScalingServiceConfig autoscaling();
+    }
+
+    interface AutoScalingServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface CodeBuildServiceConfig {
