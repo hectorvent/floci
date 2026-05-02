@@ -247,6 +247,17 @@ No extra configuration or `cap_add` is needed — Docker containers have
 `CAP_NET_BIND_SERVICE` in their default capability set, so Floci (running as a
 non-root user) can bind UDP/53 without any changes to your Compose file.
 
+!!! tip "Docker Compose service names"
+    If Floci runs as a Docker Compose service and you attach Lambda containers
+    to that Compose network, set `FLOCI_HOSTNAME` to the service name, for
+    example `FLOCI_HOSTNAME=floci`. Floci then injects
+    `AWS_ENDPOINT_URL=http://floci:4566` into Lambda containers and returns
+    SQS `QueueUrl` values with the same reachable host.
+
+    This avoids function-side rewrites from `localhost` or `localhost.floci.io`
+    to `floci`, and keeps normal AWS SDK clients pointed at the Docker DNS name
+    that the Lambda container can resolve.
+
 !!! note "Path-style as a workaround"
     If you cannot use virtual-hosted-style (e.g. Floci is running natively on
     the host, not in Docker), configure the SDK client with

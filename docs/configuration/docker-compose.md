@@ -33,9 +33,12 @@ services:
       - ./data:/app/data
     environment:
       FLOCI_SERVICES_DOCKER_NETWORK: my-project_default  # (1)
+      FLOCI_HOSTNAME: floci                             # (2)
 ```
 
 1. Set this to the Docker network name that your compose project creates (usually `<project-name>_default`). Floci uses it to attach spawned Lambda / ElastiCache / RDS containers to the same network.
+2. Set this to the Compose service name when other containers, including
+   Lambda containers spawned by Floci, need to call Floci by Docker DNS.
 
 !!! warning "Docker socket"
     Lambda, ElastiCache, and RDS require access to the Docker socket (`/var/run/docker.sock`) to spawn and manage containers. If you don't use these services, you can omit that volume.
@@ -75,6 +78,12 @@ services:
 With this setting Floci returns URLs like
 `http://floci:4566/000000000000/my-queue` that other containers in the same
 network can reach.
+
+This is also the recommended setting when Floci launches Lambda containers into
+your Compose network via `FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK` or
+`FLOCI_SERVICES_DOCKER_NETWORK`. It makes the endpoint Floci injects into
+Lambda containers, and response fields such as SQS `QueueUrl`, use a Docker
+service name (`floci`) instead of a host-only `localhost` address.
 
 This affects any response field that embeds the endpoint hostname:
 
