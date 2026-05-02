@@ -130,11 +130,8 @@ public class GlueService {
         if (ref == null) {
             return;
         }
-        boolean latest = ref.getSchemaVersionId() == null && ref.getSchemaVersionNumber() == null;
         // Throws EntityNotFoundException / InvalidInputException if reference is broken.
-        schemaRegistryService.getSchemaVersion(
-                ref.getSchemaId(), ref.getSchemaVersionId(),
-                ref.getSchemaVersionNumber(), latest, regionResolver.getDefaultRegion());
+        resolveSchemaVersion(ref);
     }
 
     private Table withResolvedSchemaReference(Table table) {
@@ -143,10 +140,7 @@ public class GlueService {
             return table;
         }
         try {
-            boolean latest = ref.getSchemaVersionId() == null && ref.getSchemaVersionNumber() == null;
-            SchemaVersion version = schemaRegistryService.getSchemaVersion(
-                    ref.getSchemaId(), ref.getSchemaVersionId(),
-                    ref.getSchemaVersionNumber(), latest, regionResolver.getDefaultRegion());
+            SchemaVersion version = resolveSchemaVersion(ref);
             List<Column> columns = SchemaToColumnsConverter.toColumns(
                     version.getDataFormat(), version.getSchemaDefinition());
             if (!columns.isEmpty()) {
@@ -159,6 +153,13 @@ public class GlueService {
                     table.getDatabaseName(), table.getName(), e.getMessage());
         }
         return table;
+    }
+
+    private SchemaVersion resolveSchemaVersion(SchemaReference ref) {
+        boolean latest = ref.getSchemaVersionId() == null && ref.getSchemaVersionNumber() == null;
+        return schemaRegistryService.getSchemaVersion(
+                ref.getSchemaId(), ref.getSchemaVersionId(),
+                ref.getSchemaVersionNumber(), latest, regionResolver.getDefaultRegion());
     }
 
     private static SchemaReference schemaReferenceOf(Table table) {
