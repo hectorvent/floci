@@ -45,7 +45,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [Bedrock Runtime](bedrock-runtime.md) | `/model/{modelId}/converse`, `/model/{modelId}/invoke` | REST JSON | 2 (stub; streaming returns 501) |
 | [EKS](eks.md) | `/clusters`, `/clusters/{name}`, `/tags/{resourceArn}` | REST JSON | 7 |
 | [ELB v2](elb.md) | `POST /` with `Action=` param | Query | 34 |
-| [Auto Scaling](autoscaling.md) | `POST /` with `Action=` param | Query | 30 |
+| [Auto Scaling](autoscaling.md) | `POST /` with `Action=` param | Query | 33 |
 | [MSK](msk.md) | `/v1/clusters/...`, `/api/v2/clusters/...` | REST JSON | 8 |
 | [Athena](athena.md) | `POST /` + `X-Amz-Target: AmazonAthena.*` | JSON 1.1 | 8 |
 | [Glue](glue.md) | `POST /` + `X-Amz-Target: AWSGlue.*` | JSON 1.1 | 15 |

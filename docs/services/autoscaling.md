@@ -10,7 +10,7 @@ Floci implements the EC2 Auto Scaling API — stored-state management for launch
 - `arn:aws:autoscaling:<region>:<account>:launchConfiguration:<uuid>:launchConfigurationName/<name>`
 - `arn:aws:autoscaling:<region>:<account>:scalingPolicy:<uuid>:autoScalingGroupName/<group>/policyName/<name>`
 
-## Supported Operations (30 total)
+## Supported Operations (33 total)
 
 ### Launch Configurations
 
@@ -35,8 +35,9 @@ Floci implements the EC2 Auto Scaling API — stored-state management for launch
 |---|---|
 | `DescribeAutoScalingInstances` | Returns all ASG-tracked instances with lifecycle state and health status |
 | `SetDesiredCapacity` | Updates desired count; reconciler handles scale-out / scale-in within 10 s |
+| `AttachInstances` | Attaches existing EC2 instances to a group; sets lifecycle state to `InService` |
+| `DetachInstances` | Detaches instances from a group; optionally decrements desired capacity |
 | `TerminateInstanceInAutoScalingGroup` | Terminates a specific instance; optionally decrements desired capacity |
-| `SetInstanceProtection` | Marks instances as protected from scale-in |
 
 ### Load Balancer Attachment
 
@@ -56,6 +57,8 @@ Floci implements the EC2 Auto Scaling API — stored-state management for launch
 | `PutLifecycleHook` | Creates or updates a hook: `LifecycleTransition`, `DefaultResult`, `HeartbeatTimeout` |
 | `DescribeLifecycleHooks` | Lists hooks for a group |
 | `DeleteLifecycleHook` | Removes a hook |
+| `CompleteLifecycleAction` | Signals `CONTINUE` or `ABANDON` for a pending lifecycle action |
+| `RecordLifecycleActionHeartbeat` | Extends the heartbeat timeout for an in-progress lifecycle action |
 
 ### Scaling Policies
 
@@ -81,8 +84,6 @@ Floci implements the EC2 Auto Scaling API — stored-state management for launch
 | `DescribeAdjustmentTypes` | Returns the four standard adjustment types |
 | `DescribeMetricCollectionTypes` | Returns standard metric and granularity names |
 | `DescribeAutoScalingNotificationTypes` | Returns all notification type names |
-| `DescribeScalingProcessTypes` | Returns all scaling process names |
-| `DescribeTags` | Lists tags across all groups |
 
 ## Capacity Reconciler (Phase 2)
 
