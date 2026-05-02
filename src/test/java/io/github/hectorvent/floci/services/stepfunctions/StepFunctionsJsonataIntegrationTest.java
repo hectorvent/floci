@@ -108,6 +108,88 @@ class StepFunctionsJsonataIntegrationTest {
     }
 
     @Test
+    void mapStateWithItemSelector_appliesTransformationAndContextVars() throws Exception {
+        // ItemSelector (JSONPath Map state) should transform each item using parent-state
+        // data and $$.Map.Item.Value / $$.Map.Item.Index context variables.
+        // Regression test for: Map state ignores Parameters/ItemSelector (issue #675)
+        String definition = """
+                {
+                    "StartAt": "ProcessItems",
+                    "States": {
+                        "ProcessItems": {
+                            "Type": "Map",
+                            "ItemsPath": "$.items",
+                            "ItemSelector": {
+                                "bucket.$": "$.bucket",
+                                "item.$": "$$.Map.Item.Value",
+                                "index.$": "$$.Map.Item.Index"
+                            },
+                            "ItemProcessor": {
+                                "StartAt": "Pass",
+                                "States": {
+                                    "Pass": {
+                                        "Type": "Pass",
+                                        "End": true
+                                    }
+                                }
+                            },
+                            "End": true
+                        }
+                    }
+                }
+                """;
+
+        String smArn = createStateMachine("map-itemselector-test", definition);
+        String execArn = startExecution(smArn, "{\"bucket\": \"my-bucket\", \"items\": [\"a\", \"b\"]}");
+        String output = waitForExecution(execArn);
+
+        assertTrue(output.contains("my-bucket"), "bucket from parent input should be injected");
+        assertTrue(output.contains("\"item\":\"a\"") || output.contains("\"item\": \"a\""),
+                "item value should be the raw item");
+        assertTrue(output.contains("\"index\":0") || output.contains("\"index\": 0"),
+                "index should start at 0");
+    }
+
+    @Test
+    void mapStateWithParameters_legacySyntax_appliesTransformation() throws Exception {
+        // Parameters is the legacy equivalent of ItemSelector; both must be applied.
+        String definition = """
+                {
+                    "StartAt": "ProcessItems",
+                    "States": {
+                        "ProcessItems": {
+                            "Type": "Map",
+                            "ItemsPath": "$.items",
+                            "Parameters": {
+                                "key.$": "$.key",
+                                "value.$": "$$.Map.Item.Value"
+                            },
+                            "ItemProcessor": {
+                                "StartAt": "Pass",
+                                "States": {
+                                    "Pass": {
+                                        "Type": "Pass",
+                                        "End": true
+                                    }
+                                }
+                            },
+                            "End": true
+                        }
+                    }
+                }
+                """;
+
+        String smArn = createStateMachine("map-parameters-test", definition);
+        String execArn = startExecution(smArn, "{\"key\": \"env\", \"items\": [1, 2]}");
+        String output = waitForExecution(execArn);
+
+        assertTrue(output.contains("\"key\":\"env\"") || output.contains("\"key\": \"env\""),
+                "key from parent input should be injected via Parameters");
+        assertTrue(output.contains("\"value\":1") || output.contains("\"value\": 1"),
+                "value should be the raw item");
+    }
+
+    @Test
     void mapStateWithJsonataItems() throws Exception {
         // Map state using JSONata Items field instead of ItemsPath
         String definition = """
