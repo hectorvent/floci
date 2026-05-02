@@ -870,9 +870,31 @@ public class AslExecutor {
         String startAt = iterator.path("StartAt").asText();
         JsonNode iteratorStates = iterator.path("States");
 
+        // Determine which transformation field is present (ItemSelector is current; Parameters is legacy)
+        JsonNode itemTransform = stateDef.has("ItemSelector") ? stateDef.get("ItemSelector")
+                : stateDef.has("Parameters") ? stateDef.get("Parameters") : null;
+
+        // Resolve InputPath before iterating so $. in ItemSelector sees the Map state's effective input
+        JsonNode mapInput = applyInputPath(stateDef, input);
+
         ArrayNode results = objectMapper.createArrayNode();
+        int index = 0;
         for (JsonNode item : items) {
-            results.add(executeBranch(startAt, iteratorStates, item, sm, topLevelQueryLanguage, context));
+            JsonNode iterInput = item;
+            if (itemTransform != null) {
+                // Enrich context with Map.Item.Index and Map.Item.Value for $$.Map.* references.
+                // $ in ItemSelector resolves against the Map state's effective input, not the item.
+                ObjectNode iterContext = ((ObjectNode) context).deepCopy();
+                ObjectNode mapCtx = objectMapper.createObjectNode();
+                ObjectNode mapItem = objectMapper.createObjectNode();
+                mapItem.put("Index", index);
+                mapItem.set("Value", item);
+                mapCtx.set("Item", mapItem);
+                iterContext.set("Map", mapCtx);
+                iterInput = resolveParameters(itemTransform, mapInput, iterContext);
+            }
+            results.add(executeBranch(startAt, iteratorStates, iterInput, sm, topLevelQueryLanguage, context));
+            index++;
         }
 
         if (jsonata) {
