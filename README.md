@@ -513,6 +513,175 @@ aws --endpoint-url http://localhost:4566 s3 rm s3://my-bucket/demo.txt
 rm -f "$tmp_file"
 ```
 
+## Testcontainers
+
+Floci has first-class Testcontainers modules so you can start a real Floci instance from your tests with zero manual setup — no running daemon, no shared state, no port conflicts.
+
+| Language | Package | Latest | Registry | Source |
+|---|---|---|---|---|
+| Java | `io.floci:testcontainers-floci` | `1.4.0` | [Maven Central](https://mvnrepository.com/artifact/io.floci/testcontainers-floci) | [GitHub](https://github.com/floci-io/testcontainers-floci) |
+| Node.js | `@floci/testcontainers` | `0.1.0` | [npm](https://www.npmjs.com/package/@floci/testcontainers) | [GitHub](https://github.com/floci-io/testcontainers-floci-node) |
+| Python | `testcontainers-floci` | `0.1.1` | [PyPI](https://pypi.org/project/testcontainers-floci/) | [GitHub](https://github.com/floci-io/testcontainers-floci-python) |
+| Go | — | 🚧 In progress | — | [GitHub](https://github.com/floci-io/testcontainers-floci-go) |
+
+### Java
+
+Add the dependency (Testcontainers 1.x / Spring Boot 3.x):
+
+```xml
+<dependency>
+    <groupId>io.floci</groupId>
+    <artifactId>testcontainers-floci</artifactId>
+    <version>1.4.0</version>
+    <scope>test</scope>
+</dependency>
+```
+
+For Testcontainers 2.x / Spring Boot 4.x use version `2.5.0`.
+
+Basic usage with JUnit 5:
+
+```java
+@Testcontainers
+class S3IntegrationTest {
+
+    @Container
+    static FlociContainer floci = new FlociContainer();
+
+    @Test
+    void shouldCreateBucket() {
+        S3Client s3 = S3Client.builder()
+                .endpointOverride(URI.create(floci.getEndpoint()))
+                .region(Region.of(floci.getRegion()))
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create(floci.getAccessKey(), floci.getSecretKey())))
+                .forcePathStyle(true)
+                .build();
+
+        s3.createBucket(b -> b.bucket("my-bucket"));
+
+        assertThat(s3.listBuckets().buckets())
+                .anyMatch(b -> b.name().equals("my-bucket"));
+    }
+}
+```
+
+**Spring Boot** — add `spring-boot-testcontainers-floci` and use `@ServiceConnection` for zero-config auto-wiring:
+
+```java
+@SpringBootTest
+@Testcontainers
+class AppIntegrationTest {
+
+    @Container
+    @ServiceConnection
+    static FlociContainer floci = new FlociContainer();
+
+    @Autowired
+    S3Client s3;
+
+    @Test
+    void shouldCreateBucket() {
+        s3.createBucket(b -> b.bucket("my-bucket"));
+        assertThat(s3.listBuckets().buckets())
+                .anyMatch(b -> b.name().equals("my-bucket"));
+    }
+}
+```
+
+### Node.js / TypeScript
+
+```sh
+npm install --save-dev @floci/testcontainers
+```
+
+```ts
+import { FlociContainer } from "@floci/testcontainers";
+import { S3Client, CreateBucketCommand, ListBucketsCommand } from "@aws-sdk/client-s3";
+
+describe("S3", () => {
+    let floci: FlociContainer;
+
+    beforeAll(async () => {
+        floci = await new FlociContainer().start();
+    });
+
+    afterAll(async () => {
+        await floci.stop();
+    });
+
+    it("should create and list a bucket", async () => {
+        const s3 = new S3Client({
+            endpoint: floci.getEndpoint(),
+            region: floci.getRegion(),
+            credentials: {
+                accessKeyId: floci.getAccessKey(),
+                secretAccessKey: floci.getSecretKey(),
+            },
+            forcePathStyle: true,
+        });
+
+        await s3.send(new CreateBucketCommand({ Bucket: "my-bucket" }));
+        const { Buckets } = await s3.send(new ListBucketsCommand({}));
+        expect(Buckets?.some(b => b.Name === "my-bucket")).toBe(true);
+    });
+});
+```
+
+### Python
+
+```sh
+pip install testcontainers-floci
+```
+
+```python
+import boto3
+from testcontainers_floci import FlociContainer
+
+def test_s3_create_bucket():
+    with FlociContainer() as floci:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=floci.get_endpoint(),
+            region_name=floci.get_region(),
+            aws_access_key_id=floci.get_access_key(),
+            aws_secret_access_key=floci.get_secret_key(),
+        )
+
+        s3.create_bucket(Bucket="my-bucket")
+        buckets = s3.list_buckets()["Buckets"]
+        assert any(b["Name"] == "my-bucket" for b in buckets)
+```
+
+Pytest fixture style:
+
+```python
+import pytest
+import boto3
+from testcontainers_floci import FlociContainer
+
+@pytest.fixture(scope="session")
+def floci():
+    with FlociContainer() as container:
+        yield container
+
+def test_s3_create_bucket(floci):
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=floci.get_endpoint(),
+        region_name=floci.get_region(),
+        aws_access_key_id=floci.get_access_key(),
+        aws_secret_access_key=floci.get_secret_key(),
+    )
+    s3.create_bucket(Bucket="my-bucket")
+    buckets = s3.list_buckets()["Buckets"]
+    assert any(b["Name"] == "my-bucket" for b in buckets)
+```
+
+### Go
+
+Go support is in progress. Track it at [testcontainers-floci-go](https://github.com/floci-io/testcontainers-floci-go).
+
 ## Compatibility Testing
 
 > For full compatibility validation against real SDK and client workflows, see the [compatibility-tests](./compatibility-tests/) directory.
