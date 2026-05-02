@@ -395,8 +395,9 @@ public class EcsJsonHandler {
     private Response handleDeleteService(JsonNode req, String region) {
         String cluster = req.has("cluster") ? req.path("cluster").asText() : null;
         String serviceName = req.path("service").asText();
+        boolean force = req.path("force").asBoolean(false);
 
-        EcsServiceModel svc = service.deleteService(cluster, serviceName, region);
+        EcsServiceModel svc = service.deleteService(cluster, serviceName, force, region);
 
         ObjectNode resp = objectMapper.createObjectNode();
         resp.set("service", serviceNode(svc));
