@@ -2392,6 +2392,67 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void createStack_templateUrlFlociVirtualHost_resolvesLocalS3() {
+        String suffix = Long.toHexString(System.nanoTime());
+        String bucket = "cfn-floci-template-" + suffix;
+        String key = "templates/template.json";
+        String queueName = "cfn-floci-template-queue-" + suffix;
+        String stackName = "cfn-floci-template-stack-" + suffix;
+        String template = """
+            {
+              "Resources": {
+                "MyQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "%s"
+                  }
+                }
+              }
+            }
+            """.formatted(queueName);
+
+        given().when().put("/" + bucket).then().statusCode(200);
+        given()
+            .contentType("application/json")
+            .body(template)
+        .when()
+            .put("/" + bucket + "/" + key)
+        .then()
+            .statusCode(200);
+
+        String templateUrl = "http://" + bucket + ".localhost.floci.io:4566/" + key;
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", stackName)
+            .formParam("TemplateURL", templateUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("CREATE_COMPLETE"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", queueName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
     void createStack_lambdaEventSourceMapping() throws Exception {
         String stackName = "cfn-esm-stack";
         String funcName = "cfn-esm-func";
