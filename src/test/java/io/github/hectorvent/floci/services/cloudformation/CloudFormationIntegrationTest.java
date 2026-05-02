@@ -820,6 +820,93 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void updateStack_dynamoDbRefStillResolvesWhenTableAlreadyExists() {
+        String suffix = Long.toHexString(System.nanoTime());
+        String stackName = "redeploy-ref-stack-" + suffix;
+        String tableName = "redeploy-ref-table-" + suffix;
+        String parameterName = "/app/redeploy-ref-table-" + suffix;
+        String template = """
+            {
+              "Resources": {
+                "MyTable": {
+                  "Type": "AWS::DynamoDB::Table",
+                  "Properties": {
+                    "TableName": "%s",
+                    "AttributeDefinitions": [
+                      {"AttributeName": "pk", "AttributeType": "S"}
+                    ],
+                    "KeySchema": [
+                      {"AttributeName": "pk", "KeyType": "HASH"}
+                    ],
+                    "BillingMode": "PAY_PER_REQUEST"
+                  }
+                },
+                "TableNameParam": {
+                  "Type": "AWS::SSM::Parameter",
+                  "Properties": {
+                    "Name": "%s",
+                    "Type": "String",
+                    "Value": {"Ref": "MyTable"}
+                  }
+                }
+              },
+              "Outputs": {
+                "TableName": {
+                  "Value": {"Ref": "MyTable"}
+                }
+              }
+            }
+            """.formatted(tableName, parameterName);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", stackName)
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "UpdateStack")
+            .formParam("StackName", stackName)
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>UPDATE_COMPLETE</StackStatus>"))
+            .body(containsString("<OutputKey>TableName</OutputKey>"))
+            .body(containsString("<OutputValue>" + tableName + "</OutputValue>"));
+
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                {"Name": "%s", "WithDecryption": true}
+                """.formatted(parameterName))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Name", equalTo(parameterName))
+            .body("Parameter.Value", equalTo(tableName));
+    }
+
+    @Test
     void createStack_explicitNamesPreserved() {
         // When explicit names are provided, CloudFormation uses them as-is.
         // See: https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-name.html

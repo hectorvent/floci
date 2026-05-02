@@ -10,6 +10,7 @@ import io.github.hectorvent.floci.services.dynamodb.model.AttributeDefinition;
 import io.github.hectorvent.floci.services.dynamodb.model.GlobalSecondaryIndex;
 import io.github.hectorvent.floci.services.dynamodb.model.KeySchemaElement;
 import io.github.hectorvent.floci.services.dynamodb.model.LocalSecondaryIndex;
+import io.github.hectorvent.floci.services.dynamodb.model.TableDefinition;
 import io.github.hectorvent.floci.services.ecr.EcrService;
 import io.github.hectorvent.floci.services.ecr.model.Repository;
 import io.github.hectorvent.floci.services.iam.IamService;
@@ -320,7 +321,15 @@ public class CloudFormationResourceProvisioner {
             attrDefs.add(new AttributeDefinition("id", "S"));
         }
 
-        var table = dynamoDbService.createTable(tableName, keySchema, attrDefs, null, null, gsis, lsis, region);
+        TableDefinition table;
+        try {
+            table = dynamoDbService.createTable(tableName, keySchema, attrDefs, null, null, gsis, lsis, region);
+        } catch (AwsException e) {
+            if (!"ResourceInUseException".equals(e.getErrorCode())) {
+                throw e;
+            }
+            table = dynamoDbService.describeTable(tableName, region);
+        }
         r.setPhysicalId(tableName);
         r.getAttributes().put("Arn", table.getTableArn());
         r.getAttributes().put("StreamArn", table.getTableArn() + "/stream/2024-01-01T00:00:00.000");
