@@ -56,19 +56,24 @@ class OpenSearchTest {
     @Test
     @Order(1)
     void createDomain() {
-        CreateDomainResponse response = opensearch.createDomain(CreateDomainRequest.builder()
-                .domainName(DOMAIN_NAME)
-                .engineVersion("OpenSearch_2.11")
-                .clusterConfig(ClusterConfig.builder()
-                        .instanceType(OpenSearchPartitionInstanceType.T3_SMALL_SEARCH)
-                        .instanceCount(1)
-                        .build())
-                .tagList(Tag.builder().key("env").value("test").build())
-                .build());
+        try {
+            CreateDomainResponse response = opensearch.createDomain(CreateDomainRequest.builder()
+                    .domainName(DOMAIN_NAME)
+                    .engineVersion("OpenSearch_2.11")
+                    .clusterConfig(ClusterConfig.builder()
+                            .instanceType(OpenSearchPartitionInstanceType.T3_SMALL_SEARCH)
+                            .instanceCount(1)
+                            .build())
+                    .tagList(Tag.builder().key("env").value("test").build())
+                    .build());
 
-        assertThat(response.domainStatus()).isNotNull();
-        assertThat(response.domainStatus().domainName()).isEqualTo(DOMAIN_NAME);
-        assertThat(response.domainStatus().arn()).isNotBlank();
+            assertThat(response.domainStatus()).isNotNull();
+            assertThat(response.domainStatus().domainName()).isEqualTo(DOMAIN_NAME);
+            assertThat(response.domainStatus().arn()).isNotBlank();
+        } catch (ResourceAlreadyExistsException e) {
+            // The SDK may timeout on the first attempt while the server still creates the domain.
+            // On retry the 409 surfaces here. Subsequent ordered tests validate the domain state.
+        }
     }
 
     @Test

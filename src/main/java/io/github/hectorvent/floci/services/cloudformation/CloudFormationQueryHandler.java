@@ -55,6 +55,7 @@ public class CloudFormationQueryHandler {
             case "GetTemplate" -> getTemplate(params, region);
             case "ValidateTemplate" -> validateTemplate(params);
             case "ListStacks" -> listStacks(params, region);
+            case "ListExports" -> listExports(params, region);
             case "SetStackPolicy" -> Response.ok(emptyResult("SetStackPolicyResponse")).build();
             case "GetStackPolicy" -> Response.ok(emptyResult("GetStackPolicyResponse")).build();
             case "DescribeStackResource" -> describeStackResource(params, region);
@@ -428,6 +429,27 @@ public class CloudFormationQueryHandler {
         return Response.ok(xml.build()).type("text/xml").build();
     }
 
+    // ── ListExports ─────────────────────────────────────────────────────────
+
+    private Response listExports(MultivaluedMap<String, String> params, String region) {
+        var exportEntries = cfnService.listExports(region);
+        XmlBuilder xml = new XmlBuilder()
+                .start("ListExportsResponse", CF_NS)
+                .start("ListExportsResult")
+                .start("Exports");
+        for (var entry : exportEntries.values()) {
+            xml.start("member")
+               .elem("ExportingStackId", entry.exportingStackId())
+               .elem("Name", entry.name())
+               .elem("Value", entry.value())
+               .end("member");
+        }
+        xml.end("Exports").end("ListExportsResult")
+           .raw(AwsQueryResponse.responseMetadata())
+           .end("ListExportsResponse");
+        return Response.ok(xml.build()).type("text/xml").build();
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private String stackToXml(Stack s) {
@@ -448,11 +470,16 @@ public class CloudFormationQueryHandler {
         }
         xml.end("Capabilities");
         xml.start("Outputs");
-        s.getOutputs().forEach((k, v) ->
-                xml.start("member")
-                   .elem("OutputKey", k)
-                   .elem("OutputValue", v)
-                   .end("member"));
+        s.getOutputs().forEach((k, v) -> {
+            xml.start("member")
+               .elem("OutputKey", k)
+               .elem("OutputValue", v);
+            String exportName = s.getOutputExportNames().get(k);
+            if (exportName != null) {
+                xml.elem("ExportName", exportName);
+            }
+            xml.end("member");
+        });
         xml.end("Outputs");
         xml.start("Tags");
         s.getTags().forEach((k, v) ->

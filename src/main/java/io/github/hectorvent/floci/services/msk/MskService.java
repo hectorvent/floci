@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.msk;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -57,8 +58,7 @@ public class MskService {
             throw new AwsException("ConflictException", "Cluster already exists: " + clusterName, 409);
         }
 
-        String clusterArn = String.format("arn:aws:kafka:%s:000000000000:cluster/%s/%s",
-                "us-east-1", clusterName, java.util.UUID.randomUUID());
+        String clusterArn = AwsArnUtils.Arn.of("kafka", "us-east-1", "000000000000", "cluster/" + clusterName + "/" + java.util.UUID.randomUUID()).toString();
 
         MskCluster cluster = new MskCluster(clusterArn, clusterName);
         

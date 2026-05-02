@@ -15,6 +15,9 @@ public class Stack {
     private List<String> capabilities = new ArrayList<>();
     private Map<String, String> parameters = new LinkedHashMap<>();
     private Map<String, String> outputs = new LinkedHashMap<>();
+    private Map<String, String> exports = new LinkedHashMap<>();
+    // Maps output key to its export name (when Export.Name is defined on an output)
+    private Map<String, String> outputExportNames = new LinkedHashMap<>();
     private Map<String, StackResource> resources = new LinkedHashMap<>();
     private List<StackEvent> events = new ArrayList<>();
     private Map<String, ChangeSet> changeSets = new LinkedHashMap<>();
@@ -42,6 +45,10 @@ public class Stack {
     public void setParameters(Map<String, String> parameters) { this.parameters = parameters; }
     public Map<String, String> getOutputs() { return outputs; }
     public void setOutputs(Map<String, String> outputs) { this.outputs = outputs; }
+    public Map<String, String> getExports() { return exports; }
+    public void setExports(Map<String, String> exports) { this.exports = exports; }
+    public Map<String, String> getOutputExportNames() { return outputExportNames; }
+    public void setOutputExportNames(Map<String, String> outputExportNames) { this.outputExportNames = outputExportNames; }
     public Map<String, StackResource> getResources() { return resources; }
     public void setResources(Map<String, StackResource> resources) { this.resources = resources; }
     public List<StackEvent> getEvents() { return events; }

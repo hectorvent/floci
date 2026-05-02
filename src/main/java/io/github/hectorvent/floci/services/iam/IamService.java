@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.iam;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -995,7 +996,7 @@ public class IamService {
     }
 
     private String iamArn(String resourceType, String path, String name) {
-        return "arn:aws:iam::" + accountId + ":" + resourceType + path + name;
+        return AwsArnUtils.Arn.of("iam", "", accountId, resourceType + path + name).toString();
     }
 
     private static String normalizePath(String path) {

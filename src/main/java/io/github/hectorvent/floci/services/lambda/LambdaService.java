@@ -296,6 +296,9 @@ public class LambdaService {
             if (imageConfig.get("EntryPoint") instanceof List<?> ep) {
                 fn.setImageConfigEntryPoint(ep.stream().map(Object::toString).toList());
             }
+            if (imageConfig.get("WorkingDirectory") instanceof String wd) {
+                fn.setImageConfigWorkingDirectory(wd);
+            }
         }
 
         // Handle code deployment
@@ -509,6 +512,10 @@ public class LambdaService {
                             ? ((List<?>) imageConfig.get("EntryPoint")).stream().map(Object::toString).toList() : null;
                     fn.setImageConfigEntryPoint(ep);
                 }
+                if (imageConfig.containsKey("WorkingDirectory")) {
+                    fn.setImageConfigWorkingDirectory(
+                            imageConfig.get("WorkingDirectory") instanceof String wd ? wd : null);
+                }
             }
         }
 
@@ -541,6 +548,12 @@ public class LambdaService {
             }
             codeStore.delete(functionName);
             functionStore.delete(region, functionName);
+            versionCounters.remove(region + "::" + functionName);
+            if (aliasStore != null) {
+                for (LambdaAlias alias : aliasStore.list(region, functionName)) {
+                    aliasStore.delete(region, functionName, alias.getName());
+                }
+            }
         }
         LOG.infov("Deleted Lambda function: {0}", functionName);
     }
@@ -625,8 +638,7 @@ public class LambdaService {
             resolvedRegion = SqsEventSourcePoller.regionFromArn(eventSourceArn);
         } else {
             // arn:aws:kinesis:region:... or arn:aws:dynamodb:region:...
-            String[] parts = eventSourceArn.split(":");
-            resolvedRegion = parts.length > 3 ? parts[3] : region;
+            resolvedRegion = AwsArnUtils.regionOrDefault(eventSourceArn, region);
         }
 
         // If the caller supplied a full function ARN, its region must agree

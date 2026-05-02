@@ -88,6 +88,7 @@ public class FlociDuckManager {
                 .withEnv("FLOCI_DUCK_S3_REGION", config.defaultRegion())
                 .withPortBinding(DUCK_PORT, DUCK_PORT)
                 .withDockerNetwork(config.services().dockerNetwork())
+                .withEmbeddedDns()
                 .withLogRotation()
                 .build();
 

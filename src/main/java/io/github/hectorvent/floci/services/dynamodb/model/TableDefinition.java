@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.dynamodb.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
@@ -67,7 +68,7 @@ public class TableDefinition {
         this.creationDateTime = Instant.now();
         this.itemCount = 0;
         this.tableSizeBytes = 0;
-        this.tableArn = "arn:aws:dynamodb:" + region + ":" + accountId + ":table/" + tableName;
+        this.tableArn = AwsArnUtils.Arn.of("dynamodb", region, accountId, "table/" + tableName).toString();
         this.provisionedThroughput = new ProvisionedThroughput(5, 5);
         this.tags = new HashMap<>();
         this.globalSecondaryIndexes = new ArrayList<>();

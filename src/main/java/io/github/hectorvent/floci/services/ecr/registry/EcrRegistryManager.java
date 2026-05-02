@@ -180,8 +180,7 @@ public class EcrRegistryManager {
     private void addPersistenceMounts(ContainerBuilder.Builder specBuilder, List<String> env) {
         String hostPersistentPath = config.storage().hostPersistentPath();
         boolean inContainer = containerDetector.isRunningInContainer();
-        boolean isExplicitVolumeName = !hostPersistentPath.startsWith("/")
-                && !hostPersistentPath.startsWith(".");
+        boolean isExplicitVolume = lifecycleManager.volumeExists(hostPersistentPath);
         boolean isRelativeDefault = hostPersistentPath.startsWith(".");
 
         if (inContainer && isRelativeDefault) {
@@ -190,10 +189,10 @@ public class EcrRegistryManager {
             LOG.infov("Floci in container with relative host-persistent-path ({0}); "
                     + "using named volume {1} for ECR registry data",
                     hostPersistentPath, NAMED_VOLUME);
-        } else if (isExplicitVolumeName) {
+        } else if (isExplicitVolume) {
             // User set hostPersistentPath to a Docker named-volume name
             String internalMountPath = "/app/data";
-            specBuilder.withBind(hostPersistentPath, internalMountPath);
+            specBuilder.withNamedVolume(hostPersistentPath, internalMountPath);
             env.add("REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=" + internalMountPath + "/ecr/registry");
         } else {
             // Host path bind-mount.

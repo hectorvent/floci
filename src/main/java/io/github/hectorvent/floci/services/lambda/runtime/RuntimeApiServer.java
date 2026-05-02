@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.services.lambda.model.InvokeResult;
 import io.github.hectorvent.floci.services.lambda.model.PendingInvocation;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServer;
+import io.vertx.core.http.HttpServerOptions;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
@@ -131,7 +132,8 @@ public class RuntimeApiServer {
             ctx.response().setStatusCode(202).end();
         });
 
-        httpServer = vertx.createHttpServer();
+        httpServer = vertx.createHttpServer(new HttpServerOptions()
+                .setMaxFormAttributeSize(-1));
         httpServer.requestHandler(router).listen(port, "0.0.0.0", result -> {
             if (result.succeeded()) {
                 LOG.debugv("RuntimeApiServer started on port {0}", port);

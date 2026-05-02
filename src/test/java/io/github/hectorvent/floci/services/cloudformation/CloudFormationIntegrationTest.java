@@ -2512,4 +2512,410 @@ class CloudFormationIntegrationTest {
             .statusCode(404);
     }
 
+    @Test
+    void crossStackReference_fnImportValue() {
+        // Stack A exports a bucket name
+        String templateA = """
+            {
+              "Resources": {
+                "SharedBucket": {
+                  "Type": "AWS::S3::Bucket",
+                  "Properties": {
+                    "BucketName": "cross-stack-shared-bucket"
+                  }
+                }
+              },
+              "Outputs": {
+                "BucketNameOutput": {
+                  "Value": { "Ref": "SharedBucket" },
+                  "Export": {
+                    "Name": "SharedBucketName"
+                  }
+                }
+              }
+            }
+            """;
+
+        // Create Stack A
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "exporter-stack")
+            .formParam("TemplateBody", templateA)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // Verify Stack A is complete and has export in output
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "exporter-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"))
+            .body(containsString("<OutputKey>BucketNameOutput</OutputKey>"))
+            .body(containsString("<OutputValue>cross-stack-shared-bucket</OutputValue>"))
+            .body(containsString("<ExportName>SharedBucketName</ExportName>"));
+
+        // Verify ListExports returns the export
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListExports")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<Name>SharedBucketName</Name>"))
+            .body(containsString("<Value>cross-stack-shared-bucket</Value>"));
+
+        // Stack B imports the bucket name from Stack A
+        String templateB = """
+            {
+              "Resources": {
+                "ImporterQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": {
+                      "Fn::Join": ["-", [
+                        { "Fn::ImportValue": "SharedBucketName" },
+                        "queue"
+                      ]]
+                    }
+                  }
+                }
+              },
+              "Outputs": {
+                "QueueNameOutput": {
+                  "Value": { "Ref": "ImporterQueue" }
+                }
+              }
+            }
+            """;
+
+        // Create Stack B (imports from Stack A)
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "importer-stack")
+            .formParam("TemplateBody", templateB)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        // Verify Stack B is complete and resolved the import correctly
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "importer-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"))
+            .body(containsString("cross-stack-shared-bucket-queue"));
+
+        // Verify the SQS queue was actually created with the resolved name
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", "cross-stack-shared-bucket-queue")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("cross-stack-shared-bucket-queue"));
+    }
+
+    @Test
+    void crossStackReference_fnImportValueWithSub() {
+        // Stack that exports with a Fn::Sub-based export name
+        String templateExporter = """
+            {
+              "Resources": {
+                "MyTable": {
+                  "Type": "AWS::DynamoDB::Table",
+                  "Properties": {
+                    "TableName": "cross-stack-table",
+                    "AttributeDefinitions": [
+                      { "AttributeName": "pk", "AttributeType": "S" }
+                    ],
+                    "KeySchema": [
+                      { "AttributeName": "pk", "KeyType": "HASH" }
+                    ],
+                    "BillingMode": "PAY_PER_REQUEST"
+                  }
+                }
+              },
+              "Outputs": {
+                "TableNameOut": {
+                  "Value": { "Ref": "MyTable" },
+                  "Export": {
+                    "Name": { "Fn::Sub": "${AWS::StackName}-TableName" }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "sub-exporter-stack")
+            .formParam("TemplateBody", templateExporter)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify the dynamic export name resolved correctly
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListExports")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<Name>sub-exporter-stack-TableName</Name>"))
+            .body(containsString("<Value>cross-stack-table</Value>"));
+
+        // Stack that imports using the dynamic export name
+        String templateImporter = """
+            {
+              "Resources": {
+                "ConsumerQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": {
+                      "Fn::Join": ["-", [
+                        { "Fn::ImportValue": "sub-exporter-stack-TableName" },
+                        "consumer"
+                      ]]
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "sub-importer-stack")
+            .formParam("TemplateBody", templateImporter)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        // Verify the queue was created with the correctly resolved imported value
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "sub-importer-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", "cross-stack-table-consumer")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("cross-stack-table-consumer"));
+    }
+
+    @Test
+    void crossStackReference_updateRemovesOldExportName() {
+        String oldTemplate = """
+            {
+              "Outputs": {
+                "SharedValue": {
+                  "Value": "old-value",
+                  "Export": { "Name": "OldExportName" }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "export-rename-stack")
+            .formParam("TemplateBody", oldTemplate)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        String newTemplate = """
+            {
+              "Outputs": {
+                "SharedValue": {
+                  "Value": "new-value",
+                  "Export": { "Name": "NewExportName" }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "UpdateStack")
+            .formParam("StackName", "export-rename-stack")
+            .formParam("TemplateBody", newTemplate)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        String exportsXml = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListExports")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().body().asString();
+
+        assertThat(exportsXml, containsString("<Name>NewExportName</Name>"));
+        assertThat(exportsXml, containsString("<Value>new-value</Value>"));
+        assertThat(exportsXml, not(containsString("<Name>OldExportName</Name>")));
+    }
+
+    @Test
+    void crossStackReference_duplicateExportNameFailsSecondStack() {
+        String firstTemplate = """
+            {
+              "Outputs": {
+                "SharedValue": {
+                  "Value": "first-value",
+                  "Export": { "Name": "DuplicateExportName" }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "duplicate-export-stack-a")
+            .formParam("TemplateBody", firstTemplate)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        String secondTemplate = """
+            {
+              "Outputs": {
+                "SharedValue": {
+                  "Value": "second-value",
+                  "Export": { "Name": "DuplicateExportName" }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "duplicate-export-stack-b")
+            .formParam("TemplateBody", secondTemplate)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "duplicate-export-stack-b")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_FAILED</StackStatus>"))
+            .body(containsString("DuplicateExportName"));
+
+        String exportsXml = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListExports")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().body().asString();
+
+        assertThat(exportsXml, containsString("<Name>DuplicateExportName</Name>"));
+        assertThat(exportsXml, containsString("<Value>first-value</Value>"));
+        assertThat(exportsXml, not(containsString("<Value>second-value</Value>")));
+    }
+
+    @Test
+    void crossStackReference_missingImportValueFailsResource() {
+        String template = """
+            {
+              "Resources": {
+                "ImporterQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": { "Fn::ImportValue": "MissingExportName" }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "missing-import-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "missing-import-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("CREATE_FAILED"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackEvents")
+            .formParam("StackName", "missing-import-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("MissingExportName"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueUrl")
+            .formParam("QueueName", "MissingExportName")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400);
+    }
+
 }

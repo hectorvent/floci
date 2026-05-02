@@ -69,6 +69,7 @@ public class ContainerBuilder {
         private final List<String> env = new ArrayList<>();
         private List<String> cmd;
         private List<String> entrypoint;
+        private String workingDir;
         private Long memoryBytes;
         private final Map<Integer, Integer> portBindings = new HashMap<>();
         private final List<Integer> exposedPorts = new ArrayList<>();
@@ -133,6 +134,14 @@ public class ContainerBuilder {
          */
         public Builder withEntrypoint(List<String> entrypoint) {
             this.entrypoint = entrypoint;
+            return this;
+        }
+
+        /**
+         * Sets the working directory inside the container (overrides image WORKDIR).
+         */
+        public Builder withWorkingDir(String workingDir) {
+            this.workingDir = workingDir;
             return this;
         }
 
@@ -315,7 +324,8 @@ public class ContainerBuilder {
                     List.copyOf(extraHosts),
                     logConfig,
                     privileged,
-                    List.copyOf(dnsServers)
+                    List.copyOf(dnsServers),
+                    workingDir
             );
         }
     }

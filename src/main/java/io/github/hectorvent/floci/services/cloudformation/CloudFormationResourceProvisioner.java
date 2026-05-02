@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.cloudformation;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
 import io.github.hectorvent.floci.services.dynamodb.DynamoDbService;
 import io.github.hectorvent.floci.services.eventbridge.EventBridgeService;
@@ -194,7 +195,7 @@ public class CloudFormationResourceProvisioner {
         }
         s3Service.createBucket(bucketName, region);
         r.setPhysicalId(bucketName);
-        r.getAttributes().put("Arn", "arn:aws:s3:::" + bucketName);
+        r.getAttributes().put("Arn", AwsArnUtils.Arn.of("s3", "", "", bucketName).toString());
         r.getAttributes().put("DomainName", bucketName + ".s3.amazonaws.com");
         r.getAttributes().put("RegionalDomainName", bucketName + ".s3." + region + ".amazonaws.com");
         r.getAttributes().put("WebsiteURL", "http://" + bucketName + ".s3-website." + region + ".amazonaws.com");
@@ -217,7 +218,7 @@ public class CloudFormationResourceProvisioner {
         // QueueArn is computed on demand in SqsService#getQueueAttributes and is not
         // stored on the Queue object, so build it here from region + accountId + queueName.
         // Without this, Fn::GetAtt [Queue, Arn] references resolve to an empty string.
-        String queueArn = "arn:aws:sqs:" + region + ":" + accountId + ":" + queueName;
+        String queueArn = AwsArnUtils.Arn.of("sqs", region, accountId, queueName).toString();
         r.setPhysicalId(queue.getQueueUrl());
         r.getAttributes().put("Arn", queueArn);
         r.getAttributes().put("QueueName", queueName);
@@ -338,7 +339,7 @@ public class CloudFormationResourceProvisioner {
         Map<String, Object> req = new HashMap<>();
         req.put("FunctionName", funcName);
         req.put("PackageType", packageType);
-        req.put("Role", resolveOrDefault(props, "Role", engine, "arn:aws:iam::" + accountId + ":role/default"));
+        req.put("Role", resolveOrDefault(props, "Role", engine, AwsArnUtils.Arn.of("iam", "", accountId, "role/default").toString()));
         req.put("Code", resolveLambdaCode(props, engine));
 
         if ("Zip".equals(packageType)) {
@@ -542,7 +543,7 @@ public class CloudFormationResourceProvisioner {
             r.getAttributes().put("Arn", profile.getArn());
         } catch (Exception e) {
             r.setPhysicalId(name);
-            r.getAttributes().put("Arn", "arn:aws:iam::" + accountId + ":instance-profile/" + name);
+            r.getAttributes().put("Arn", AwsArnUtils.Arn.of("iam", "", accountId, "instance-profile/" + name).toString());
         }
     }
 
@@ -674,8 +675,7 @@ public class CloudFormationResourceProvisioner {
     private void provisionNestedStack(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
                                       String region) {
         // Nested stacks are stubbed — return a synthetic stack ID
-        String nestedId = "arn:aws:cloudformation:" + region + "::stack/nested-" +
-                UUID.randomUUID().toString().substring(0, 8) + "/";
+        String nestedId = AwsArnUtils.Arn.of("cloudformation", region, "", "stack/nested-" + UUID.randomUUID().toString().substring(0, 8) + "/").toString();
         r.setPhysicalId(nestedId);
         r.getAttributes().put("Arn", nestedId);
         r.getAttributes().put("Outputs.BootstrapVersion", "21");

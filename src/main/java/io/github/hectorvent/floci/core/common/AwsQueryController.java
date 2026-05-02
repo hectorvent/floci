@@ -265,7 +265,7 @@ public class AwsQueryController {
 
     private static final Set<String> CLOUDFORMATION_ACTIONS = Set.of(
             "CreateStack", "DeleteStack", "UpdateStack", "DescribeStacks",
-            "ListStacks", "GetTemplate", "ValidateTemplate",
+            "ListStacks", "ListExports", "GetTemplate", "ValidateTemplate",
             "CreateChangeSet", "DeleteChangeSet", "DescribeChangeSet", "ExecuteChangeSet", "ListChangeSets",
             "DescribeStackEvents", "DescribeStackResources", "ListStackResources", "DescribeStackResource",
             "SetStackPolicy", "GetStackPolicy", "ListStackSets", "DescribeStackSet", "CreateStackSet"
@@ -287,7 +287,7 @@ public class AwsQueryController {
     private static final Set<String> COGNITO_ACTIONS = Set.of(
             "AdminCreateUser", "AdminGetUser", "AdminDeleteUser", "AdminSetUserPassword",
             "AdminUpdateUserAttributes", "AdminUserGlobalSignOut", "ListUsers",
-            "InitiateAuth", "AdminInitiateAuth", "RespondToAuthChallenge",
+            "InitiateAuth", "AdminInitiateAuth", "RespondToAuthChallenge", "AdminRespondToAuthChallenge",
             "SignUp", "ConfirmSignUp", "ChangePassword", "ForgotPassword",
             "ConfirmForgotPassword", "GetUser", "UpdateUserAttributes",
             "CreateUserPool", "DescribeUserPool", "ListUserPools", "UpdateUserPool", "DeleteUserPool",

@@ -218,4 +218,51 @@ class LambdaFunctionConfigTest {
                 .as("Environment block must be present even after clearing variables")
                 .isNotNull();
     }
+
+    @Test
+    @Order(6)
+    @DisplayName("ImageConfig.WorkingDirectory round-trips via create and get")
+    void imageConfigWorkingDirectoryRoundTrips() {
+        String imageFn = TestFixtures.uniqueName("fn-image-wd");
+        try {
+            CreateFunctionResponse createResp = lambda.createFunction(CreateFunctionRequest.builder()
+                    .functionName(imageFn)
+                    .packageType(software.amazon.awssdk.services.lambda.model.PackageType.IMAGE)
+                    .role(ROLE)
+                    .code(FunctionCode.builder()
+                            .imageUri("000000000000.dkr.ecr.us-east-1.amazonaws.com/fake-repo:latest")
+                            .build())
+                    .imageConfig(software.amazon.awssdk.services.lambda.model.ImageConfig.builder()
+                            .workingDirectory("/app")
+                            .build())
+                    .build());
+
+            assertThat(createResp.imageConfigResponse().imageConfig().workingDirectory())
+                    .as("CreateFunction response must include ImageConfig.WorkingDirectory")
+                    .isEqualTo("/app");
+
+            GetFunctionConfigurationResponse getResp = lambda.getFunctionConfiguration(
+                    GetFunctionConfigurationRequest.builder().functionName(imageFn).build());
+
+            assertThat(getResp.imageConfigResponse().imageConfig().workingDirectory())
+                    .as("GetFunctionConfiguration must persist ImageConfig.WorkingDirectory")
+                    .isEqualTo("/app");
+
+            UpdateFunctionConfigurationResponse updateResp = lambda.updateFunctionConfiguration(
+                    UpdateFunctionConfigurationRequest.builder()
+                            .functionName(imageFn)
+                            .imageConfig(software.amazon.awssdk.services.lambda.model.ImageConfig.builder()
+                                    .workingDirectory("/updated")
+                                    .build())
+                            .build());
+
+            assertThat(updateResp.imageConfigResponse().imageConfig().workingDirectory())
+                    .as("UpdateFunctionConfiguration must update ImageConfig.WorkingDirectory")
+                    .isEqualTo("/updated");
+        } finally {
+            try {
+                lambda.deleteFunction(DeleteFunctionRequest.builder().functionName(imageFn).build());
+            } catch (Exception ignored) {}
+        }
+    }
 }

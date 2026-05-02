@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.ecr;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -86,7 +87,7 @@ public class EcrService {
             Repository repo = new Repository();
             repo.setRepositoryName(repoName);
             repo.setRegistryId(account);
-            repo.setRepositoryArn("arn:aws:ecr:" + region + ":" + account + ":repository/" + repoName);
+            repo.setRepositoryArn(AwsArnUtils.Arn.of("ecr", region, account, "repository/" + repoName).toString());
             repo.setRepositoryUri(registryManager.getRepositoryUri(account, region, repoName));
             repo.setCreatedAt(Instant.now());
             repoStore.put(key, repo);
@@ -122,7 +123,7 @@ public class EcrService {
         Repository repo = new Repository();
         repo.setRepositoryName(repositoryName);
         repo.setRegistryId(account);
-        repo.setRepositoryArn("arn:aws:ecr:" + region + ":" + account + ":repository/" + repositoryName);
+        repo.setRepositoryArn(AwsArnUtils.Arn.of("ecr", region, account, "repository/" + repositoryName).toString());
         repo.setRepositoryUri(registryManager.getRepositoryUri(account, region, repositoryName));
         repo.setCreatedAt(Instant.now());
         if (imageTagMutability != null && !imageTagMutability.isBlank()) {

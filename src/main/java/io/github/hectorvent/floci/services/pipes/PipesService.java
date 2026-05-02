@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.pipes;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.TagHandler;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
@@ -74,7 +75,7 @@ public class PipesService implements TagHandler {
         }
 
         String accountId = config.defaultAccountId();
-        String arn = "arn:aws:pipes:" + region + ":" + accountId + ":pipe/" + name;
+        String arn = AwsArnUtils.Arn.of("pipes", region, accountId, "pipe/" + name).toString();
         Instant now = Instant.now();
 
         Pipe pipe = new Pipe();

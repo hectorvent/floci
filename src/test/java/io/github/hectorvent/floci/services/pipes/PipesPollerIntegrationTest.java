@@ -621,4 +621,113 @@ class PipesPollerIntegrationTest {
         .then()
             .statusCode(200);
     }
+
+    // ──────────────────────────── Message Attributes Tests ────────────────────────────
+
+    @Test
+    @Order(50)
+    void createMsgAttrSourceQueue() {
+        given()
+            .contentType(SQS_CONTENT_TYPE)
+            .formParam("Action", "CreateQueue")
+            .formParam("QueueName", "pipe-msgattr-source")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(51)
+    void createMsgAttrTargetQueue() {
+        given()
+            .contentType(SQS_CONTENT_TYPE)
+            .formParam("Action", "CreateQueue")
+            .formParam("QueueName", "pipe-msgattr-target")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(52)
+    void createMsgAttrPipeWithInputTemplate() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "Source": "arn:aws:sqs:us-east-1:000000000000:pipe-msgattr-source",
+                    "Target": "arn:aws:sqs:us-east-1:000000000000:pipe-msgattr-target",
+                    "RoleArn": "arn:aws:iam::000000000000:role/pipe-role",
+                    "DesiredState": "RUNNING",
+                    "TargetParameters": {
+                        "InputTemplate": "{\\"body\\": <$.body>, \\"traceId\\": <$.messageAttributes.traceId.stringValue>}"
+                    }
+                }
+                """)
+        .when()
+            .post("/v1/pipes/msgattr-pipe")
+        .then()
+            .statusCode(200)
+            .body("CurrentState", equalTo("RUNNING"));
+    }
+
+    @Test
+    @Order(53)
+    void sendMessageWithAttributes() {
+        given()
+            .contentType(SQS_CONTENT_TYPE)
+            .formParam("Action", "SendMessage")
+            .formParam("QueueUrl", "http://localhost:4566/000000000000/pipe-msgattr-source")
+            .formParam("MessageBody", "{\"event\": \"test\"}")
+            .formParam("MessageAttribute.1.Name", "traceId")
+            .formParam("MessageAttribute.1.Value.DataType", "String")
+            .formParam("MessageAttribute.1.Value.StringValue", "trace-abc-123")
+            .formParam("MessageAttribute.2.Name", "priority")
+            .formParam("MessageAttribute.2.Value.DataType", "Number")
+            .formParam("MessageAttribute.2.Value.StringValue", "5")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(54)
+    void messageAttributesForwardedAndAccessibleViaInputTemplate() throws Exception {
+        String body = null;
+        for (int i = 0; i < 10; i++) {
+            Thread.sleep(500);
+            body = given()
+                .contentType(SQS_CONTENT_TYPE)
+                .formParam("Action", "ReceiveMessage")
+                .formParam("QueueUrl", "http://localhost:4566/000000000000/pipe-msgattr-target")
+                .formParam("MaxNumberOfMessages", "1")
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .extract().body().asString();
+
+            if (body.contains("trace-abc-123")) {
+                break;
+            }
+        }
+        assertTrue(body.contains("trace-abc-123"),
+                "Target should contain traceId extracted from message attributes but got: " + body);
+        assertTrue(body.contains("&quot;body&quot;") || body.contains("\"body\""),
+                "Target should contain body field from InputTemplate but got: " + body);
+    }
+
+    @Test
+    @Order(55)
+    void cleanupMsgAttrPipe() {
+        given()
+            .contentType("application/json")
+        .when()
+            .delete("/v1/pipes/msgattr-pipe")
+        .then()
+            .statusCode(200);
+    }
 }

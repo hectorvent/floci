@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.firehose;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
@@ -40,8 +41,7 @@ public class FirehoseService {
     }
 
     public String createDeliveryStream(String name, S3Destination s3Config) {
-        String arn = "arn:aws:firehose:" + regionResolver.getDefaultRegion()
-                + ":" + regionResolver.getAccountId() + ":deliverystream/" + name;
+        String arn = AwsArnUtils.Arn.of("firehose", regionResolver.getDefaultRegion(), regionResolver.getAccountId(), "deliverystream/" + name).toString();
         DeliveryStreamDescription description = new DeliveryStreamDescription(name, arn, s3Config);
         streamStore.put(name, description);
         buffers.put(name, Collections.synchronizedList(new ArrayList<>()));

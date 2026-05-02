@@ -82,6 +82,20 @@ class Ec2Tests {
         }
     }
 
+    /** Polls DescribeInstances until the instance reaches the target state (up to 60 s). */
+    private static Instance waitForState(String id, InstanceStateName target) throws InterruptedException {
+        for (int i = 0; i < 60; i++) {
+            DescribeInstancesResponse resp = ec2.describeInstances(
+                    DescribeInstancesRequest.builder().instanceIds(id).build());
+            Instance inst = resp.reservations().get(0).instances().get(0);
+            if (inst.state().name() == target) {
+                return inst;
+            }
+            Thread.sleep(1000);
+        }
+        throw new AssertionError("Instance " + id + " did not reach state " + target + " within 60 s");
+    }
+
     @Test
     @Order(1)
     @DisplayName("DescribeVpcs - default VPC exists")
@@ -398,7 +412,7 @@ class Ec2Tests {
         Instance launched = resp.instances().get(0);
 
         assertThat(instanceId).isNotNull().startsWith("i-");
-        assertThat(launched.state().name()).isEqualTo(InstanceStateName.RUNNING);
+        assertThat(launched.state().name()).isEqualTo(InstanceStateName.PENDING);
         assertThat(launched.instanceType()).isEqualTo(InstanceType.T2_MICRO);
         assertThat(launched.keyName()).isEqualTo(keyName);
     }
@@ -406,10 +420,8 @@ class Ec2Tests {
     @Test
     @Order(28)
     @DisplayName("DescribeInstances - by ID")
-    void describeInstancesById() {
-        DescribeInstancesResponse resp = ec2.describeInstances(
-                DescribeInstancesRequest.builder().instanceIds(instanceId).build());
-        Instance found = resp.reservations().get(0).instances().get(0);
+    void describeInstancesById() throws InterruptedException {
+        Instance found = waitForState(instanceId, InstanceStateName.RUNNING);
 
         assertThat(found.instanceId()).isEqualTo(instanceId);
         assertThat(found.state().name()).isEqualTo(InstanceStateName.RUNNING);
@@ -481,18 +493,20 @@ class Ec2Tests {
                 .instanceIds(instanceId).build());
 
         assertThat(resp.stoppingInstances().get(0).currentState().name())
-                .isEqualTo(InstanceStateName.STOPPED);
+                .isEqualTo(InstanceStateName.STOPPING);
     }
 
     @Test
     @Order(34)
     @DisplayName("StartInstances - start instance")
-    void startInstances() {
+    void startInstances() throws InterruptedException {
+        waitForState(instanceId, InstanceStateName.STOPPED);
+
         StartInstancesResponse resp = ec2.startInstances(StartInstancesRequest.builder()
                 .instanceIds(instanceId).build());
 
         assertThat(resp.startingInstances().get(0).currentState().name())
-                .isEqualTo(InstanceStateName.RUNNING);
+                .isEqualTo(InstanceStateName.PENDING);
     }
 
     @Test
@@ -541,12 +555,14 @@ class Ec2Tests {
     @Test
     @Order(39)
     @DisplayName("TerminateInstances - terminate instance")
-    void terminateInstances() {
+    void terminateInstances() throws InterruptedException {
+        waitForState(instanceId, InstanceStateName.RUNNING);
+
         TerminateInstancesResponse resp = ec2.terminateInstances(
                 TerminateInstancesRequest.builder().instanceIds(instanceId).build());
 
         assertThat(resp.terminatingInstances().get(0).currentState().name())
-                .isEqualTo(InstanceStateName.TERMINATED);
+                .isEqualTo(InstanceStateName.SHUTTING_DOWN);
     }
 
     @Test

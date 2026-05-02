@@ -131,6 +131,10 @@ floci:
       proxy-max-port: 9499
     ec2:
       enabled: true
+      imds-port: 9169
+      ssh-port-range-start: 2200
+      ssh-port-range-end: 2299
+      mock: true
     ecs:
       enabled: true
       mock: true
@@ -149,6 +153,7 @@ floci:
       enabled: true
     elbv2:
       enabled: true
+      mock: true
     codebuild:
       enabled: true
       # docker-network: floci-network
