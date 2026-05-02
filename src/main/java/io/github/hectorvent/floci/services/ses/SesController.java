@@ -194,6 +194,7 @@ public class SesController {
             }
 
             JsonNode request = objectMapper.readTree(body);
+            requireJsonObject(request);
 
             String fromEmailAddress = request.path("FromEmailAddress").asText(null);
             if (fromEmailAddress == null || fromEmailAddress.isBlank()) {
@@ -201,7 +202,7 @@ public class SesController {
                         "FromEmailAddress is required.", 400);
             }
 
-            JsonNode destination = request.path("Destination");
+            JsonNode destination = requireObjectOrAbsent(request, "Destination");
             List<String> toAddresses = jsonArrayToList(destination.path("ToAddresses"));
             List<String> ccAddresses = jsonArrayToList(destination.path("CcAddresses"));
             List<String> bccAddresses = jsonArrayToList(destination.path("BccAddresses"));
@@ -246,7 +247,7 @@ public class SesController {
                     throw new AwsException("BadRequestException",
                             "Content.Template requires TemplateName, TemplateArn, or TemplateContent.", 400);
                 }
-                JsonNode templateData = parseTemplateData(template.path("TemplateData").asText(""));
+                JsonNode templateData = parseTemplateData(template, "TemplateData");
                 if (hasName || hasArn) {
                     String resolvedName = hasName
                             ? templateName
@@ -291,6 +292,7 @@ public class SesController {
             }
 
             JsonNode request = objectMapper.readTree(body);
+            requireJsonObject(request);
             String fromEmailAddress = request.path("FromEmailAddress").asText(null);
             if (fromEmailAddress == null || fromEmailAddress.isBlank()) {
                 throw new AwsException("BadRequestException",
@@ -337,7 +339,7 @@ public class SesController {
                 html = stored.getHtmlPart();
             }
 
-            JsonNode defaultTemplateData = parseTemplateData(template.path("TemplateData").asText(""));
+            JsonNode defaultTemplateData = parseTemplateData(template, "TemplateData");
 
             JsonNode bulkEntries = request.path("BulkEmailEntries");
             if (!bulkEntries.isArray() || bulkEntries.isEmpty()) {
@@ -347,15 +349,18 @@ public class SesController {
 
             List<BulkEmailEntry> entries = new ArrayList<>();
             for (JsonNode node : bulkEntries) {
-                JsonNode dest = node.path("Destination");
+                if (!node.isObject()) {
+                    throw new AwsException("BadRequestException",
+                            "BulkEmailEntries elements must be JSON objects.", 400);
+                }
+                JsonNode dest = requireObjectOrAbsent(node, "Destination");
                 List<String> to = jsonArrayToList(dest.path("ToAddresses"));
                 List<String> cc = jsonArrayToList(dest.path("CcAddresses"));
                 List<String> bcc = jsonArrayToList(dest.path("BccAddresses"));
-                String replacementRaw = node.path("ReplacementEmailContent")
-                        .path("ReplacementTemplate")
-                        .path("ReplacementTemplateData")
-                        .asText("");
-                entries.add(new BulkEmailEntry(to, cc, bcc, parseTemplateData(replacementRaw)));
+                JsonNode replacementContent = requireObjectOrAbsent(node, "ReplacementEmailContent");
+                JsonNode replacementTemplate = requireObjectOrAbsent(replacementContent, "ReplacementTemplate");
+                JsonNode replacementData = parseTemplateData(replacementTemplate, "ReplacementTemplateData");
+                entries.add(new BulkEmailEntry(to, cc, bcc, replacementData));
             }
 
             List<BulkEmailEntryResult> results = sesService.sendBulkTemplatedEmail(fromEmailAddress,
@@ -470,6 +475,36 @@ public class SesController {
             return Response.ok(objectMapper.createObjectNode()).build();
         } catch (AwsException e) {
             throw remapV1Exception(e);
+        }
+    }
+
+    @POST
+    @Path("/templates/{templateName}/render")
+    public Response testRenderEmailTemplate(@Context HttpHeaders headers,
+                                             @PathParam("templateName") String templateName,
+                                             String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            if (body == null || body.isBlank()) {
+                throw new AwsException("BadRequestException", "Request body is required.", 400);
+            }
+            JsonNode request = objectMapper.readTree(body);
+            requireJsonObject(request);
+            JsonNode templateDataNode = request.path("TemplateData");
+            if (!templateDataNode.isMissingNode() && !templateDataNode.isNull()
+                    && !templateDataNode.isTextual()) {
+                throw new AwsException("BadRequestException",
+                        "TemplateData must be a JSON-encoded string.", 400);
+            }
+            String templateDataRaw = templateDataNode.asText("");
+            String rendered = sesService.renderTestTemplate(templateName, templateDataRaw, region);
+            ObjectNode result = objectMapper.createObjectNode();
+            result.put("RenderedTemplate", rendered);
+            return Response.ok(result).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
         }
     }
 
@@ -688,21 +723,63 @@ public class SesController {
         return result;
     }
 
+    private JsonNode parseTemplateData(JsonNode parent, String fieldName) {
+        if (parent == null || parent.isMissingNode() || parent.isNull()) {
+            return objectMapper.createObjectNode();
+        }
+        if (!parent.isObject()) {
+            throw new AwsException("BadRequestException",
+                    "Parent of " + fieldName + " must be a JSON object.", 400);
+        }
+        JsonNode field = parent.path(fieldName);
+        if (field.isMissingNode() || field.isNull()) {
+            return objectMapper.createObjectNode();
+        }
+        if (!field.isTextual()) {
+            throw new AwsException("BadRequestException",
+                    fieldName + " must be a JSON-encoded string.", 400);
+        }
+        return parseTemplateData(field.asText(""));
+    }
+
     private JsonNode parseTemplateData(String raw) {
         if (raw == null || raw.isBlank()) {
             return objectMapper.createObjectNode();
         }
+        JsonNode node;
         try {
-            return objectMapper.readTree(raw);
+            node = objectMapper.readTree(raw);
         } catch (Exception e) {
             throw new AwsException("BadRequestException",
                     "Invalid TemplateData JSON: " + e.getMessage(), 400);
         }
+        if (!node.isObject()) {
+            throw new AwsException("BadRequestException",
+                    "TemplateData must be a JSON object.", 400);
+        }
+        return node;
+    }
+
+    private static void requireJsonObject(JsonNode root) {
+        if (root == null || !root.isObject()) {
+            throw new AwsException("BadRequestException",
+                    "Request body must be a JSON object.", 400);
+        }
+    }
+
+    private static JsonNode requireObjectOrAbsent(JsonNode parent, String fieldName) {
+        JsonNode child = parent.path(fieldName);
+        if (!child.isMissingNode() && !child.isNull() && !child.isObject()) {
+            throw new AwsException("BadRequestException",
+                    fieldName + " must be a JSON object.", 400);
+        }
+        return child;
     }
 
     private static AwsException remapV1Exception(AwsException e) {
         return switch (e.getErrorCode()) {
-            case "InvalidParameterValue", "InvalidTemplate" ->
+            case "InvalidParameterValue", "InvalidTemplate",
+                 "InvalidRenderingParameter", "MissingRenderingAttribute" ->
                     new AwsException("BadRequestException", e.getMessage(), 400);
             case "TemplateDoesNotExist", "ConfigurationSetDoesNotExist" ->
                     new AwsException("NotFoundException", e.getMessage(), 404);

@@ -66,6 +66,7 @@ public class SesQueryHandler {
                 case "ListTemplates" -> handleListTemplates(region);
                 case "SendTemplatedEmail" -> handleSendTemplatedEmail(params, region);
                 case "SendBulkTemplatedEmail" -> handleSendBulkTemplatedEmail(params, region);
+                case "TestRenderTemplate" -> handleTestRenderTemplate(params, region);
                 case "CreateConfigurationSet" -> handleCreateConfigurationSet(params, region);
                 case "DescribeConfigurationSet" -> handleDescribeConfigurationSet(params, region);
                 case "ListConfigurationSets" -> handleListConfigurationSets(region);
@@ -356,6 +357,20 @@ public class SesQueryHandler {
         return Response.ok(AwsQueryResponse.envelope("SendTemplatedEmail", AwsNamespaces.SES, result)).build();
     }
 
+    private Response handleTestRenderTemplate(MultivaluedMap<String, String> params, String region) {
+        String templateName = getParam(params, "TemplateName");
+        if (templateName == null || templateName.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "TemplateName is required.", 400);
+        }
+        String templateDataRaw = getParam(params, "TemplateData");
+        String rendered = sesService.renderTestTemplate(templateName, templateDataRaw, region);
+        // XML 1.0 character data forbids C0 controls except \t \n \r; strip them
+        // so SDK clients can parse the response when template data injects \x01 etc.
+        String xmlSafe = SesService.stripXml10InvalidChars(rendered);
+        String result = new XmlBuilder().elem("RenderedTemplate", xmlSafe).build();
+        return Response.ok(AwsQueryResponse.envelope("TestRenderTemplate", AwsNamespaces.SES, result)).build();
+    }
+
     private Response handleSendBulkTemplatedEmail(MultivaluedMap<String, String> params, String region) {
         if (!sesService.isAccountSendingEnabled(region)) {
             throw new AwsException("AccountSendingPausedException",
@@ -467,12 +482,18 @@ public class SesQueryHandler {
         if (raw == null || raw.isBlank()) {
             return objectMapper.createObjectNode();
         }
+        JsonNode node;
         try {
-            return objectMapper.readTree(raw);
+            node = objectMapper.readTree(raw);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new AwsException("InvalidTemplate",
                     "Invalid TemplateData JSON: " + e.getMessage(), 400);
         }
+        if (!node.isObject()) {
+            throw new AwsException("InvalidParameterValue",
+                    "TemplateData must be a JSON object.", 400);
+        }
+        return node;
     }
 
     // --- Helpers ---

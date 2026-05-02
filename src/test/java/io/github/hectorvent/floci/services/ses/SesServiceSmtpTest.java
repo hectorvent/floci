@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.ses;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
@@ -33,7 +34,8 @@ class SesServiceSmtpTest {
                 new InMemoryStorage<String, Boolean>(),
                 new InMemoryStorage<String, EmailTemplate>(),
                 new InMemoryStorage<String, ConfigurationSet>(),
-                smtpRelay);
+                smtpRelay,
+                new ObjectMapper());
     }
 
     @Test

@@ -5,6 +5,11 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -280,6 +285,151 @@ class SesBulkV2IntegrationTest {
         .then()
             .statusCode(400)
             .body("__type", equalTo("MessageRejected"));
+    }
+
+    @Test
+    @Order(10)
+    void sendBulkEmail_perEntryMissingVariable_mapsToInvalidParameter() {
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                  "FromEmailAddress": "bulk@example.com",
+                  "DefaultContent": {
+                    "Template": {"TemplateName": "v2-bulk-welcome", "TemplateData": "{\\"team\\":\\"floci\\"}"}
+                  },
+                  "BulkEmailEntries": [
+                    {
+                      "Destination": {"ToAddresses": ["alice@example.com"]},
+                      "ReplacementEmailContent": {
+                        "ReplacementTemplate": {"ReplacementTemplateData": "{}"}
+                      }
+                    }
+                  ]
+                }
+                """)
+        .when()
+            .post("/v2/email/outbound-bulk-emails")
+        .then()
+            .statusCode(200)
+            .body("BulkEmailEntryResults[0].Status", equalTo("INVALID_PARAMETER"))
+            .body("BulkEmailEntryResults[0].Error", org.hamcrest.Matchers.containsString("name"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedSendBulkEmailBodies")
+    @Order(11)
+    void sendBulkEmail_malformedShape_returns400(String label, String body) {
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body(body)
+        .when()
+            .post("/v2/email/outbound-bulk-emails")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("BadRequestException"));
+    }
+
+    static Stream<Arguments> malformedSendBulkEmailBodies() {
+        String validDefaultTemplate = "\"DefaultContent\": {\"Template\": {\"TemplateName\": \"v2-bulk-welcome\", \"TemplateData\": \"{\\\"team\\\":\\\"floci\\\",\\\"name\\\":\\\"X\\\"}\"}}";
+        return Stream.of(
+                Arguments.of("body is array", "[1,2,3]"),
+                Arguments.of("body is JSON null literal", "null"),
+                Arguments.of("body is JSON string", "\"hello\""),
+                Arguments.of("BulkEmailEntries element is null", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      %s,
+                      "BulkEmailEntries": [null]
+                    }
+                    """.formatted(validDefaultTemplate)),
+                Arguments.of("BulkEmailEntries element is string", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      %s,
+                      "BulkEmailEntries": ["bad"]
+                    }
+                    """.formatted(validDefaultTemplate)),
+                Arguments.of("Destination as string", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      %s,
+                      "BulkEmailEntries": [{"Destination": "bad"}]
+                    }
+                    """.formatted(validDefaultTemplate)),
+                Arguments.of("DefaultTemplateData as object", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      "DefaultContent": {
+                        "Template": {"TemplateName": "v2-bulk-welcome", "TemplateData": {"team": "floci"}}
+                      },
+                      "BulkEmailEntries": [{"Destination": {"ToAddresses": ["alice@example.com"]}}]
+                    }
+                    """),
+                Arguments.of("DefaultTemplateData as invalid JSON string", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      "DefaultContent": {
+                        "Template": {"TemplateName": "v2-bulk-welcome", "TemplateData": "{not json"}
+                      },
+                      "BulkEmailEntries": [{"Destination": {"ToAddresses": ["alice@example.com"]}}]
+                    }
+                    """),
+                Arguments.of("per-entry ReplacementTemplateData as object", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      %s,
+                      "BulkEmailEntries": [
+                        {
+                          "Destination": {"ToAddresses": ["alice@example.com"]},
+                          "ReplacementEmailContent": {
+                            "ReplacementTemplate": {"ReplacementTemplateData": {"name": "Alice"}}
+                          }
+                        }
+                      ]
+                    }
+                    """.formatted(validDefaultTemplate)),
+                Arguments.of("ReplacementEmailContent as string", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      %s,
+                      "BulkEmailEntries": [
+                        {
+                          "Destination": {"ToAddresses": ["alice@example.com"]},
+                          "ReplacementEmailContent": "not-an-object"
+                        }
+                      ]
+                    }
+                    """.formatted(validDefaultTemplate)),
+                Arguments.of("ReplacementEmailContent as array", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      %s,
+                      "BulkEmailEntries": [
+                        {
+                          "Destination": {"ToAddresses": ["alice@example.com"]},
+                          "ReplacementEmailContent": [1,2,3]
+                        }
+                      ]
+                    }
+                    """.formatted(validDefaultTemplate)),
+                Arguments.of("ReplacementTemplate as array", """
+                    {
+                      "FromEmailAddress": "bulk@example.com",
+                      "DefaultContent": {
+                        "Template": {"TemplateName": "v2-bulk-welcome", "TemplateData": "{\\"team\\":\\"floci\\"}"}
+                      },
+                      "BulkEmailEntries": [
+                        {
+                          "Destination": {"ToAddresses": ["alice@example.com"]},
+                          "ReplacementEmailContent": {"ReplacementTemplate": [1,2,3]}
+                        }
+                      ]
+                    }
+                    """)
+        );
     }
 
     @Test

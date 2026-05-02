@@ -5,11 +5,15 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
@@ -154,12 +158,14 @@ class SesBulkV1IntegrationTest {
         // An entry with only ReplacementTemplateData (no recipient) reaches sendEmail,
         // which throws AwsException("InvalidParameterValue", ...). Expected per-entry
         // Status string in v1 is "InvalidParameterValue", not "Failed" or "InvalidParameter".
+        // DefaultTemplateData supplies team so rendering succeeds before the recipient check.
         String body = given()
             .contentType("application/x-www-form-urlencoded")
             .header("Authorization", AUTH)
             .formParam("Action", "SendBulkTemplatedEmail")
             .formParam("Source", "bulk@example.com")
             .formParam("Template", "v1-bulk-welcome")
+            .formParam("DefaultTemplateData", "{\"team\":\"floci\"}")
             .formParam("Destinations.member.1.ReplacementTemplateData", "{\"name\":\"Ghost\"}")
         .when()
             .post("/")
@@ -228,6 +234,62 @@ class SesBulkV1IntegrationTest {
         .then()
             .statusCode(400)
             .body(containsString("<Code>MessageRejected</Code>"));
+    }
+
+    @Test
+    @Order(12)
+    void sendBulkTemplatedEmail_perEntryMissingVariable_mapsToInvalidParameterValue() {
+        // Per-entry rendering failure (missing {{name}}) surfaces as
+        // <Status>InvalidParameterValue</Status> in the bulk Query response,
+        // not as Failed.
+        String body = given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", AUTH)
+            .formParam("Action", "SendBulkTemplatedEmail")
+            .formParam("Source", "bulk@example.com")
+            .formParam("Template", "v1-bulk-welcome")
+            .formParam("DefaultTemplateData", "{\"team\":\"floci\"}")
+            .formParam("Destinations.member.1.Destination.ToAddresses.member.1", "alice@example.com")
+            .formParam("Destinations.member.1.ReplacementTemplateData", "{}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().body().asString();
+
+        assertEquals(1L, body.split("<Status>InvalidParameterValue</Status>", -1).length - 1L,
+                "expected per-entry Status=InvalidParameterValue for missing rendering variable");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nonObjectBulkTemplateDataPayloads")
+    @Order(10)
+    void sendBulkTemplatedEmail_nonObjectTemplateData_returnsInvalidParameterValue(
+            String label, String defaultTemplateData, String replacementTemplateData) {
+        var spec = given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", AUTH)
+            .formParam("Action", "SendBulkTemplatedEmail")
+            .formParam("Source", "bulk@example.com")
+            .formParam("Template", "v1-bulk-welcome")
+            .formParam("DefaultTemplateData", defaultTemplateData)
+            .formParam("Destinations.member.1.Destination.ToAddresses.member.1", "alice@example.com");
+        if (replacementTemplateData != null) {
+            spec = spec.formParam("Destinations.member.1.ReplacementTemplateData", replacementTemplateData);
+        }
+        spec
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body(containsString("<Code>InvalidParameterValue</Code>"));
+    }
+
+    static Stream<Arguments> nonObjectBulkTemplateDataPayloads() {
+        return Stream.of(
+                Arguments.of("array DefaultTemplateData", "[1,2,3]", null),
+                Arguments.of("scalar ReplacementTemplateData", "{\"team\":\"floci\"}", "42")
+        );
     }
 
     @Test

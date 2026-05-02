@@ -5,6 +5,11 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
@@ -544,6 +549,63 @@ class SesTemplateV2IntegrationTest {
             .delete("/v2/email/templates/region-test")
         .then()
             .statusCode(200);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedSendEmailBodies")
+    @Order(50)
+    void sendEmail_malformedShape_returnsBadRequest(String label, String body) {
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body(body)
+        .when()
+            .post("/v2/email/outbound-emails")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("BadRequestException"));
+    }
+
+    static Stream<Arguments> malformedSendEmailBodies() {
+        return Stream.of(
+                Arguments.of("body is array", "[1,2,3]"),
+                Arguments.of("body is JSON null literal", "null"),
+                Arguments.of("body is JSON string", "\"hello\""),
+                Arguments.of("Destination as string", """
+                    {
+                      "FromEmailAddress": "sender@example.com",
+                      "Destination": "bad",
+                      "Content": {"Simple": {"Subject": {"Data": "s"}, "Body": {"Text": {"Data": "t"}}}}
+                    }
+                    """),
+                Arguments.of("TemplateData as object", """
+                    {
+                      "FromEmailAddress": "sender@example.com",
+                      "Destination": {"ToAddresses": ["recipient@example.com"]},
+                      "Content": {
+                        "Template": {"TemplateName": "any", "TemplateData": {"name": "Alice"}}
+                      }
+                    }
+                    """),
+                Arguments.of("TemplateData as array", """
+                    {
+                      "FromEmailAddress": "sender@example.com",
+                      "Destination": {"ToAddresses": ["recipient@example.com"]},
+                      "Content": {
+                        "Template": {"TemplateName": "any", "TemplateData": [1,2,3]}
+                      }
+                    }
+                    """),
+                Arguments.of("TemplateData as invalid JSON string", """
+                    {
+                      "FromEmailAddress": "sender@example.com",
+                      "Destination": {"ToAddresses": ["recipient@example.com"]},
+                      "Content": {
+                        "Template": {"TemplateName": "any", "TemplateData": "{not json"}
+                      }
+                    }
+                    """)
+        );
     }
 
 }

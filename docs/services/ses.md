@@ -24,6 +24,7 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 | `UpdateTemplate`                    | Replace the content of a stored template                  |
 | `DeleteTemplate`                    | Remove a stored template                                  |
 | `ListTemplates`                     | List stored templates                                     |
+| `TestRenderTemplate`                | Render a stored template against supplied data, returning the MIME message |
 | `GetSendQuota`                      | Return local send quota counters                          |
 | `GetSendStatistics`                 | Return aggregate delivery stats for sent messages         |
 | `GetAccountSendingEnabled`          | Report whether sending is enabled                         |
@@ -184,6 +185,7 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `GET` | `/v2/email/templates/{templateName}` | `GetEmailTemplate` |
 | `PUT` | `/v2/email/templates/{templateName}` | `UpdateEmailTemplate` |
 | `DELETE` | `/v2/email/templates/{templateName}` | `DeleteEmailTemplate` |
+| `POST` | `/v2/email/templates/{templateName}/render` | `TestRenderEmailTemplate` |
 | `POST` | `/v2/email/configuration-sets` | `CreateConfigurationSet` |
 | `GET` | `/v2/email/configuration-sets` | `ListConfigurationSets` |
 | `GET` | `/v2/email/configuration-sets/{name}` | `GetConfigurationSet` |

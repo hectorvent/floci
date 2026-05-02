@@ -5,6 +5,11 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
@@ -187,6 +192,33 @@ class SesTemplateV1IntegrationTest {
         .then()
             .statusCode(400)
             .body(containsString("<Code>TemplateDoesNotExist</Code>"));
+    }
+
+    @ParameterizedTest(name = "TemplateData={0}")
+    @MethodSource("nonObjectTemplateDataPayloads")
+    @Order(50)
+    void sendTemplatedEmail_nonObjectTemplateData_returnsInvalidParameterValue(String templateData) {
+        // TemplateData is parsed before template lookup, so any template name suffices
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", AUTH)
+            .formParam("Action", "SendTemplatedEmail")
+            .formParam("Source", "v1-sender@example.com")
+            .formParam("Destination.ToAddresses.member.1", "to@example.com")
+            .formParam("Template", "any")
+            .formParam("TemplateData", templateData)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body(containsString("<Code>InvalidParameterValue</Code>"));
+    }
+
+    static Stream<Arguments> nonObjectTemplateDataPayloads() {
+        return Stream.of(
+                Arguments.of("[1,2,3]"),
+                Arguments.of("42")
+        );
     }
 
     @Test

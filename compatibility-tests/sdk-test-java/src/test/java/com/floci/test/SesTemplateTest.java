@@ -18,10 +18,15 @@ import software.amazon.awssdk.services.ses.model.GetTemplateRequest;
 import software.amazon.awssdk.services.ses.model.GetTemplateResponse;
 import software.amazon.awssdk.services.ses.model.ListTemplatesRequest;
 import software.amazon.awssdk.services.ses.model.ListTemplatesResponse;
+import software.amazon.awssdk.services.ses.model.InvalidRenderingParameterException;
+import software.amazon.awssdk.services.ses.model.MissingRenderingAttributeException;
 import software.amazon.awssdk.services.ses.model.SendBulkTemplatedEmailRequest;
 import software.amazon.awssdk.services.ses.model.SendBulkTemplatedEmailResponse;
 import software.amazon.awssdk.services.ses.model.SendTemplatedEmailRequest;
 import software.amazon.awssdk.services.ses.model.SendTemplatedEmailResponse;
+import software.amazon.awssdk.services.ses.model.TemplateDoesNotExistException;
+import software.amazon.awssdk.services.ses.model.TestRenderTemplateRequest;
+import software.amazon.awssdk.services.ses.model.TestRenderTemplateResponse;
 import software.amazon.awssdk.services.ses.model.UpdateTemplateRequest;
 import software.amazon.awssdk.services.ses.model.VerifyEmailIdentityRequest;
 
@@ -39,11 +44,15 @@ import software.amazon.awssdk.services.sesv2.model.GetEmailTemplateRequest;
 import software.amazon.awssdk.services.sesv2.model.GetEmailTemplateResponse;
 import software.amazon.awssdk.services.sesv2.model.ListEmailTemplatesRequest;
 import software.amazon.awssdk.services.sesv2.model.ListEmailTemplatesResponse;
+import software.amazon.awssdk.services.sesv2.model.BadRequestException;
+import software.amazon.awssdk.services.sesv2.model.NotFoundException;
 import software.amazon.awssdk.services.sesv2.model.SendBulkEmailRequest;
 import software.amazon.awssdk.services.sesv2.model.SendBulkEmailResponse;
 import software.amazon.awssdk.services.sesv2.model.SendEmailRequest;
 import software.amazon.awssdk.services.sesv2.model.SendEmailResponse;
 import software.amazon.awssdk.services.sesv2.model.Template;
+import software.amazon.awssdk.services.sesv2.model.TestRenderEmailTemplateRequest;
+import software.amazon.awssdk.services.sesv2.model.TestRenderEmailTemplateResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -577,6 +586,248 @@ class SesTemplateTest {
                 .isInstanceOf(AwsServiceException.class)
                 .extracting(e -> ((AwsServiceException) e).statusCode())
                 .isEqualTo(400);
+    }
+
+    // ───────────────────── TestRender (V2 / V1) ─────────────────────
+
+    @Test
+    @Order(40)
+    void v2TestRenderEmailTemplateSubstitutesVariables() {
+        String name = "sdk-v2-render-" + TestFixtures.uniqueName();
+        try {
+            sesV2.createEmailTemplate(CreateEmailTemplateRequest.builder()
+                    .templateName(name)
+                    .templateContent(EmailTemplateContent.builder()
+                            .subject("Hello {{name}}")
+                            .text("Hi {{name}}, team {{team}}!")
+                            .html("<p>Hi <b>{{name}}</b></p>")
+                            .build())
+                    .build());
+
+            TestRenderEmailTemplateResponse response = sesV2.testRenderEmailTemplate(
+                    TestRenderEmailTemplateRequest.builder()
+                            .templateName(name)
+                            .templateData("{\"name\":\"Alice\",\"team\":\"floci\"}")
+                            .build());
+            assertThat(response.renderedTemplate())
+                    .contains("Subject: Hello Alice")
+                    .contains("Hi Alice, team floci!")
+                    .contains("multipart/alternative");
+        } finally {
+            safelyDeleteV2Template(name);
+        }
+    }
+
+    @Test
+    @Order(41)
+    void v2TestRenderEmailTemplateUnknownTemplateReturns404() {
+        assertThatThrownBy(() -> sesV2.testRenderEmailTemplate(
+                TestRenderEmailTemplateRequest.builder()
+                        .templateName("sdk-v2-render-missing-" + System.currentTimeMillis())
+                        .templateData("{}")
+                        .build()))
+                .isInstanceOf(NotFoundException.class)
+                .extracting(e -> ((AwsServiceException) e).statusCode())
+                .isEqualTo(404);
+    }
+
+    @Test
+    @Order(42)
+    void v2TestRenderEmailTemplateMissingVariableReturns400() {
+        String name = "sdk-v2-render-miss-" + TestFixtures.uniqueName();
+        try {
+            sesV2.createEmailTemplate(CreateEmailTemplateRequest.builder()
+                    .templateName(name)
+                    .templateContent(EmailTemplateContent.builder()
+                            .subject("Hello {{name}}")
+                            .text("Hi {{name}}, team {{team}}!")
+                            .build())
+                    .build());
+
+            assertThatThrownBy(() -> sesV2.testRenderEmailTemplate(
+                    TestRenderEmailTemplateRequest.builder()
+                            .templateName(name)
+                            .templateData("{\"name\":\"Alice\"}")
+                            .build()))
+                    .isInstanceOf(BadRequestException.class)
+                    .extracting(e -> ((AwsServiceException) e).statusCode())
+                    .isEqualTo(400);
+        } finally {
+            safelyDeleteV2Template(name);
+        }
+    }
+
+    @Test
+    @Order(43)
+    void v2TestRenderEmailTemplateInvalidJsonReturns400() {
+        String name = "sdk-v2-render-bad-" + TestFixtures.uniqueName();
+        try {
+            sesV2.createEmailTemplate(CreateEmailTemplateRequest.builder()
+                    .templateName(name)
+                    .templateContent(EmailTemplateContent.builder()
+                            .subject("Hello")
+                            .text("Hi")
+                            .build())
+                    .build());
+
+            assertThatThrownBy(() -> sesV2.testRenderEmailTemplate(
+                    TestRenderEmailTemplateRequest.builder()
+                            .templateName(name)
+                            .templateData("{not json")
+                            .build()))
+                    .isInstanceOf(BadRequestException.class)
+                    .extracting(e -> ((AwsServiceException) e).statusCode())
+                    .isEqualTo(400);
+        } finally {
+            safelyDeleteV2Template(name);
+        }
+    }
+
+    @Test
+    @Order(45)
+    void v1TestRenderTemplateSubstitutesVariables() {
+        String name = "sdk-v1-render-" + TestFixtures.uniqueName();
+        try {
+            sesV1.createTemplate(CreateTemplateRequest.builder()
+                    .template(software.amazon.awssdk.services.ses.model.Template.builder()
+                            .templateName(name)
+                            .subjectPart("Hello {{name}}")
+                            .textPart("Hi {{name}}, team {{team}}!")
+                            .htmlPart("<p>Hi <b>{{name}}</b></p>")
+                            .build())
+                    .build());
+
+            TestRenderTemplateResponse response = sesV1.testRenderTemplate(
+                    TestRenderTemplateRequest.builder()
+                            .templateName(name)
+                            .templateData("{\"name\":\"Alice\",\"team\":\"floci\"}")
+                            .build());
+            assertThat(response.renderedTemplate())
+                    .contains("Subject: Hello Alice")
+                    .contains("Hi Alice, team floci!")
+                    .contains("multipart/alternative");
+        } finally {
+            safelyDeleteV1Template(name);
+        }
+    }
+
+    @Test
+    @Order(46)
+    void v1TestRenderTemplateUnknownTemplateRaises() {
+        assertThatThrownBy(() -> sesV1.testRenderTemplate(
+                TestRenderTemplateRequest.builder()
+                        .templateName("sdk-v1-render-missing-" + System.currentTimeMillis())
+                        .templateData("{}")
+                        .build()))
+                .isInstanceOf(TemplateDoesNotExistException.class);
+    }
+
+    @Test
+    @Order(47)
+    void v1TestRenderTemplateMissingVariableRaises() {
+        String name = "sdk-v1-render-miss-" + TestFixtures.uniqueName();
+        try {
+            sesV1.createTemplate(CreateTemplateRequest.builder()
+                    .template(software.amazon.awssdk.services.ses.model.Template.builder()
+                            .templateName(name)
+                            .subjectPart("Hello {{name}}")
+                            .textPart("Hi {{name}}, team {{team}}!")
+                            .build())
+                    .build());
+
+            assertThatThrownBy(() -> sesV1.testRenderTemplate(
+                    TestRenderTemplateRequest.builder()
+                            .templateName(name)
+                            .templateData("{\"name\":\"Alice\"}")
+                            .build()))
+                    .isInstanceOf(MissingRenderingAttributeException.class);
+        } finally {
+            safelyDeleteV1Template(name);
+        }
+    }
+
+    @Test
+    @Order(48)
+    void v1TestRenderTemplateInvalidJsonRaises() {
+        String name = "sdk-v1-render-bad-" + TestFixtures.uniqueName();
+        try {
+            sesV1.createTemplate(CreateTemplateRequest.builder()
+                    .template(software.amazon.awssdk.services.ses.model.Template.builder()
+                            .templateName(name)
+                            .subjectPart("Hello")
+                            .textPart("Hi")
+                            .build())
+                    .build());
+
+            assertThatThrownBy(() -> sesV1.testRenderTemplate(
+                    TestRenderTemplateRequest.builder()
+                            .templateName(name)
+                            .templateData("{not json")
+                            .build()))
+                    .isInstanceOf(InvalidRenderingParameterException.class);
+        } finally {
+            safelyDeleteV1Template(name);
+        }
+    }
+
+    // ───── Strict missing-attribute on Send paths (regression coverage) ─────
+
+    @Test
+    @Order(50)
+    void v2SendEmailWithTemplateMissingVariableReturns400() {
+        String name = "sdk-v2-send-miss-" + TestFixtures.uniqueName();
+        try {
+            sesV2.createEmailTemplate(CreateEmailTemplateRequest.builder()
+                    .templateName(name)
+                    .templateContent(EmailTemplateContent.builder()
+                            .subject("Hello {{name}}")
+                            .text("Hi {{name}}, team {{team}}!")
+                            .build())
+                    .build());
+
+            assertThatThrownBy(() -> sesV2.sendEmail(SendEmailRequest.builder()
+                    .fromEmailAddress(v2Sender)
+                    .destination(Destination.builder()
+                            .toAddresses("recipient@example.com")
+                            .build())
+                    .content(EmailContent.builder()
+                            .template(Template.builder()
+                                    .templateName(name)
+                                    .templateData("{\"name\":\"Alice\"}")
+                                    .build())
+                            .build())
+                    .build()))
+                    .isInstanceOf(BadRequestException.class)
+                    .extracting(e -> ((AwsServiceException) e).statusCode())
+                    .isEqualTo(400);
+        } finally {
+            safelyDeleteV2Template(name);
+        }
+    }
+
+    @Test
+    @Order(51)
+    void v1SendTemplatedEmailMissingVariableRaises() {
+        String name = "sdk-v1-send-miss-" + TestFixtures.uniqueName();
+        try {
+            sesV1.createTemplate(CreateTemplateRequest.builder()
+                    .template(software.amazon.awssdk.services.ses.model.Template.builder()
+                            .templateName(name)
+                            .subjectPart("Hello {{name}}")
+                            .textPart("Hi {{name}}, team {{team}}!")
+                            .build())
+                    .build());
+
+            assertThatThrownBy(() -> sesV1.sendTemplatedEmail(SendTemplatedEmailRequest.builder()
+                    .source(v1Sender)
+                    .destination(d -> d.toAddresses("recipient@example.com"))
+                    .template(name)
+                    .templateData("{\"name\":\"Alice\"}")
+                    .build()))
+                    .isInstanceOf(MissingRenderingAttributeException.class);
+        } finally {
+            safelyDeleteV1Template(name);
+        }
     }
 
     // ─────────────────────────────── Helpers ───────────────────────────────
