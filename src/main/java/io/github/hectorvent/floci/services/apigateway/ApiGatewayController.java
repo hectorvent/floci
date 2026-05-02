@@ -11,7 +11,10 @@ import io.github.hectorvent.floci.services.apigatewayv2.model.Api;
 import io.github.hectorvent.floci.services.apigatewayv2.model.Authorizer;
 import io.github.hectorvent.floci.services.apigatewayv2.model.Deployment;
 import io.github.hectorvent.floci.services.apigatewayv2.model.Integration;
+import io.github.hectorvent.floci.services.apigatewayv2.model.IntegrationResponse;
+import io.github.hectorvent.floci.services.apigatewayv2.model.Model;
 import io.github.hectorvent.floci.services.apigatewayv2.model.Route;
+import io.github.hectorvent.floci.services.apigatewayv2.model.RouteResponse;
 import io.github.hectorvent.floci.services.apigatewayv2.model.Stage;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
@@ -104,7 +107,7 @@ public class ApiGatewayController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> request = objectMapper.readValue(body, Map.class);
-            IntegrationResponse ir = service.putIntegrationResponse(region, apiId, resourceId, httpMethod, statusCode, request);
+            io.github.hectorvent.floci.services.apigateway.model.IntegrationResponse ir = service.putIntegrationResponse(region, apiId, resourceId, httpMethod, statusCode, request);
             return Response.status(201).entity(toIntegrationResponseNode(ir).toString()).type(MediaType.APPLICATION_JSON).build();
         } catch (IOException e) {
             throw new AwsException("BadRequestException", e.getMessage(), 400);
@@ -830,6 +833,20 @@ public class ApiGatewayController {
         return Response.noContent().build();
     }
 
+    @PATCH
+    @Path("/v2/apis/{apiId}")
+    public Response updateApi(@Context HttpHeaders headers, @PathParam("apiId") String apiId, String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Api updatedApi = v2Service.updateApi(region, apiId, request);
+            return Response.ok(toV2ApiNode(updatedApi).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
     @POST
     @Path("/v2/apis/{apiId}/routes")
     public Response createRoute(@Context HttpHeaders headers, @PathParam("apiId") String apiId, String body) {
@@ -870,6 +887,23 @@ public class ApiGatewayController {
         return Response.noContent().build();
     }
 
+    @PATCH
+    @Path("/v2/apis/{apiId}/routes/{routeId}")
+    public Response updateRoute(@Context HttpHeaders headers,
+                                @PathParam("apiId") String apiId,
+                                @PathParam("routeId") String routeId,
+                                String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Route updatedRoute = v2Service.updateRoute(region, apiId, routeId, request);
+            return Response.ok(toV2RouteNode(updatedRoute).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
     @POST
     @Path("/v2/apis/{apiId}/integrations")
     public Response createIntegration(@Context HttpHeaders headers, @PathParam("apiId") String apiId, String body) {
@@ -907,6 +941,168 @@ public class ApiGatewayController {
     public Response deleteIntegration(@Context HttpHeaders headers, @PathParam("apiId") String apiId, @PathParam("integrationId") String integrationId) {
         String region = regionResolver.resolveRegion(headers);
         v2Service.deleteIntegration(region, apiId, integrationId);
+        return Response.noContent().build();
+    }
+
+    @PATCH
+    @Path("/v2/apis/{apiId}/integrations/{integrationId}")
+    public Response updateV2Integration(@Context HttpHeaders headers,
+                                        @PathParam("apiId") String apiId,
+                                        @PathParam("integrationId") String integrationId,
+                                        String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Integration integration = v2Service.updateIntegration(region, apiId, integrationId, request);
+            return Response.ok(toV2IntegrationNode(integration).toString())
+                    .type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    // ──────────────────────────── Route Responses (v2) ────────────────────────────
+
+    @POST
+    @Path("/v2/apis/{apiId}/routes/{routeId}/routeresponses")
+    public Response createRouteResponse(@Context HttpHeaders headers,
+                                        @PathParam("apiId") String apiId,
+                                        @PathParam("routeId") String routeId,
+                                        String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            RouteResponse rr = v2Service.createRouteResponse(region, apiId, routeId, request);
+            return Response.status(201).entity(toV2RouteResponseNode(rr).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @GET
+    @Path("/v2/apis/{apiId}/routes/{routeId}/routeresponses/{routeResponseId}")
+    public Response getRouteResponse(@Context HttpHeaders headers,
+                                     @PathParam("apiId") String apiId,
+                                     @PathParam("routeId") String routeId,
+                                     @PathParam("routeResponseId") String routeResponseId) {
+        String region = regionResolver.resolveRegion(headers);
+        return Response.ok(toV2RouteResponseNode(v2Service.getRouteResponse(region, apiId, routeId, routeResponseId)).toString())
+                .type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/v2/apis/{apiId}/routes/{routeId}/routeresponses")
+    public Response getRouteResponses(@Context HttpHeaders headers,
+                                      @PathParam("apiId") String apiId,
+                                      @PathParam("routeId") String routeId) {
+        String region = regionResolver.resolveRegion(headers);
+        List<RouteResponse> routeResponses = v2Service.getRouteResponses(region, apiId, routeId);
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode items = root.putArray("items");
+        routeResponses.forEach(rr -> items.add(toV2RouteResponseNode(rr)));
+        return Response.ok(root.toString()).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @PATCH
+    @Path("/v2/apis/{apiId}/routes/{routeId}/routeresponses/{routeResponseId}")
+    public Response updateRouteResponse(@Context HttpHeaders headers,
+                                        @PathParam("apiId") String apiId,
+                                        @PathParam("routeId") String routeId,
+                                        @PathParam("routeResponseId") String routeResponseId,
+                                        String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            RouteResponse rr = v2Service.updateRouteResponse(region, apiId, routeId, routeResponseId, request);
+            return Response.ok(toV2RouteResponseNode(rr).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @DELETE
+    @Path("/v2/apis/{apiId}/routes/{routeId}/routeresponses/{routeResponseId}")
+    public Response deleteRouteResponse(@Context HttpHeaders headers,
+                                        @PathParam("apiId") String apiId,
+                                        @PathParam("routeId") String routeId,
+                                        @PathParam("routeResponseId") String routeResponseId) {
+        String region = regionResolver.resolveRegion(headers);
+        v2Service.deleteRouteResponse(region, apiId, routeId, routeResponseId);
+        return Response.noContent().build();
+    }
+
+    // ──────────────────────────── Integration Responses (v2) ────────────────────────────
+
+    @POST
+    @Path("/v2/apis/{apiId}/integrations/{integrationId}/integrationresponses")
+    public Response createIntegrationResponse(@Context HttpHeaders headers,
+                                              @PathParam("apiId") String apiId,
+                                              @PathParam("integrationId") String integrationId,
+                                              String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            IntegrationResponse ir = v2Service.createIntegrationResponse(region, apiId, integrationId, request);
+            return Response.status(201).entity(toV2IntegrationResponseNode(ir).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @GET
+    @Path("/v2/apis/{apiId}/integrations/{integrationId}/integrationresponses/{integrationResponseId}")
+    public Response getIntegrationResponse(@Context HttpHeaders headers,
+                                           @PathParam("apiId") String apiId,
+                                           @PathParam("integrationId") String integrationId,
+                                           @PathParam("integrationResponseId") String integrationResponseId) {
+        String region = regionResolver.resolveRegion(headers);
+        return Response.ok(toV2IntegrationResponseNode(v2Service.getIntegrationResponse(region, apiId, integrationId, integrationResponseId)).toString())
+                .type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/v2/apis/{apiId}/integrations/{integrationId}/integrationresponses")
+    public Response getIntegrationResponses(@Context HttpHeaders headers,
+                                            @PathParam("apiId") String apiId,
+                                            @PathParam("integrationId") String integrationId) {
+        String region = regionResolver.resolveRegion(headers);
+        List<IntegrationResponse> integrationResponses = v2Service.getIntegrationResponses(region, apiId, integrationId);
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode items = root.putArray("items");
+        integrationResponses.forEach(ir -> items.add(toV2IntegrationResponseNode(ir)));
+        return Response.ok(root.toString()).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @PATCH
+    @Path("/v2/apis/{apiId}/integrations/{integrationId}/integrationresponses/{integrationResponseId}")
+    public Response updateIntegrationResponse(@Context HttpHeaders headers,
+                                              @PathParam("apiId") String apiId,
+                                              @PathParam("integrationId") String integrationId,
+                                              @PathParam("integrationResponseId") String integrationResponseId,
+                                              String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            IntegrationResponse ir = v2Service.updateIntegrationResponse(region, apiId, integrationId, integrationResponseId, request);
+            return Response.ok(toV2IntegrationResponseNode(ir).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @DELETE
+    @Path("/v2/apis/{apiId}/integrations/{integrationId}/integrationresponses/{integrationResponseId}")
+    public Response deleteIntegrationResponse(@Context HttpHeaders headers,
+                                              @PathParam("apiId") String apiId,
+                                              @PathParam("integrationId") String integrationId,
+                                              @PathParam("integrationResponseId") String integrationResponseId) {
+        String region = regionResolver.resolveRegion(headers);
+        v2Service.deleteIntegrationResponse(region, apiId, integrationId, integrationResponseId);
         return Response.noContent().build();
     }
 
@@ -950,6 +1146,24 @@ public class ApiGatewayController {
         return Response.noContent().build();
     }
 
+    @PATCH
+    @Path("/v2/apis/{apiId}/authorizers/{authorizerId}")
+    public Response updateV2Authorizer(@Context HttpHeaders headers,
+                                       @PathParam("apiId") String apiId,
+                                       @PathParam("authorizerId") String authorizerId,
+                                       String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Authorizer authorizer = v2Service.updateAuthorizer(region, apiId, authorizerId, request);
+            return Response.ok(toV2AuthorizerNode(authorizer).toString())
+                    .type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
     @POST
     @Path("/v2/apis/{apiId}/stages")
     public Response createV2Stage(@Context HttpHeaders headers, @PathParam("apiId") String apiId, String body) {
@@ -990,6 +1204,24 @@ public class ApiGatewayController {
         return Response.noContent().build();
     }
 
+    @PATCH
+    @Path("/v2/apis/{apiId}/stages/{stageName}")
+    public Response updateV2Stage(@Context HttpHeaders headers,
+                                  @PathParam("apiId") String apiId,
+                                  @PathParam("stageName") String stageName,
+                                  String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Stage stage = v2Service.updateStage(region, apiId, stageName, request);
+            return Response.ok(toV2StageNode(stage).toString())
+                    .type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
     @POST
     @Path("/v2/apis/{apiId}/deployments")
     public Response createV2Deployment(@Context HttpHeaders headers, @PathParam("apiId") String apiId, String body) {
@@ -1028,6 +1260,127 @@ public class ApiGatewayController {
         String region = regionResolver.resolveRegion(headers);
         v2Service.deleteDeployment(region, apiId, deploymentId);
         return Response.noContent().build();
+    }
+
+    @PATCH
+    @Path("/v2/apis/{apiId}/deployments/{deploymentId}")
+    public Response updateV2Deployment(@Context HttpHeaders headers,
+                                       @PathParam("apiId") String apiId,
+                                       @PathParam("deploymentId") String deploymentId,
+                                       String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Deployment deployment = v2Service.updateDeployment(region, apiId, deploymentId, request);
+            return Response.ok(toV2DeploymentNode(deployment).toString())
+                    .type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    // ──────────────────────────── Models (v2) ────────────────────────────
+
+    @POST
+    @Path("/v2/apis/{apiId}/models")
+    public Response createV2Model(@Context HttpHeaders headers, @PathParam("apiId") String apiId, String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Model model = v2Service.createModel(region, apiId, request);
+            return Response.status(201).entity(toV2ModelNode(model).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @GET
+    @Path("/v2/apis/{apiId}/models")
+    public Response getV2Models(@Context HttpHeaders headers, @PathParam("apiId") String apiId) {
+        String region = regionResolver.resolveRegion(headers);
+        List<Model> models = v2Service.getModels(region, apiId);
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode items = root.putArray("items");
+        models.forEach(m -> items.add(toV2ModelNode(m)));
+        return Response.ok(root.toString()).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/v2/apis/{apiId}/models/{modelId}")
+    public Response getV2Model(@Context HttpHeaders headers,
+                               @PathParam("apiId") String apiId,
+                               @PathParam("modelId") String modelId) {
+        String region = regionResolver.resolveRegion(headers);
+        return Response.ok(toV2ModelNode(v2Service.getModel(region, apiId, modelId)).toString()).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @PATCH
+    @Path("/v2/apis/{apiId}/models/{modelId}")
+    public Response updateV2Model(@Context HttpHeaders headers,
+                                  @PathParam("apiId") String apiId,
+                                  @PathParam("modelId") String modelId,
+                                  String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            Model model = v2Service.updateModel(region, apiId, modelId, request);
+            return Response.ok(toV2ModelNode(model).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @DELETE
+    @Path("/v2/apis/{apiId}/models/{modelId}")
+    public Response deleteV2Model(@Context HttpHeaders headers,
+                                  @PathParam("apiId") String apiId,
+                                  @PathParam("modelId") String modelId) {
+        String region = regionResolver.resolveRegion(headers);
+        v2Service.deleteModel(region, apiId, modelId);
+        return Response.noContent().build();
+    }
+
+    // ──────────────────────────── Tagging (v2) ────────────────────────────
+
+    @POST
+    @Path("/v2/tags/{resourceArn: .+}")
+    public Response tagResource(@Context HttpHeaders headers,
+                                @PathParam("resourceArn") String resourceArn,
+                                String body) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            @SuppressWarnings("unchecked")
+            Map<String, String> tags = (Map<String, String>) request.get("tags");
+            v2Service.tagResource(resourceArn, tags);
+            return Response.status(201).entity("{}").type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @DELETE
+    @Path("/v2/tags/{resourceArn: .+}")
+    public Response untagResource(@Context HttpHeaders headers,
+                                  @PathParam("resourceArn") String resourceArn,
+                                  @QueryParam("tagKeys") List<String> tagKeys) {
+        v2Service.untagResource(resourceArn,
+                tagKeys != null ? tagKeys : java.util.Collections.emptyList());
+        return Response.noContent().build();
+    }
+
+    @GET
+    @Path("/v2/tags/{resourceArn: .+}")
+    public Response getTagsForResource(@Context HttpHeaders headers,
+                                       @PathParam("resourceArn") String resourceArn) {
+        Map<String, String> tags = v2Service.getTags(resourceArn);
+        ObjectNode root = objectMapper.createObjectNode();
+        ObjectNode tagsNode = root.putObject("tags");
+        tags.forEach(tagsNode::put);
+        return Response.ok(root.toString()).type(MediaType.APPLICATION_JSON).build();
     }
 
     // ──────────────────────────── Helpers ────────────────────────────
@@ -1087,7 +1440,7 @@ public class ApiGatewayController {
         return node;
     }
 
-    private ObjectNode toIntegrationResponseNode(IntegrationResponse r) {
+    private ObjectNode toIntegrationResponseNode(io.github.hectorvent.floci.services.apigateway.model.IntegrationResponse r) {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("statusCode", r.statusCode());
         node.put("selectionPattern", r.selectionPattern());
@@ -1198,6 +1551,14 @@ public class ApiGatewayController {
         node.put("protocolType", api.getProtocolType());
         node.put("apiEndpoint", api.getApiEndpoint());
         node.put("createdDate", java.time.Instant.ofEpochMilli(api.getCreatedDate()).toString());
+        if (api.getRouteSelectionExpression() != null) node.put("routeSelectionExpression", api.getRouteSelectionExpression());
+        if (api.getDescription() != null) node.put("description", api.getDescription());
+        if (api.getApiKeySelectionExpression() != null) node.put("apiKeySelectionExpression", api.getApiKeySelectionExpression());
+        if (api.getTags() != null && !api.getTags().isEmpty()) {
+            ObjectNode tagsNode = objectMapper.createObjectNode();
+            api.getTags().forEach(tagsNode::put);
+            node.set("tags", tagsNode);
+        }
         return node;
     }
 
@@ -1207,6 +1568,7 @@ public class ApiGatewayController {
         node.put("routeKey", r.getRouteKey());
         node.put("authorizationType", r.getAuthorizationType());
         if (r.getTarget() != null) node.put("target", r.getTarget());
+        if (r.getRouteResponseSelectionExpression() != null) node.put("routeResponseSelectionExpression", r.getRouteResponseSelectionExpression());
         return node;
     }
 
@@ -1257,6 +1619,55 @@ public class ApiGatewayController {
                 jwt.put("issuer", a.getJwtConfiguration().issuer());
             }
         }
+        return node;
+    }
+
+    private ObjectNode toV2RouteResponseNode(RouteResponse rr) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("routeResponseId", rr.getRouteResponseId());
+        node.put("routeResponseKey", rr.getRouteResponseKey());
+        if (rr.getRouteId() != null) node.put("routeId", rr.getRouteId());
+        if (rr.getModelSelectionExpression() != null) node.put("modelSelectionExpression", rr.getModelSelectionExpression());
+        if (rr.getResponseModels() != null) {
+            ObjectNode models = objectMapper.createObjectNode();
+            rr.getResponseModels().forEach(models::put);
+            node.set("responseModels", models);
+        }
+        if (rr.getResponseParameters() != null) {
+            ObjectNode params = objectMapper.createObjectNode();
+            rr.getResponseParameters().forEach(params::put);
+            node.set("responseParameters", params);
+        }
+        return node;
+    }
+
+    private ObjectNode toV2IntegrationResponseNode(IntegrationResponse ir) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("integrationResponseId", ir.getIntegrationResponseId());
+        node.put("integrationResponseKey", ir.getIntegrationResponseKey());
+        if (ir.getIntegrationId() != null) node.put("integrationId", ir.getIntegrationId());
+        if (ir.getContentHandlingStrategy() != null) node.put("contentHandlingStrategy", ir.getContentHandlingStrategy());
+        if (ir.getTemplateSelectionExpression() != null) node.put("templateSelectionExpression", ir.getTemplateSelectionExpression());
+        if (ir.getResponseTemplates() != null) {
+            ObjectNode templates = objectMapper.createObjectNode();
+            ir.getResponseTemplates().forEach(templates::put);
+            node.set("responseTemplates", templates);
+        }
+        if (ir.getResponseParameters() != null) {
+            ObjectNode params = objectMapper.createObjectNode();
+            ir.getResponseParameters().forEach(params::put);
+            node.set("responseParameters", params);
+        }
+        return node;
+    }
+
+    private ObjectNode toV2ModelNode(Model m) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("modelId", m.getModelId());
+        node.put("name", m.getName());
+        if (m.getSchema() != null)      node.put("schema", m.getSchema());
+        if (m.getDescription() != null) node.put("description", m.getDescription());
+        if (m.getContentType() != null) node.put("contentType", m.getContentType());
         return node;
     }
 

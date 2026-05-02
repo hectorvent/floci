@@ -102,21 +102,34 @@ curl http://localhost:4566/restapis/$API_ID/dev/_user_request_/users
 
 ---
 
-## API Gateway v2 (HTTP APIs) {#v2}
+## API Gateway v2 (HTTP and WebSocket APIs) {#v2}
 
 **Protocol:** REST JSON
 **Endpoint:** `http://localhost:4566/v2/apis/...`
+
+Both HTTP and WebSocket protocol types are supported for the management plane. WebSocket data-plane (actual connection handling) is not yet implemented.
 
 ### Supported Operations
 
 | Category | Operations |
 |---|---|
-| **APIs** | CreateApi, GetApi, GetApis, DeleteApi |
-| **Routes** | CreateRoute, GetRoute, GetRoutes, DeleteRoute |
-| **Integrations** | CreateIntegration, GetIntegration, GetIntegrations |
-| **Authorizers** | CreateAuthorizer, GetAuthorizer, GetAuthorizers, DeleteAuthorizer |
-| **Stages** | CreateStage, GetStage, GetStages, DeleteStage |
-| **Deployments** | CreateDeployment, GetDeployments |
+| **APIs** | CreateApi, GetApi, GetApis, UpdateApi, DeleteApi |
+| **Routes** | CreateRoute, GetRoute, GetRoutes, UpdateRoute, DeleteRoute |
+| **Route Responses** | CreateRouteResponse, GetRouteResponse, GetRouteResponses, UpdateRouteResponse, DeleteRouteResponse |
+| **Integrations** | CreateIntegration, GetIntegration, GetIntegrations, UpdateIntegration, DeleteIntegration |
+| **Integration Responses** | CreateIntegrationResponse, GetIntegrationResponse, GetIntegrationResponses, UpdateIntegrationResponse, DeleteIntegrationResponse |
+| **Authorizers** | CreateAuthorizer, GetAuthorizer, GetAuthorizers, UpdateAuthorizer, DeleteAuthorizer |
+| **Stages** | CreateStage, GetStage, GetStages, UpdateStage, DeleteStage |
+| **Deployments** | CreateDeployment, GetDeployment, GetDeployments, UpdateDeployment, DeleteDeployment |
+| **Models** | CreateModel, GetModel, GetModels, UpdateModel, DeleteModel |
+| **Tags** | TagResource, UntagResource, GetTags |
+
+### Not Implemented
+
+- WebSocket data-plane: actual WebSocket connection handling, `@connections` management API
+- `ReimportApi`, `ExportApi`, `GetApiMapping`, `CreateApiMapping`, `DeleteApiMapping`
+- `GetDomainName`, `CreateDomainName`, `DeleteDomainName`
+- `CreateVpcLink`, `GetVpcLink`, `GetVpcLinks`, `UpdateVpcLink`, `DeleteVpcLink`
 
 ### Examples
 
@@ -151,5 +164,53 @@ aws apigatewayv2 create-stage \
   --api-id $API_ID \
   --stage-name dev \
   --auto-deploy \
+  --endpoint-url $AWS_ENDPOINT_URL
+```
+
+#### WebSocket API
+
+```bash
+export AWS_ENDPOINT_URL=http://localhost:4566
+
+# Create a WebSocket API
+WS_API_ID=$(aws apigatewayv2 create-api \
+  --name "My WebSocket API" \
+  --protocol-type WEBSOCKET \
+  --route-selection-expression '$request.body.action' \
+  --query ApiId --output text \
+  --endpoint-url $AWS_ENDPOINT_URL)
+
+# Create a Lambda integration
+WS_INTEGRATION_ID=$(aws apigatewayv2 create-integration \
+  --api-id $WS_API_ID \
+  --integration-type AWS_PROXY \
+  --integration-uri "arn:aws:lambda:us-east-1:000000000000:function:my-ws-handler" \
+  --query IntegrationId --output text \
+  --endpoint-url $AWS_ENDPOINT_URL)
+
+# Create $connect, $disconnect, and $default routes
+aws apigatewayv2 create-route \
+  --api-id $WS_API_ID \
+  --route-key '$connect' \
+  --target "integrations/$WS_INTEGRATION_ID" \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+aws apigatewayv2 create-route \
+  --api-id $WS_API_ID \
+  --route-key '$disconnect' \
+  --target "integrations/$WS_INTEGRATION_ID" \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+aws apigatewayv2 create-route \
+  --api-id $WS_API_ID \
+  --route-key '$default' \
+  --route-response-selection-expression '$default' \
+  --target "integrations/$WS_INTEGRATION_ID" \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+# Deploy
+aws apigatewayv2 create-stage \
+  --api-id $WS_API_ID \
+  --stage-name prod \
   --endpoint-url $AWS_ENDPOINT_URL
 ```

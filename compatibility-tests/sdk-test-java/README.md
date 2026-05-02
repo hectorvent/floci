@@ -22,6 +22,7 @@ Runs 313 tests across 16 test classes against a live Floci instance — no mocks
 | `CloudWatchTest`                 | PutMetricData, ListMetrics, GetMetricStatistics, alarms  |
 | `CloudFormationVirtualHostTests` | Virtual host style S3 access via CloudFormation          |
 | `ApigwSfnJsonataCrudlTests`      | API Gateway + Step Functions JSONata CRUDL integration   |
+| `ApiGatewayV2WebSocketAndExtendedOpsTest` | API GW v2 WebSocket APIs, Update ops, Route/Integration Responses, Models, Tagging |
 | `Ec2Tests`                       | EC2 instances, VPCs, security groups, subnets            |
 | `EcsTests`                       | ECS clusters, task definitions, services                 |
 

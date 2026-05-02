@@ -15,6 +15,9 @@ public class Api {
     private String apiEndpoint;
     private long createdDate;
     private Map<String, String> tags = new HashMap<>();
+    private String routeSelectionExpression;
+    private String description;
+    private String apiKeySelectionExpression;
 
     public Api() {}
 
@@ -35,4 +38,13 @@ public class Api {
 
     public Map<String, String> getTags() { return tags; }
     public void setTags(Map<String, String> tags) { this.tags = tags; }
+
+    public String getRouteSelectionExpression() { return routeSelectionExpression; }
+    public void setRouteSelectionExpression(String routeSelectionExpression) { this.routeSelectionExpression = routeSelectionExpression; }
+
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+
+    public String getApiKeySelectionExpression() { return apiKeySelectionExpression; }
+    public void setApiKeySelectionExpression(String apiKeySelectionExpression) { this.apiKeySelectionExpression = apiKeySelectionExpression; }
 }
