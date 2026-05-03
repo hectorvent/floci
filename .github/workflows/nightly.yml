@@ -1,0 +1,166 @@
+name: Nightly
+
+# Builds and publishes native images from the tip of main as nightly Docker tags.
+# Runs every night at 22:00 CT (03:00 UTC, approximate — shifts 1 h in CST winter).
+# Can also be triggered manually.
+#
+# Published tags:
+#   Native:  floci/floci:nightly   floci/floci:nightly-mmddyyyy
+#   Compat:  floci/floci:nightly-compat   floci/floci:nightly-mmddyyyy-compat
+#
+# Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # 23:00 CT (CDT/UTC-5); shifts to 23:00 CST in winter
+  workflow_dispatch:        # Allow maintainers to trigger manually
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Compute nightly version (CT date) ────────────────────────────────────
+  prepare:
+    name: Prepare nightly version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.date.outputs.version }}
+
+    steps:
+      - name: Set date version (CT)
+        id: date
+        run: echo "version=$(TZ='America/Chicago' date +'%m%d%Y')" >> "$GITHUB_OUTPUT"
+
+  # ── Build native artifact — amd64 ────────────────────────────────────────
+  build-native-amd64:
+    name: Build native artifact (amd64)
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - uses: graalvm/setup-graalvm@60c26726de13f8b90771df4bc1641a52a3159994 # v1
+        with:
+          java-version: '24'
+          distribution: 'mandrel'
+          cache: maven
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set nightly version
+        run: mvn versions:set -DnewVersion="nightly-${{ needs.prepare.outputs.version }}" -DgenerateBackupPoms=false -q
+
+      - name: Build native executable
+        run: mvn clean package -Dnative -DskipTests -B -Dquarkus.native.additional-build-args-append="-march=x86-64-v2"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-amd64
+          path: |
+            target/*-runner
+            target/*.properties
+            target/*.so
+          if-no-files-found: warn
+          retention-days: 1
+
+  # ── Build native artifact — arm64 ────────────────────────────────────────
+  build-native-arm64:
+    name: Build native artifact (arm64)
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - uses: graalvm/setup-graalvm@60c26726de13f8b90771df4bc1641a52a3159994 # v1
+        with:
+          java-version: '24'
+          distribution: 'mandrel'
+          cache: maven
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set nightly version
+        run: mvn versions:set -DnewVersion="nightly-${{ needs.prepare.outputs.version }}" -DgenerateBackupPoms=false -q
+
+      - name: Build native executable
+        run: mvn clean package -Dnative -DskipTests -B
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-arm64
+          path: |
+            target/*-runner
+            target/*.properties
+            target/*.so
+          if-no-files-found: warn
+          retention-days: 1
+
+  # ── Push native + compat Docker images ───────────────────────────────────
+  push-native:
+    name: Push native and compat Docker images
+    needs: [prepare, build-native-amd64, build-native-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-amd64
+          path: native/amd64/
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-arm64
+          path: native/arm64/
+
+      - name: Make binaries executable
+        run: chmod +x native/amd64/*-runner native/arm64/*-runner
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push native nightly image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: docker/Dockerfile.native-package
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            floci/floci:nightly
+            floci/floci:nightly-${{ needs.prepare.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push compat nightly image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: docker/Dockerfile.compat
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            floci/floci:nightly-compat
+            floci/floci:nightly-${{ needs.prepare.outputs.version }}-compat
+          build-args: |
+            VERSION=nightly-${{ needs.prepare.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,11 +1,11 @@
 name: Release
 
 # Triggered when a version tag (e.g. 1.2.3) is pushed.
-# Builds native (amd64 + arm64) and JVM Docker images and pushes them to Docker Hub.
+# Builds native (amd64 + arm64) Docker images and pushes them to Docker Hub.
 #
 # Published tags:
-#   Native:  floci/floci:1.2.3   floci/floci:latest
-#   JVM:     floci/floci:1.2.3-jvm   floci/floci:latest-jvm
+#   Native:  floci/floci:1.2.3        floci/floci:latest
+#   Compat:  floci/floci:1.2.3-compat floci/floci:latest-compat
 #
 # Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
 
@@ -26,30 +26,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Build JVM artifact ────────────────────────────────────────────────────
-  build-jvm:
-    name: Build JVM artifact
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-java@v5
-        with:
-          java-version: '25'
-          distribution: 'temurin'
-          cache: maven
-
-      - name: Build JVM artifact
-        run: mvn clean package -DskipTests -q
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: jvm-artifact
-          path: target/quarkus-app/
-          retention-days: 1
-
   # ── Build native artifact — amd64 ────────────────────────────────────────
   build-native-amd64:
     name: Build native artifact (amd64)
@@ -108,53 +84,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-  # ── Push JVM Docker image ─────────────────────────────────────────────────
-  push-jvm:
-    name: Push JVM Docker image
-    needs: build-jvm
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Extract version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-
-      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: jvm-artifact
-          path: target/quarkus-app/
-
-      - name: Build and push JVM image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          file: Dockerfile.jvm-package
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            floci/floci:${{ steps.version.outputs.version }}-jvm
-            floci/floci:latest-jvm
-            floci/floci:${{ steps.version.outputs.version }}-aws
-            floci/floci:latest-aws
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-            INSTALL_AWS_CLI=true
-
-  # ── Push native Docker images (multi-arch manifest) ───────────────────────
+  # ── Push native + compat Docker images ───────────────────────────────────
   push-native:
-    name: Push native Docker images
+    name: Push native and compat Docker images
     needs: [build-native-amd64, build-native-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -190,12 +122,27 @@ jobs:
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          file: Dockerfile.native-package
+          file: docker/Dockerfile.native-package
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             floci/floci:${{ steps.version.outputs.version }}
             floci/floci:latest
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push compat multi-arch image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: docker/Dockerfile.compat
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            floci/floci:${{ steps.version.outputs.version }}-compat
+            floci/floci:latest-compat
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha

@@ -5,14 +5,7 @@ on:
     paths:
       - 'src/**'
       - 'pom.xml'
-      - '.mvn/**'
-      - 'mvnw'
-      - 'mvnw.cmd'
-      - 'Dockerfile'
-      - 'Dockerfile.jvm-package'
-      - 'Dockerfile.native'
-      - 'Dockerfile.native-package'
-      - 'docker-compose.yml'
+      - 'docker/Dockerfile.jvm-package'
       - 'compatibility-tests/**'
       - '.github/workflows/compatibility.yml'
 
@@ -46,7 +39,7 @@ jobs:
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          file: Dockerfile.jvm-package
+          file: docker/Dockerfile.jvm-package
           tags: floci:test
           outputs: type=docker,dest=/tmp/floci-image.tar
           cache-from: type=gha,scope=floci

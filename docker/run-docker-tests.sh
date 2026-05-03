@@ -32,7 +32,6 @@ SUITES=(
   "sdk-test-java"
   "sdk-test-go"
   "sdk-test-awscli"
-  "sdk-test-rust"
   "compat-cdk"
   "compat-terraform"
   "compat-opentofu"

@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.cloudformation;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.dns.EmbeddedDnsServer;
 import io.github.hectorvent.floci.services.cloudformation.model.ChangeSet;
 import io.github.hectorvent.floci.services.cloudformation.model.Stack;
 import io.github.hectorvent.floci.services.cloudformation.model.StackEvent;
@@ -500,7 +501,7 @@ public class CloudFormationService {
     private String fetchTemplateFromS3(String url) {
         // Parse S3 URL — three forms:
         //   Virtual-hosted AWS:   https://bucket.s3[.region].amazonaws.com/key
-        //   Virtual-hosted local: http://bucket.localhost:4566/key  (or configured hostname)
+        //   Virtual-hosted local: http://bucket.localhost:4566/key  (or configured/default hostname)
         //   Path-style (both):    https://s3[.region].amazonaws.com/bucket/key
         //                         http://host:port/bucket/key
         //
@@ -516,7 +517,7 @@ public class CloudFormationService {
 
         boolean isVirtualHosted = host != null && (
                 host.contains(".s3.")
-                || (config.hostname().isPresent() && host.endsWith("." + config.hostname().get()))
+                || isConfiguredVirtualHostedS3Host(host)
                 || host.endsWith(".localhost"));
 
         if (isVirtualHosted) {
@@ -537,6 +538,21 @@ public class CloudFormationService {
             LOG.errorv("Failed to fetch CloudFormation template from {0}: {1}", url, e.getMessage());
             throw new RuntimeException("Failed to fetch CloudFormation template from " + url + ": " + e.getMessage(), e);
         }
+    }
+
+    private boolean isConfiguredVirtualHostedS3Host(String host) {
+        String suffix = config.hostname().orElse(EmbeddedDnsServer.DEFAULT_SUFFIX);
+        return hasBucketPrefixForSuffix(host, suffix);
+    }
+
+    private static boolean hasBucketPrefixForSuffix(String host, String suffix) {
+        if (host == null || suffix == null || suffix.isBlank()) {
+            return false;
+        }
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
+        String normalizedSuffix = suffix.toLowerCase(Locale.ROOT);
+        return normalizedHost.length() > normalizedSuffix.length() + 1
+                && normalizedHost.endsWith("." + normalizedSuffix);
     }
 
     private Stack newStack(String stackName, String region) {

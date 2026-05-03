@@ -229,3 +229,5 @@ floci:
       # docker-network: floci-network
     codedeploy:
       enabled: true
+    autoscaling:
+      enabled: true

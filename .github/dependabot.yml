@@ -10,6 +10,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     ignore:
       - dependency-name: "com.networknt:json-schema-validator"
         versions: [">=2.0.0"]
@@ -27,6 +32,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
       - "github-actions"

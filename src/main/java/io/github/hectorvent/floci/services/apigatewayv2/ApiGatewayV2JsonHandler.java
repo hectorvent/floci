@@ -33,27 +33,51 @@ public class ApiGatewayV2JsonHandler {
                 case "CreateApi" -> handleCreateApi(request, region);
                 case "GetApis" -> handleGetApis(region);
                 case "GetApi" -> handleGetApi(request, region);
+                case "UpdateApi" -> handleUpdateApi(request, region);
                 case "DeleteApi" -> handleDeleteApi(request, region);
                 case "CreateRoute" -> handleCreateRoute(request, region);
                 case "GetRoute" -> handleGetRoute(request, region);
                 case "GetRoutes" -> handleGetRoutes(request, region);
+                case "UpdateRoute" -> handleUpdateRoute(request, region);
                 case "DeleteRoute" -> handleDeleteRoute(request, region);
                 case "CreateIntegration" -> handleCreateIntegration(request, region);
                 case "GetIntegration" -> handleGetIntegration(request, region);
                 case "GetIntegrations" -> handleGetIntegrations(request, region);
+                case "UpdateIntegration" -> handleUpdateIntegration(request, region);
                 case "CreateAuthorizer" -> handleCreateAuthorizer(request, region);
                 case "GetAuthorizer" -> handleGetAuthorizer(request, region);
                 case "GetAuthorizers" -> handleGetAuthorizers(request, region);
                 case "DeleteAuthorizer" -> handleDeleteAuthorizer(request, region);
+                case "UpdateAuthorizer" -> handleUpdateAuthorizer(request, region);
                 case "CreateStage" -> handleCreateStage(request, region);
                 case "GetStage" -> handleGetStage(request, region);
                 case "GetStages" -> handleGetStages(request, region);
                 case "DeleteStage" -> handleDeleteStage(request, region);
+                case "UpdateStage" -> handleUpdateStage(request, region);
                 case "CreateDeployment" -> handleCreateDeployment(request, region);
                 case "GetDeployment" -> handleGetDeployment(request, region);
                 case "GetDeployments" -> handleGetDeployments(request, region);
                 case "DeleteDeployment" -> handleDeleteDeployment(request, region);
+                case "UpdateDeployment" -> handleUpdateDeployment(request, region);
                 case "DeleteIntegration" -> handleDeleteIntegration(request, region);
+                case "CreateRouteResponse" -> handleCreateRouteResponse(request, region);
+                case "GetRouteResponse" -> handleGetRouteResponse(request, region);
+                case "GetRouteResponses" -> handleGetRouteResponses(request, region);
+                case "UpdateRouteResponse" -> handleUpdateRouteResponse(request, region);
+                case "DeleteRouteResponse" -> handleDeleteRouteResponse(request, region);
+                case "CreateIntegrationResponse" -> handleCreateIntegrationResponse(request, region);
+                case "GetIntegrationResponse" -> handleGetIntegrationResponse(request, region);
+                case "GetIntegrationResponses" -> handleGetIntegrationResponses(request, region);
+                case "UpdateIntegrationResponse" -> handleUpdateIntegrationResponse(request, region);
+                case "DeleteIntegrationResponse" -> handleDeleteIntegrationResponse(request, region);
+                case "CreateModel" -> handleCreateModel(request, region);
+                case "GetModel" -> handleGetModel(request, region);
+                case "GetModels" -> handleGetModels(request, region);
+                case "UpdateModel" -> handleUpdateModel(request, region);
+                case "DeleteModel" -> handleDeleteModel(request, region);
+                case "TagResource" -> handleTagResource(request, region);
+                case "UntagResource" -> handleUntagResource(request, region);
+                case "GetTags" -> handleGetTags(request, region);
                 default -> JsonErrorResponseUtils.createUnknownOperationErrorResponse(action);
             };
         } catch (AwsException e) {
@@ -89,6 +113,14 @@ public class ApiGatewayV2JsonHandler {
         return Response.noContent().build();
     }
 
+    private Response handleUpdateApi(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Api api = service.updateApi(region, apiId, map);
+        return Response.ok(toApiNode(api).toString()).build();
+    }
+
     // ──────────────────────────── Authorizer ────────────────────────────
 
     private Response handleCreateAuthorizer(JsonNode request, String region) {
@@ -119,6 +151,15 @@ public class ApiGatewayV2JsonHandler {
         String authorizerId = request.path("AuthorizerId").asText();
         service.deleteAuthorizer(region, apiId, authorizerId);
         return Response.noContent().build();
+    }
+
+    private Response handleUpdateAuthorizer(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String authorizerId = request.path("AuthorizerId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Authorizer auth = service.updateAuthorizer(region, apiId, authorizerId, map);
+        return Response.ok(toAuthorizerNode(auth).toString()).build();
     }
 
     // ──────────────────────────── Route ────────────────────────────
@@ -153,6 +194,15 @@ public class ApiGatewayV2JsonHandler {
         return Response.noContent().build();
     }
 
+    private Response handleUpdateRoute(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String routeId = request.path("RouteId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Route route = service.updateRoute(region, apiId, routeId, map);
+        return Response.ok(toRouteNode(route).toString()).build();
+    }
+
     // ──────────────────────────── Integration ────────────────────────────
 
     private Response handleCreateIntegration(JsonNode request, String region) {
@@ -176,6 +226,15 @@ public class ApiGatewayV2JsonHandler {
         ArrayNode items = root.putArray("Items");
         integrations.forEach(i -> items.add(toIntegrationNode(i)));
         return Response.ok(root.toString()).build();
+    }
+
+    private Response handleUpdateIntegration(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String integrationId = request.path("IntegrationId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Integration integration = service.updateIntegration(region, apiId, integrationId, map);
+        return Response.ok(toIntegrationNode(integration).toString()).build();
     }
 
     // ──────────────────────────── Stage ────────────────────────────
@@ -210,6 +269,15 @@ public class ApiGatewayV2JsonHandler {
         return Response.noContent().build();
     }
 
+    private Response handleUpdateStage(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String stageName = request.path("StageName").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Stage stage = service.updateStage(region, apiId, stageName, map);
+        return Response.ok(toStageNode(stage).toString()).build();
+    }
+
     // ──────────────────────────── Deployment ────────────────────────────
 
     private Response handleCreateDeployment(JsonNode request, String region) {
@@ -242,11 +310,180 @@ public class ApiGatewayV2JsonHandler {
         return Response.noContent().build();
     }
 
+    private Response handleUpdateDeployment(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String deploymentId = request.path("DeploymentId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Deployment deployment = service.updateDeployment(region, apiId, deploymentId, map);
+        return Response.ok(toDeploymentNode(deployment).toString()).build();
+    }
+
     private Response handleDeleteIntegration(JsonNode request, String region) {
         String apiId = request.path("ApiId").asText();
         String integrationId = request.path("IntegrationId").asText();
         service.deleteIntegration(region, apiId, integrationId);
         return Response.noContent().build();
+    }
+
+    // ──────────────────────────── Route Response ────────────────────────────
+
+    private Response handleCreateRouteResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String routeId = request.path("RouteId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        RouteResponse rr = service.createRouteResponse(region, apiId, routeId, map);
+        return Response.status(201).entity(toRouteResponseNode(rr).toString()).build();
+    }
+
+    private Response handleGetRouteResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String routeId = request.path("RouteId").asText();
+        String routeResponseId = request.path("RouteResponseId").asText();
+        return Response.ok(toRouteResponseNode(service.getRouteResponse(region, apiId, routeId, routeResponseId)).toString()).build();
+    }
+
+    private Response handleGetRouteResponses(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String routeId = request.path("RouteId").asText();
+        List<RouteResponse> routeResponses = service.getRouteResponses(region, apiId, routeId);
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode items = root.putArray("Items");
+        routeResponses.forEach(rr -> items.add(toRouteResponseNode(rr)));
+        return Response.ok(root.toString()).build();
+    }
+
+    private Response handleUpdateRouteResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String routeId = request.path("RouteId").asText();
+        String routeResponseId = request.path("RouteResponseId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        RouteResponse rr = service.updateRouteResponse(region, apiId, routeId, routeResponseId, map);
+        return Response.ok(toRouteResponseNode(rr).toString()).build();
+    }
+
+    private Response handleDeleteRouteResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String routeId = request.path("RouteId").asText();
+        String routeResponseId = request.path("RouteResponseId").asText();
+        service.deleteRouteResponse(region, apiId, routeId, routeResponseId);
+        return Response.noContent().build();
+    }
+
+    // ──────────────────────────── Integration Response ────────────────────────────
+
+    private Response handleCreateIntegrationResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String integrationId = request.path("IntegrationId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        IntegrationResponse ir = service.createIntegrationResponse(region, apiId, integrationId, map);
+        return Response.status(201).entity(toIntegrationResponseNode(ir).toString()).build();
+    }
+
+    private Response handleGetIntegrationResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String integrationId = request.path("IntegrationId").asText();
+        String integrationResponseId = request.path("IntegrationResponseId").asText();
+        return Response.ok(toIntegrationResponseNode(service.getIntegrationResponse(region, apiId, integrationId, integrationResponseId)).toString()).build();
+    }
+
+    private Response handleGetIntegrationResponses(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String integrationId = request.path("IntegrationId").asText();
+        List<IntegrationResponse> integrationResponses = service.getIntegrationResponses(region, apiId, integrationId);
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode items = root.putArray("Items");
+        integrationResponses.forEach(ir -> items.add(toIntegrationResponseNode(ir)));
+        return Response.ok(root.toString()).build();
+    }
+
+    private Response handleUpdateIntegrationResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String integrationId = request.path("IntegrationId").asText();
+        String integrationResponseId = request.path("IntegrationResponseId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        IntegrationResponse ir = service.updateIntegrationResponse(region, apiId, integrationId, integrationResponseId, map);
+        return Response.ok(toIntegrationResponseNode(ir).toString()).build();
+    }
+
+    private Response handleDeleteIntegrationResponse(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String integrationId = request.path("IntegrationId").asText();
+        String integrationResponseId = request.path("IntegrationResponseId").asText();
+        service.deleteIntegrationResponse(region, apiId, integrationId, integrationResponseId);
+        return Response.noContent().build();
+    }
+
+    // ──────────────────────────── Model ────────────────────────────
+
+    private Response handleCreateModel(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Model model = service.createModel(region, apiId, map);
+        return Response.status(201).entity(toModelNode(model).toString()).build();
+    }
+
+    private Response handleGetModel(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String modelId = request.path("ModelId").asText();
+        return Response.ok(toModelNode(service.getModel(region, apiId, modelId)).toString()).build();
+    }
+
+    private Response handleGetModels(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        List<Model> models = service.getModels(region, apiId);
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode items = root.putArray("Items");
+        models.forEach(m -> items.add(toModelNode(m)));
+        return Response.ok(root.toString()).build();
+    }
+
+    private Response handleUpdateModel(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String modelId = request.path("ModelId").asText();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = toLowerCamelCase(objectMapper.convertValue(request, Map.class));
+        Model model = service.updateModel(region, apiId, modelId, map);
+        return Response.ok(toModelNode(model).toString()).build();
+    }
+
+    private Response handleDeleteModel(JsonNode request, String region) {
+        String apiId = request.path("ApiId").asText();
+        String modelId = request.path("ModelId").asText();
+        service.deleteModel(region, apiId, modelId);
+        return Response.noContent().build();
+    }
+
+    // ──────────────────────────── Tagging ────────────────────────────
+
+    private Response handleTagResource(JsonNode request, String region) {
+        String resourceArn = request.path("ResourceArn").asText();
+        Map<String, String> tags = objectMapper.convertValue(
+                request.path("Tags"), new com.fasterxml.jackson.core.type.TypeReference<Map<String, String>>() {});
+        service.tagResource(resourceArn, tags);
+        return Response.ok("{}").build();
+    }
+
+    private Response handleUntagResource(JsonNode request, String region) {
+        String resourceArn = request.path("ResourceArn").asText();
+        List<String> tagKeys = new java.util.ArrayList<>();
+        request.path("TagKeys").forEach(n -> tagKeys.add(n.asText()));
+        service.untagResource(resourceArn, tagKeys);
+        return Response.noContent().build();
+    }
+
+    private Response handleGetTags(JsonNode request, String region) {
+        String resourceArn = request.path("ResourceArn").asText();
+        Map<String, String> tags = service.getTags(resourceArn);
+        ObjectNode root = objectMapper.createObjectNode();
+        ObjectNode tagsNode = root.putObject("Tags");
+        tags.forEach(tagsNode::put);
+        return Response.ok(root.toString()).build();
     }
 
     // ──────────────────────────── Serializers ────────────────────────────
@@ -258,6 +495,19 @@ public class ApiGatewayV2JsonHandler {
         node.put("ProtocolType", api.getProtocolType());
         node.put("ApiEndpoint", api.getApiEndpoint());
         node.put("CreatedDate", api.getCreatedDate() / 1000.0);
+        if (api.getRouteSelectionExpression() != null) {
+            node.put("RouteSelectionExpression", api.getRouteSelectionExpression());
+        }
+        if (api.getDescription() != null) {
+            node.put("Description", api.getDescription());
+        }
+        if (api.getApiKeySelectionExpression() != null) {
+            node.put("ApiKeySelectionExpression", api.getApiKeySelectionExpression());
+        }
+        if (api.getTags() != null && !api.getTags().isEmpty()) {
+            ObjectNode tagsNode = node.putObject("Tags");
+            api.getTags().forEach(tagsNode::put);
+        }
         return node;
     }
 
@@ -290,6 +540,9 @@ public class ApiGatewayV2JsonHandler {
         node.put("AuthorizationType", r.getAuthorizationType());
         if (r.getAuthorizerId() != null) node.put("AuthorizerId", r.getAuthorizerId());
         if (r.getTarget() != null) node.put("Target", r.getTarget());
+        if (r.getRouteResponseSelectionExpression() != null) {
+            node.put("RouteResponseSelectionExpression", r.getRouteResponseSelectionExpression());
+        }
         return node;
     }
 
@@ -318,6 +571,61 @@ public class ApiGatewayV2JsonHandler {
         node.put("DeploymentStatus", d.getDeploymentStatus());
         node.put("CreatedDate", d.getCreatedDate() / 1000.0);
         if (d.getDescription() != null) node.put("Description", d.getDescription());
+        return node;
+    }
+
+    private ObjectNode toRouteResponseNode(RouteResponse rr) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("RouteResponseId", rr.getRouteResponseId());
+        node.put("RouteResponseKey", rr.getRouteResponseKey());
+        if (rr.getRouteId() != null) {
+            node.put("RouteId", rr.getRouteId());
+        }
+        if (rr.getModelSelectionExpression() != null) {
+            node.put("ModelSelectionExpression", rr.getModelSelectionExpression());
+        }
+        if (rr.getResponseModels() != null) {
+            ObjectNode responseModels = node.putObject("ResponseModels");
+            rr.getResponseModels().forEach(responseModels::put);
+        }
+        if (rr.getResponseParameters() != null) {
+            ObjectNode responseParameters = node.putObject("ResponseParameters");
+            rr.getResponseParameters().forEach(responseParameters::put);
+        }
+        return node;
+    }
+
+    private ObjectNode toIntegrationResponseNode(IntegrationResponse ir) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("IntegrationResponseId", ir.getIntegrationResponseId());
+        node.put("IntegrationResponseKey", ir.getIntegrationResponseKey());
+        if (ir.getIntegrationId() != null) {
+            node.put("IntegrationId", ir.getIntegrationId());
+        }
+        if (ir.getContentHandlingStrategy() != null) {
+            node.put("ContentHandlingStrategy", ir.getContentHandlingStrategy());
+        }
+        if (ir.getTemplateSelectionExpression() != null) {
+            node.put("TemplateSelectionExpression", ir.getTemplateSelectionExpression());
+        }
+        if (ir.getResponseTemplates() != null) {
+            ObjectNode responseTemplates = node.putObject("ResponseTemplates");
+            ir.getResponseTemplates().forEach(responseTemplates::put);
+        }
+        if (ir.getResponseParameters() != null) {
+            ObjectNode responseParameters = node.putObject("ResponseParameters");
+            ir.getResponseParameters().forEach(responseParameters::put);
+        }
+        return node;
+    }
+
+    private ObjectNode toModelNode(Model m) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("ModelId", m.getModelId());
+        node.put("Name", m.getName());
+        if (m.getSchema() != null)      node.put("Schema", m.getSchema());
+        if (m.getDescription() != null) node.put("Description", m.getDescription());
+        if (m.getContentType() != null) node.put("ContentType", m.getContentType());
         return node;
     }
 

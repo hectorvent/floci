@@ -11,6 +11,7 @@ public class Route {
     private String authorizationType; // NONE, AWS_IAM, CUSTOM, JWT
     private String authorizerId;
     private String target; // integrations/{integrationId}
+    private String routeResponseSelectionExpression;
 
     public Route() {}
 
@@ -28,4 +29,7 @@ public class Route {
 
     public String getTarget() { return target; }
     public void setTarget(String target) { this.target = target; }
+
+    public String getRouteResponseSelectionExpression() { return routeResponseSelectionExpression; }
+    public void setRouteResponseSelectionExpression(String routeResponseSelectionExpression) { this.routeResponseSelectionExpression = routeResponseSelectionExpression; }
 }

@@ -71,6 +71,7 @@
 | EC2 (real Docker instances, IMDS, SSH, UserData) | ✅ | ❌ |
 | CodeBuild (real Docker build execution, S3 artifacts, CloudWatch logs) | ✅ | ❌ |
 | CodeDeploy (Lambda traffic shifting, lifecycle hooks, auto-rollback) | ✅ | ❌ |
+| Auto Scaling (groups, launch configs, reconciler, ELB v2 integration) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
 **Broad AWS coverage. Free forever.**
@@ -85,7 +86,7 @@ flowchart LR
         Router["HTTP Router\n(JAX-RS / Vert.x)"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · ELB v2\nCodeDeploy · Bedrock Runtime"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · ELB v2 · Auto Scaling\nCodeDeploy · Bedrock Runtime"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -218,12 +219,13 @@ All default images are configurable via environment variables, useful for pinnin
 | **ELB v2** | In-process | Application and Network Load Balancers, target groups, listeners, path/host-based routing rules, tags |
 | **CodeBuild** | In-process + **real Docker containers** | Projects, report groups, source credentials; `StartBuild` runs real Docker containers, streams logs to CloudWatch, uploads artifacts to S3 via `docker cp` (works in Docker-in-Docker) |
 | **CodeDeploy** | In-process + **Lambda traffic shifting** | Applications, deployment groups, deployment configs; 17 `CodeDeployDefault.*` built-ins pre-seeded; `CreateDeployment` shifts Lambda alias `RoutingConfig` weights, invokes lifecycle hooks, auto-rolls back on failure |
+| **Auto Scaling** | In-process + **background reconciler** | Launch configurations, auto scaling groups with min/max/desired capacity; background loop (10 s) calls `RunInstances` / `TerminateInstances` to meet desired capacity; lifecycle hooks, scaling policies, ELB v2 target group auto-registration |
 
 > **Lambda, ElastiCache, RDS, MSK, ECS, EC2, EKS, OpenSearch, and CodeBuild** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**41 AWS services supported.**
+**42 AWS services supported.**
 
 ## Persistence & Storage Modes
 
@@ -513,6 +515,175 @@ aws --endpoint-url http://localhost:4566 s3 rm s3://my-bucket/demo.txt
 rm -f "$tmp_file"
 ```
 
+## Testcontainers
+
+Floci has first-class Testcontainers modules so you can start a real Floci instance from your tests with zero manual setup — no running daemon, no shared state, no port conflicts.
+
+| Language | Package | Latest | Registry | Source |
+|---|---|---|---|---|
+| Java | `io.floci:testcontainers-floci` | `1.4.0` | [Maven Central](https://mvnrepository.com/artifact/io.floci/testcontainers-floci) | [GitHub](https://github.com/floci-io/testcontainers-floci) |
+| Node.js | `@floci/testcontainers` | `0.1.0` | [npm](https://www.npmjs.com/package/@floci/testcontainers) | [GitHub](https://github.com/floci-io/testcontainers-floci-node) |
+| Python | `testcontainers-floci` | `0.1.1` | [PyPI](https://pypi.org/project/testcontainers-floci/) | [GitHub](https://github.com/floci-io/testcontainers-floci-python) |
+| Go | — | 🚧 In progress | — | [GitHub](https://github.com/floci-io/testcontainers-floci-go) |
+
+### Java
+
+Add the dependency (Testcontainers 1.x / Spring Boot 3.x):
+
+```xml
+<dependency>
+    <groupId>io.floci</groupId>
+    <artifactId>testcontainers-floci</artifactId>
+    <version>1.4.0</version>
+    <scope>test</scope>
+</dependency>
+```
+
+For Testcontainers 2.x / Spring Boot 4.x use version `2.5.0`.
+
+Basic usage with JUnit 5:
+
+```java
+@Testcontainers
+class S3IntegrationTest {
+
+    @Container
+    static FlociContainer floci = new FlociContainer();
+
+    @Test
+    void shouldCreateBucket() {
+        S3Client s3 = S3Client.builder()
+                .endpointOverride(URI.create(floci.getEndpoint()))
+                .region(Region.of(floci.getRegion()))
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create(floci.getAccessKey(), floci.getSecretKey())))
+                .forcePathStyle(true)
+                .build();
+
+        s3.createBucket(b -> b.bucket("my-bucket"));
+
+        assertThat(s3.listBuckets().buckets())
+                .anyMatch(b -> b.name().equals("my-bucket"));
+    }
+}
+```
+
+**Spring Boot** — add `spring-boot-testcontainers-floci` and use `@ServiceConnection` for zero-config auto-wiring:
+
+```java
+@SpringBootTest
+@Testcontainers
+class AppIntegrationTest {
+
+    @Container
+    @ServiceConnection
+    static FlociContainer floci = new FlociContainer();
+
+    @Autowired
+    S3Client s3;
+
+    @Test
+    void shouldCreateBucket() {
+        s3.createBucket(b -> b.bucket("my-bucket"));
+        assertThat(s3.listBuckets().buckets())
+                .anyMatch(b -> b.name().equals("my-bucket"));
+    }
+}
+```
+
+### Node.js / TypeScript
+
+```sh
+npm install --save-dev @floci/testcontainers
+```
+
+```ts
+import { FlociContainer } from "@floci/testcontainers";
+import { S3Client, CreateBucketCommand, ListBucketsCommand } from "@aws-sdk/client-s3";
+
+describe("S3", () => {
+    let floci: FlociContainer;
+
+    beforeAll(async () => {
+        floci = await new FlociContainer().start();
+    });
+
+    afterAll(async () => {
+        await floci.stop();
+    });
+
+    it("should create and list a bucket", async () => {
+        const s3 = new S3Client({
+            endpoint: floci.getEndpoint(),
+            region: floci.getRegion(),
+            credentials: {
+                accessKeyId: floci.getAccessKey(),
+                secretAccessKey: floci.getSecretKey(),
+            },
+            forcePathStyle: true,
+        });
+
+        await s3.send(new CreateBucketCommand({ Bucket: "my-bucket" }));
+        const { Buckets } = await s3.send(new ListBucketsCommand({}));
+        expect(Buckets?.some(b => b.Name === "my-bucket")).toBe(true);
+    });
+});
+```
+
+### Python
+
+```sh
+pip install testcontainers-floci
+```
+
+```python
+import boto3
+from testcontainers_floci import FlociContainer
+
+def test_s3_create_bucket():
+    with FlociContainer() as floci:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=floci.get_endpoint(),
+            region_name=floci.get_region(),
+            aws_access_key_id=floci.get_access_key(),
+            aws_secret_access_key=floci.get_secret_key(),
+        )
+
+        s3.create_bucket(Bucket="my-bucket")
+        buckets = s3.list_buckets()["Buckets"]
+        assert any(b["Name"] == "my-bucket" for b in buckets)
+```
+
+Pytest fixture style:
+
+```python
+import pytest
+import boto3
+from testcontainers_floci import FlociContainer
+
+@pytest.fixture(scope="session")
+def floci():
+    with FlociContainer() as container:
+        yield container
+
+def test_s3_create_bucket(floci):
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=floci.get_endpoint(),
+        region_name=floci.get_region(),
+        aws_access_key_id=floci.get_access_key(),
+        aws_secret_access_key=floci.get_secret_key(),
+    )
+    s3.create_bucket(Bucket="my-bucket")
+    buckets = s3.list_buckets()["Buckets"]
+    assert any(b["Name"] == "my-bucket" for b in buckets)
+```
+
+### Go
+
+Go support is in progress. Track it at [testcontainers-floci-go](https://github.com/floci-io/testcontainers-floci-go).
+
 ## Compatibility Testing
 
 > For full compatibility validation against real SDK and client workflows, see the [compatibility-tests](./compatibility-tests/) directory.
@@ -537,11 +708,33 @@ Available compatibility test modules:
 
 ## Image Tags
 
-| Tag | Description |
-|---|---|
-| `latest` | Native image — sub-second startup **(recommended)** |
-| `latest-jvm` | JVM image |
-| `x.y.z` / `x.y.z-jvm` | Pinned releases |
+Every tag combines two choices: **variant** (what's inside) and **channel** (how stable).
+
+|  | Standard | Compat (+ AWS CLI + boto3) |
+|---|---|---|
+| **Release (latest)** | `latest` ✅ | `latest-compat` |
+| **Release (pinned)** | `x.y.z` | `x.y.z-compat` |
+| **Nightly (floating)** | `nightly` | `nightly-compat` |
+| **Nightly (dated)** | `nightly-mmddyyyy` | `nightly-mmddyyyy-compat` |
+
+- **Standard** — GraalVM native binary. ~24 ms startup, ~40 MB image, ~13 MiB idle memory.
+- **Compat** — Extends the standard image with Python 3, AWS CLI, and boto3. Same startup and memory, larger image.
+- **Release** — Published on every stable version tag.
+- **Nightly** — Built every night at 22:00 CT from `main`. Dated tags (e.g. `nightly-05022026`) are fixed; `nightly` always points to the latest.
+
+```yaml
+# Recommended
+image: floci/floci:latest
+
+# With AWS CLI + boto3
+image: floci/floci:latest-compat
+
+# Pinned
+image: floci/floci:1.5.11
+
+# Track main
+image: floci/floci:nightly
+```
 
 ## Configuration
 

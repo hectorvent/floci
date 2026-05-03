@@ -60,6 +60,7 @@ nav:
     - Installation: getting-started/installation.md
     - AWS CLI & SDK Setup: getting-started/aws-setup.md
   - Configuration:
+    - Docker Images: configuration/docker-images.md
     - Docker Compose: configuration/docker-compose.md
     - Ports Reference: configuration/ports.md
     - application.yml Reference: configuration/application-yml.md
@@ -100,4 +101,10 @@ nav:
     - EC2: services/ec2.md
     - AppConfig: services/appconfig.md
     - Bedrock Runtime: services/bedrock-runtime.md
+  - Testcontainers:
+    - Overview: testcontainers/index.md
+    - Java: testcontainers/java.md
+    - Node.js / TypeScript: testcontainers/nodejs.md
+    - Python: testcontainers/python.md
+    - Go: testcontainers/go.md
   - Contributing: contributing.md

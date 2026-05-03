@@ -1,6 +1,6 @@
 # Services Overview
 
-Floci emulates 41 AWS services on a single port (`4566`). All services use the real AWS wire protocol, your existing AWS CLI commands and SDK clients work without modification.
+Floci emulates 42 AWS services on a single port (`4566`). All services use the real AWS wire protocol, your existing AWS CLI commands and SDK clients work without modification.
 
 This page is the canonical reference for supported service and operation counts. Some services expose separate control-plane and data-plane rows below. Other docs (and the README) should link here rather than duplicating the table.
 
@@ -18,7 +18,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [DynamoDB Streams](dynamodb.md#streams) | `POST /` + `X-Amz-Target: DynamoDBStreams_20120810.*` | JSON 1.1 | 4 |
 | [Lambda](lambda.md) | `/2015-03-31/functions/...` | REST JSON | 30 |
 | [API Gateway v1](api-gateway.md) | `/restapis/...` | REST JSON | 62 |
-| [API Gateway v2](api-gateway.md#v2) | `/v2/apis/...` | REST JSON | 21 |
+| [API Gateway v2](api-gateway.md#v2) | `/v2/apis/...` | REST JSON | 48 |
 | [IAM](iam.md) | `POST /` with `Action=` param | Query | 68 |
 | [STS](sts.md) | `POST /` with `Action=` param | Query | 7 |
 | [Cognito](cognito.md) | `POST /` + `X-Amz-Target: AWSCognitoIdentityProviderService.*` | JSON 1.1 | 43 |
@@ -49,6 +49,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [Bedrock Runtime](bedrock-runtime.md) | `/model/{modelId}/converse`, `/model/{modelId}/invoke` | REST JSON | 2 (stub; streaming returns 501) |
 | [EKS](eks.md) | `/clusters`, `/clusters/{name}`, `/tags/{resourceArn}` | REST JSON | 7 |
 | [ELB v2](elb.md) | `POST /` with `Action=` param | Query | 34 |
+| [Auto Scaling](autoscaling.md) | `POST /` with `Action=` param | Query | 33 |
 | [MSK](msk.md) | `/v1/clusters/...`, `/api/v2/clusters/...` | REST JSON | 8 |
 | [Athena](athena.md) | `POST /` + `X-Amz-Target: AmazonAthena.*` | JSON 1.1 | 8 |
 | [Glue](glue.md) | `POST /` + `X-Amz-Target: AWSGlue.*` | JSON 1.1 | 15 |

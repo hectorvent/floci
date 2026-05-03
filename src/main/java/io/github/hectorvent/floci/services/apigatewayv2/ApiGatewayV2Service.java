@@ -27,6 +27,9 @@ public class ApiGatewayV2Service {
     private final StorageBackend<String, Authorizer> authorizerStore;
     private final StorageBackend<String, Deployment> deploymentStore;
     private final StorageBackend<String, Stage> stageStore;
+    private final StorageBackend<String, RouteResponse> routeResponseStore;
+    private final StorageBackend<String, IntegrationResponse> integrationResponseStore;
+    private final StorageBackend<String, Model> modelStore;
     private final RegionResolver regionResolver;
 
     @Inject
@@ -43,6 +46,12 @@ public class ApiGatewayV2Service {
                 new TypeReference<>() {});
         this.stageStore = storageFactory.create("apigatewayv2", "apigatewayv2-stages.json",
                 new TypeReference<>() {});
+        this.routeResponseStore = storageFactory.create("apigatewayv2", "apigatewayv2-routeresponses.json",
+                new TypeReference<>() {});
+        this.integrationResponseStore = storageFactory.create("apigatewayv2", "apigatewayv2-integrationresponses.json",
+                new TypeReference<>() {});
+        this.modelStore = storageFactory.create("apigatewayv2", "apigatewayv2-models.json",
+                new TypeReference<>() {});
         this.regionResolver = regionResolver;
     }
 
@@ -51,16 +60,46 @@ public class ApiGatewayV2Service {
     public Api createApi(String region, Map<String, Object> request) {
         String name = (String) request.get("name");
         String protocolType = (String) request.getOrDefault("protocolType", "HTTP");
+        String routeSelectionExpression = (String) request.get("routeSelectionExpression");
+        String description = (String) request.get("description");
+        String apiKeySelectionExpression = (String) request.get("apiKeySelectionExpression");
+
+        if ("WEBSOCKET".equals(protocolType) && (routeSelectionExpression == null || routeSelectionExpression.isBlank())) {
+            throw new AwsException("BadRequestException",
+                    "RouteSelectionExpression is required for WEBSOCKET protocol", 400);
+        }
+
+        // Apply AWS defaults
+        if (apiKeySelectionExpression == null) {
+            apiKeySelectionExpression = "$request.header.x-api-key";
+        }
+        if ("HTTP".equals(protocolType) && routeSelectionExpression == null) {
+            routeSelectionExpression = "${request.method} ${request.path}";
+        }
 
         Api api = new Api();
         api.setApiId(shortId(10));
         api.setName(name);
         api.setProtocolType(protocolType);
         api.setCreatedDate(System.currentTimeMillis());
-        api.setApiEndpoint(String.format("https://%s.execute-api.%s.amazonaws.com", api.getApiId(), region));
+        api.setRouteSelectionExpression(routeSelectionExpression);
+        api.setDescription(description);
+        api.setApiKeySelectionExpression(apiKeySelectionExpression);
+
+        if ("WEBSOCKET".equals(protocolType)) {
+            api.setApiEndpoint(String.format("wss://%s.execute-api.%s.amazonaws.com", api.getApiId(), region));
+        } else {
+            api.setApiEndpoint(String.format("https://%s.execute-api.%s.amazonaws.com", api.getApiId(), region));
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> tags = (Map<String, String>) request.get("tags");
+        if (tags != null) {
+            api.setTags(tags);
+        }
 
         apiStore.put(apiKey(region, api.getApiId()), api);
-        LOG.infov("Created HTTP API: {0} ({1}) in {2}", api.getName(), api.getApiId(), region);
+        LOG.infov("Created {0} API: {1} ({2}) in {3}", protocolType, api.getName(), api.getApiId(), region);
         return api;
     }
 
@@ -79,6 +118,31 @@ public class ApiGatewayV2Service {
         apiStore.delete(apiKey(region, apiId));
     }
 
+    public Api updateApi(String region, String apiId, Map<String, Object> request) {
+        Api api = getApi(region, apiId);
+
+        if (request.containsKey("name") && request.get("name") != null) {
+            api.setName((String) request.get("name"));
+        }
+        if (request.containsKey("description") && request.get("description") != null) {
+            api.setDescription((String) request.get("description"));
+        }
+        if (request.containsKey("routeSelectionExpression") && request.get("routeSelectionExpression") != null) {
+            api.setRouteSelectionExpression((String) request.get("routeSelectionExpression"));
+        }
+        if (request.containsKey("apiKeySelectionExpression") && request.get("apiKeySelectionExpression") != null) {
+            api.setApiKeySelectionExpression((String) request.get("apiKeySelectionExpression"));
+        }
+        if (request.containsKey("tags")) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> tags = (Map<String, String>) request.get("tags");
+            api.setTags(tags);
+        }
+
+        apiStore.put(apiKey(region, apiId), api);
+        return api;
+    }
+
     // ──────────────────────────── Authorizer CRUD ────────────────────────────
 
     public Authorizer createAuthorizer(String region, String apiId, Map<String, Object> request) {
@@ -88,9 +152,14 @@ public class ApiGatewayV2Service {
         auth.setName((String) request.get("name"));
         auth.setAuthorizerType((String) request.get("authorizerType"));
 
-        @SuppressWarnings("unchecked")
-        List<String> identitySource = (List<String>) request.get("identitySource");
-        auth.setIdentitySource(identitySource);
+        Object identitySourceRaw = request.get("identitySource");
+        if (identitySourceRaw instanceof String s) {
+            auth.setIdentitySource(List.of(s));
+        } else if (identitySourceRaw instanceof List<?>) {
+            @SuppressWarnings("unchecked")
+            List<String> identitySource = (List<String>) identitySourceRaw;
+            auth.setIdentitySource(identitySource);
+        }
 
         @SuppressWarnings("unchecked")
         Map<String, Object> jwtConfig = (Map<String, Object>) request.get("jwtConfiguration");
@@ -121,6 +190,39 @@ public class ApiGatewayV2Service {
         authorizerStore.delete(authorizerKey(region, apiId, authorizerId));
     }
 
+    public Authorizer updateAuthorizer(String region, String apiId, String authorizerId,
+                                       Map<String, Object> request) {
+        Authorizer auth = getAuthorizer(region, apiId, authorizerId);
+
+        if (request.containsKey("name") && request.get("name") != null) {
+            auth.setName((String) request.get("name"));
+        }
+        if (request.containsKey("authorizerType") && request.get("authorizerType") != null) {
+            auth.setAuthorizerType((String) request.get("authorizerType"));
+        }
+        if (request.containsKey("identitySource") && request.get("identitySource") != null) {
+            Object identitySourceRaw = request.get("identitySource");
+            if (identitySourceRaw instanceof String s) {
+                auth.setIdentitySource(List.of(s));
+            } else if (identitySourceRaw instanceof List<?>) {
+                @SuppressWarnings("unchecked")
+                List<String> identitySource = (List<String>) identitySourceRaw;
+                auth.setIdentitySource(identitySource);
+            }
+        }
+        if (request.containsKey("jwtConfiguration") && request.get("jwtConfiguration") != null) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> jwtConfig = (Map<String, Object>) request.get("jwtConfiguration");
+            @SuppressWarnings("unchecked")
+            List<String> audience = (List<String>) jwtConfig.get("audience");
+            String issuer = (String) jwtConfig.get("issuer");
+            auth.setJwtConfiguration(new Authorizer.JwtConfiguration(audience, issuer));
+        }
+
+        authorizerStore.put(authorizerKey(region, apiId, authorizerId), auth);
+        return auth;
+    }
+
     // ──────────────────────────── Route CRUD ────────────────────────────
 
     public Route createRoute(String region, String apiId, Map<String, Object> request) {
@@ -131,6 +233,7 @@ public class ApiGatewayV2Service {
         route.setAuthorizationType((String) request.getOrDefault("authorizationType", "NONE"));
         route.setAuthorizerId((String) request.get("authorizerId"));
         route.setTarget((String) request.get("target"));
+        route.setRouteResponseSelectionExpression((String) request.get("routeResponseSelectionExpression"));
 
         routeStore.put(routeKey(region, apiId, route.getRouteId()), route);
         return route;
@@ -149,6 +252,29 @@ public class ApiGatewayV2Service {
     public void deleteRoute(String region, String apiId, String routeId) {
         getRoute(region, apiId, routeId);
         routeStore.delete(routeKey(region, apiId, routeId));
+    }
+
+    public Route updateRoute(String region, String apiId, String routeId, Map<String, Object> request) {
+        Route route = getRoute(region, apiId, routeId);
+
+        if (request.containsKey("routeKey") && request.get("routeKey") != null) {
+            route.setRouteKey((String) request.get("routeKey"));
+        }
+        if (request.containsKey("authorizationType") && request.get("authorizationType") != null) {
+            route.setAuthorizationType((String) request.get("authorizationType"));
+        }
+        if (request.containsKey("authorizerId") && request.get("authorizerId") != null) {
+            route.setAuthorizerId((String) request.get("authorizerId"));
+        }
+        if (request.containsKey("target") && request.get("target") != null) {
+            route.setTarget((String) request.get("target"));
+        }
+        if (request.containsKey("routeResponseSelectionExpression") && request.get("routeResponseSelectionExpression") != null) {
+            route.setRouteResponseSelectionExpression((String) request.get("routeResponseSelectionExpression"));
+        }
+
+        routeStore.put(routeKey(region, apiId, routeId), route);
+        return route;
     }
 
     /**
@@ -229,6 +355,24 @@ public class ApiGatewayV2Service {
         integrationStore.delete(integrationKey(region, apiId, integrationId));
     }
 
+    public Integration updateIntegration(String region, String apiId, String integrationId,
+                                         Map<String, Object> request) {
+        Integration integration = getIntegration(region, apiId, integrationId);
+
+        if (request.containsKey("integrationType") && request.get("integrationType") != null) {
+            integration.setIntegrationType((String) request.get("integrationType"));
+        }
+        if (request.containsKey("integrationUri") && request.get("integrationUri") != null) {
+            integration.setIntegrationUri((String) request.get("integrationUri"));
+        }
+        if (request.containsKey("payloadFormatVersion") && request.get("payloadFormatVersion") != null) {
+            integration.setPayloadFormatVersion((String) request.get("payloadFormatVersion"));
+        }
+
+        integrationStore.put(integrationKey(region, apiId, integrationId), integration);
+        return integration;
+    }
+
     // ──────────────────────────── Stage CRUD ────────────────────────────
 
     public Stage createStage(String region, String apiId, Map<String, Object> request) {
@@ -258,6 +402,22 @@ public class ApiGatewayV2Service {
     public void deleteStage(String region, String apiId, String stageName) {
         getStage(region, apiId, stageName);
         stageStore.delete(stageKey(region, apiId, stageName));
+    }
+
+    public Stage updateStage(String region, String apiId, String stageName,
+                             Map<String, Object> request) {
+        Stage stage = getStage(region, apiId, stageName);
+
+        if (request.containsKey("deploymentId") && request.get("deploymentId") != null) {
+            stage.setDeploymentId((String) request.get("deploymentId"));
+        }
+        if (request.containsKey("autoDeploy") && request.get("autoDeploy") != null) {
+            stage.setAutoDeploy(Boolean.parseBoolean(String.valueOf(request.get("autoDeploy"))));
+        }
+
+        stage.setLastUpdatedDate(System.currentTimeMillis());
+        stageStore.put(stageKey(region, apiId, stageName), stage);
+        return stage;
     }
 
     // ──────────────────────────── Deployment CRUD ────────────────────────────
@@ -306,6 +466,259 @@ public class ApiGatewayV2Service {
         deploymentStore.delete(deploymentKey(region, apiId, deploymentId));
     }
 
+    public Deployment updateDeployment(String region, String apiId, String deploymentId,
+                                       Map<String, Object> request) {
+        Deployment deployment = getDeployment(region, apiId, deploymentId);
+
+        if (request.containsKey("description") && request.get("description") != null) {
+            deployment.setDescription((String) request.get("description"));
+        }
+
+        deploymentStore.put(deploymentKey(region, apiId, deploymentId), deployment);
+        return deployment;
+    }
+
+    // ──────────────────────────── Route Response CRUD ────────────────────────────
+
+    public RouteResponse createRouteResponse(String region, String apiId, String routeId, Map<String, Object> request) {
+        getApi(region, apiId);
+        getRoute(region, apiId, routeId);
+
+        RouteResponse rr = new RouteResponse();
+        rr.setRouteResponseId(shortId(8));
+        rr.setRouteId(routeId);
+        rr.setRouteResponseKey((String) request.get("routeResponseKey"));
+        rr.setModelSelectionExpression((String) request.get("modelSelectionExpression"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> responseModels = (Map<String, String>) request.get("responseModels");
+        rr.setResponseModels(responseModels);
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> responseParameters = (Map<String, String>) request.get("responseParameters");
+        rr.setResponseParameters(responseParameters);
+
+        routeResponseStore.put(routeResponseKey(region, apiId, routeId, rr.getRouteResponseId()), rr);
+        return rr;
+    }
+
+    public RouteResponse getRouteResponse(String region, String apiId, String routeId, String routeResponseId) {
+        return routeResponseStore.get(routeResponseKey(region, apiId, routeId, routeResponseId))
+                .orElseThrow(() -> new AwsException("NotFoundException", "Route response not found", 404));
+    }
+
+    public List<RouteResponse> getRouteResponses(String region, String apiId, String routeId) {
+        String prefix = region + "::" + apiId + "::" + routeId + "::";
+        return routeResponseStore.scan(k -> k.startsWith(prefix));
+    }
+
+    public RouteResponse updateRouteResponse(String region, String apiId, String routeId, String routeResponseId, Map<String, Object> request) {
+        RouteResponse rr = getRouteResponse(region, apiId, routeId, routeResponseId);
+
+        if (request.containsKey("routeResponseKey") && request.get("routeResponseKey") != null) {
+            rr.setRouteResponseKey((String) request.get("routeResponseKey"));
+        }
+        if (request.containsKey("modelSelectionExpression") && request.get("modelSelectionExpression") != null) {
+            rr.setModelSelectionExpression((String) request.get("modelSelectionExpression"));
+        }
+        if (request.containsKey("responseModels") && request.get("responseModels") != null) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> responseModels = (Map<String, String>) request.get("responseModels");
+            rr.setResponseModels(responseModels);
+        }
+        if (request.containsKey("responseParameters") && request.get("responseParameters") != null) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> responseParameters = (Map<String, String>) request.get("responseParameters");
+            rr.setResponseParameters(responseParameters);
+        }
+
+        routeResponseStore.put(routeResponseKey(region, apiId, routeId, routeResponseId), rr);
+        return rr;
+    }
+
+    public void deleteRouteResponse(String region, String apiId, String routeId, String routeResponseId) {
+        getRouteResponse(region, apiId, routeId, routeResponseId);
+        routeResponseStore.delete(routeResponseKey(region, apiId, routeId, routeResponseId));
+    }
+
+    // ──────────────────────────── Integration Response CRUD ────────────────────────────
+
+    public IntegrationResponse createIntegrationResponse(String region, String apiId, String integrationId, Map<String, Object> request) {
+        getApi(region, apiId);
+        getIntegration(region, apiId, integrationId);
+
+        IntegrationResponse ir = new IntegrationResponse();
+        ir.setIntegrationResponseId(shortId(8));
+        ir.setIntegrationId(integrationId);
+        ir.setIntegrationResponseKey((String) request.get("integrationResponseKey"));
+        ir.setContentHandlingStrategy((String) request.get("contentHandlingStrategy"));
+        ir.setTemplateSelectionExpression((String) request.get("templateSelectionExpression"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> responseTemplates = (Map<String, String>) request.get("responseTemplates");
+        ir.setResponseTemplates(responseTemplates);
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> responseParameters = (Map<String, String>) request.get("responseParameters");
+        ir.setResponseParameters(responseParameters);
+
+        integrationResponseStore.put(integrationResponseKey(region, apiId, integrationId, ir.getIntegrationResponseId()), ir);
+        return ir;
+    }
+
+    public IntegrationResponse getIntegrationResponse(String region, String apiId, String integrationId, String integrationResponseId) {
+        return integrationResponseStore.get(integrationResponseKey(region, apiId, integrationId, integrationResponseId))
+                .orElseThrow(() -> new AwsException("NotFoundException", "Integration response not found", 404));
+    }
+
+    public List<IntegrationResponse> getIntegrationResponses(String region, String apiId, String integrationId) {
+        String prefix = region + "::" + apiId + "::" + integrationId + "::";
+        return integrationResponseStore.scan(k -> k.startsWith(prefix));
+    }
+
+    public IntegrationResponse updateIntegrationResponse(String region, String apiId, String integrationId, String integrationResponseId, Map<String, Object> request) {
+        IntegrationResponse ir = getIntegrationResponse(region, apiId, integrationId, integrationResponseId);
+
+        if (request.containsKey("integrationResponseKey") && request.get("integrationResponseKey") != null) {
+            ir.setIntegrationResponseKey((String) request.get("integrationResponseKey"));
+        }
+        if (request.containsKey("contentHandlingStrategy") && request.get("contentHandlingStrategy") != null) {
+            ir.setContentHandlingStrategy((String) request.get("contentHandlingStrategy"));
+        }
+        if (request.containsKey("templateSelectionExpression") && request.get("templateSelectionExpression") != null) {
+            ir.setTemplateSelectionExpression((String) request.get("templateSelectionExpression"));
+        }
+        if (request.containsKey("responseTemplates") && request.get("responseTemplates") != null) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> responseTemplates = (Map<String, String>) request.get("responseTemplates");
+            ir.setResponseTemplates(responseTemplates);
+        }
+        if (request.containsKey("responseParameters") && request.get("responseParameters") != null) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> responseParameters = (Map<String, String>) request.get("responseParameters");
+            ir.setResponseParameters(responseParameters);
+        }
+
+        integrationResponseStore.put(integrationResponseKey(region, apiId, integrationId, integrationResponseId), ir);
+        return ir;
+    }
+
+    public void deleteIntegrationResponse(String region, String apiId, String integrationId, String integrationResponseId) {
+        getIntegrationResponse(region, apiId, integrationId, integrationResponseId);
+        integrationResponseStore.delete(integrationResponseKey(region, apiId, integrationId, integrationResponseId));
+    }
+
+    // ──────────────────────────── Model CRUD ────────────────────────────
+
+    public Model createModel(String region, String apiId, Map<String, Object> request) {
+        getApi(region, apiId);
+        Model model = new Model();
+        model.setModelId(shortId(10));
+        model.setName((String) request.get("name"));
+        model.setSchema((String) request.get("schema"));
+        model.setDescription((String) request.get("description"));
+        model.setContentType((String) request.get("contentType"));
+        modelStore.put(modelKey(region, apiId, model.getModelId()), model);
+        return model;
+    }
+
+    public Model getModel(String region, String apiId, String modelId) {
+        return modelStore.get(modelKey(region, apiId, modelId))
+                .orElseThrow(() -> new AwsException("NotFoundException", "Model not found", 404));
+    }
+
+    public List<Model> getModels(String region, String apiId) {
+        String prefix = region + "::" + apiId + "::";
+        return modelStore.scan(k -> k.startsWith(prefix));
+    }
+
+    public Model updateModel(String region, String apiId, String modelId, Map<String, Object> request) {
+        Model model = getModel(region, apiId, modelId);
+
+        if (request.containsKey("name") && request.get("name") != null) {
+            model.setName((String) request.get("name"));
+        }
+        if (request.containsKey("schema") && request.get("schema") != null) {
+            model.setSchema((String) request.get("schema"));
+        }
+        if (request.containsKey("description") && request.get("description") != null) {
+            model.setDescription((String) request.get("description"));
+        }
+        if (request.containsKey("contentType") && request.get("contentType") != null) {
+            model.setContentType((String) request.get("contentType"));
+        }
+
+        modelStore.put(modelKey(region, apiId, modelId), model);
+        return model;
+    }
+
+    public void deleteModel(String region, String apiId, String modelId) {
+        getModel(region, apiId, modelId);
+        modelStore.delete(modelKey(region, apiId, modelId));
+    }
+
+    // ──────────────────────────── Standalone Tagging ────────────────────────────
+
+    /**
+     * Parses an API Gateway v2 resource ARN and returns a two-element array
+     * [region, apiId]. Throws BadRequestException if the ARN is malformed.
+     *
+     * Expected format: arn:aws:apigateway:{region}::/apis/{apiId}
+     */
+    private String[] parseArn(String resourceArn) {
+        if (resourceArn == null || resourceArn.isBlank()) {
+            throw new AwsException("BadRequestException", "ResourceArn must not be blank", 400);
+        }
+        String[] parts = resourceArn.split(":");
+        if (parts.length < 6) {
+            throw new AwsException("BadRequestException",
+                    "Invalid ResourceArn format: " + resourceArn, 400);
+        }
+        String region = parts[3];
+        String resource = parts[5]; // e.g. "/apis/abc1234567"
+        int lastSlash = resource.lastIndexOf('/');
+        if (lastSlash < 0 || lastSlash == resource.length() - 1) {
+            throw new AwsException("BadRequestException",
+                    "Cannot extract apiId from ResourceArn: " + resourceArn, 400);
+        }
+        String apiId = resource.substring(lastSlash + 1);
+        return new String[]{region, apiId};
+    }
+
+    public void tagResource(String resourceArn, Map<String, String> tags) {
+        String[] parsed = parseArn(resourceArn);
+        String region = parsed[0];
+        String apiId  = parsed[1];
+        Api api = getApi(region, apiId);
+        if (tags != null && !tags.isEmpty()) {
+            if (api.getTags() == null) {
+                api.setTags(new java.util.HashMap<>());
+            }
+            api.getTags().putAll(tags);
+        }
+        apiStore.put(apiKey(region, apiId), api);
+    }
+
+    public void untagResource(String resourceArn, List<String> tagKeys) {
+        String[] parsed = parseArn(resourceArn);
+        String region = parsed[0];
+        String apiId  = parsed[1];
+        Api api = getApi(region, apiId);
+        if (tagKeys != null && api.getTags() != null) {
+            tagKeys.forEach(k -> api.getTags().remove(k));
+        }
+        apiStore.put(apiKey(region, apiId), api);
+    }
+
+    public Map<String, String> getTags(String resourceArn) {
+        String[] parsed = parseArn(resourceArn);
+        String region = parsed[0];
+        String apiId  = parsed[1];
+        Api api = getApi(region, apiId);
+        Map<String, String> tags = api.getTags();
+        return (tags != null) ? new java.util.HashMap<>(tags) : java.util.Collections.emptyMap();
+    }
+
     // ──────────────────────────── Key helpers ────────────────────────────
 
     private String apiKey(String region, String apiId) {
@@ -330,6 +743,18 @@ public class ApiGatewayV2Service {
 
     private String deploymentKey(String region, String apiId, String deploymentId) {
         return region + "::" + apiId + "::" + deploymentId;
+    }
+
+    private String routeResponseKey(String region, String apiId, String routeId, String routeResponseId) {
+        return region + "::" + apiId + "::" + routeId + "::" + routeResponseId;
+    }
+
+    private String integrationResponseKey(String region, String apiId, String integrationId, String integrationResponseId) {
+        return region + "::" + apiId + "::" + integrationId + "::" + integrationResponseId;
+    }
+
+    private String modelKey(String region, String apiId, String modelId) {
+        return region + "::" + apiId + "::" + modelId;
     }
 
     private static String shortId(int length) {

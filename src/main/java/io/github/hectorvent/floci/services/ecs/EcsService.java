@@ -452,16 +452,34 @@ public class EcsService {
         return svc;
     }
 
-    public EcsServiceModel deleteService(String clusterRef, String serviceName, String region) {
+    public EcsServiceModel deleteService(String clusterRef, String serviceName, boolean force, String region) {
         EcsCluster cluster = resolveClusterOrDefault(clusterRef, region);
         String key = serviceKey(region, cluster.getClusterName(), serviceName);
-        EcsServiceModel svc = services.remove(key);
+        EcsServiceModel svc = services.get(key);
         if (svc == null) {
             throw new AwsException("ServiceNotFoundException", "Service " + serviceName + " not found.", 404);
         }
+        if (!force && svc.getDesiredCount() > 0) {
+            throw new AwsException("InvalidParameterException",
+                    "The service cannot be stopped. Update the service to 0 tasks or use the force flag.", 400);
+        }
+        services.remove(key);
         svc.setStatus("INACTIVE");
         svc.setDesiredCount(0);
         cluster.setActiveServicesCount(Math.max(0, cluster.getActiveServicesCount() - 1));
+        tasks.values().stream()
+                .filter(t -> t.getClusterArn().equals(cluster.getClusterArn()))
+                .filter(t -> svc.getServiceArn().equals(t.getGroup())
+                        || svc.getServiceName().equals(t.getGroup()))
+                .filter(t -> !TaskStatus.STOPPED.name().equals(t.getLastStatus()))
+                .forEach(t -> {
+                    try {
+                        stopTask(cluster.getClusterName(), t.getTaskArn(), "Service deleted", region);
+                    } catch (Exception e) {
+                        LOG.warnv("Failed to stop task {0} on service delete: {1}",
+                                t.getTaskArn(), e.getMessage());
+                    }
+                });
         return svc;
     }
 
