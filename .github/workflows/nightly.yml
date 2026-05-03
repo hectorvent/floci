@@ -12,7 +12,7 @@ name: Nightly
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # 22:00 CT (CDT/UTC-5); shifts to 22:00 CST in winter
+    - cron: '0 4 * * *'   # 23:00 CT (CDT/UTC-5); shifts to 23:00 CST in winter
   workflow_dispatch:        # Allow maintainers to trigger manually
 
 permissions:
