@@ -28,7 +28,7 @@ jobs:
     name: Prepare nightly version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ needs.prepare.outputs.version }}
+      version: ${{ steps.date.outputs.version }}
 
     steps:
       - name: Set date version (CT)

@@ -1,5 +1,5 @@
-FROM floci/floci:${VERSION}
 ARG VERSION=latest
+FROM floci/floci:${VERSION}
 
 USER root
 RUN microdnf install -y --nodocs python3 python3-pip \
