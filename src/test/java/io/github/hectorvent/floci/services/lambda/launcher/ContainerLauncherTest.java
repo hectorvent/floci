@@ -68,6 +68,7 @@ class ContainerLauncherTest {
         when(docker.logMaxSize()).thenReturn("10m");
         when(docker.logMaxFile()).thenReturn("3");
         when(config.baseUrl()).thenReturn("http://localhost:4566");
+        lenient().when(config.defaultRegion()).thenReturn("us-east-1");
         lenient().when(config.hostname()).thenReturn(Optional.empty());
 
         when(embeddedDnsServer.getServerIp()).thenReturn(Optional.empty());
@@ -178,6 +179,50 @@ class ContainerLauncherTest {
                 "default AWS_SECRET_ACCESS_KEY should be injected");
         assertTrue(env.contains("AWS_SESSION_TOKEN=test"),
                 "default AWS_SESSION_TOKEN should be injected");
+    }
+
+    @Test
+    void launchFunction_injectsConfiguredDefaultRegionWhenArnMissing() throws Exception {
+        Path codePath = Files.createDirectory(tempDir.resolve("region-default"));
+        when(config.defaultRegion()).thenReturn("eu-central-1");
+
+        LambdaFunction fn = new LambdaFunction();
+        fn.setFunctionName("region-default-fn");
+        fn.setRuntime("nodejs20.x");
+        fn.setHandler("index.handler");
+        fn.setCodeLocalPath(codePath.toString());
+
+        launcher.launch(fn);
+
+        ArgumentCaptor<ContainerSpec> specCaptor = ArgumentCaptor.forClass(ContainerSpec.class);
+        verify(lifecycleManager).create(specCaptor.capture());
+
+        List<String> env = specCaptor.getValue().env();
+        assertTrue(env.contains("AWS_DEFAULT_REGION=eu-central-1"));
+        assertTrue(env.contains("AWS_REGION=eu-central-1"));
+    }
+
+    @Test
+    void launchFunction_injectsFunctionArnRegionForAwsSdkSigning() throws Exception {
+        Path codePath = Files.createDirectory(tempDir.resolve("region-arn"));
+
+        LambdaFunction fn = new LambdaFunction();
+        fn.setFunctionName("region-arn-fn");
+        fn.setRuntime("nodejs20.x");
+        fn.setHandler("index.handler");
+        fn.setCodeLocalPath(codePath.toString());
+        fn.setFunctionArn("arn:aws:lambda:eu-west-2:000000000000:function:region-arn-fn");
+
+        launcher.launch(fn);
+
+        ArgumentCaptor<ContainerSpec> specCaptor = ArgumentCaptor.forClass(ContainerSpec.class);
+        verify(lifecycleManager).create(specCaptor.capture());
+
+        List<String> env = specCaptor.getValue().env();
+        assertTrue(env.contains("AWS_DEFAULT_REGION=eu-west-2"));
+        assertTrue(env.contains("AWS_REGION=eu-west-2"));
+        verify(logStreamer).attach(
+                eq("container-123"), any(), any(), eq("eu-west-2"), eq("lambda:region-arn-fn"));
     }
 
     @Test

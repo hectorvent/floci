@@ -26,6 +26,9 @@ class SqsJsonProtocolTest {
     private static final String CONTENT_TYPE = "application/x-amz-json-1.0";
     private static final String ACCOUNT_ID = "000000000000";
     private static final String QUEUE_NAME = "json-protocol-test-queue";
+    private static final String AUTH_SQS_EU_WEST_2 =
+            "AWS4-HMAC-SHA256 Credential=AKID/20260215/eu-west-2/sqs/aws4_request, "
+                    + "SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=abc";
 
     private static String queueUrl;
     private static String receiptHandle;
@@ -182,5 +185,59 @@ class SqsJsonProtocolTest {
             .post("/" + ACCOUNT_ID + "/" + QUEUE_NAME)
         .then()
             .statusCode(200);
+    }
+
+    @Test
+    @Order(8)
+    void signedJsonRequestsAcceptTemporaryCredentialsAndRewrittenQueueHost() {
+        String signedQueueName = QUEUE_NAME + "-signed";
+        String createBody = "{\"QueueName\":\"" + signedQueueName + "\"}";
+
+        String signedQueueUrl = given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AmazonSQS.CreateQueue")
+            .header("Authorization", AUTH_SQS_EU_WEST_2)
+            .header("X-Amz-Date", "20260215T120000Z")
+            .header("X-Amz-Security-Token", "session-token")
+            .body(createBody)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("QueueUrl", containsString(signedQueueName))
+            .extract().jsonPath().getString("QueueUrl");
+
+        String lambdaReachableQueueUrl = signedQueueUrl.replaceFirst("://[^/]+", "://floci:4566");
+        String sendBody = "{\"QueueUrl\":\"" + lambdaReachableQueueUrl + "\","
+                + "\"MessageBody\":\"hello from signed json\"}";
+
+        given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AmazonSQS.SendMessage")
+            .header("Authorization", AUTH_SQS_EU_WEST_2)
+            .header("X-Amz-Date", "20260215T120000Z")
+            .header("X-Amz-Security-Token", "session-token")
+            .body(sendBody)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("MessageId", notNullValue());
+
+        String receiveBody = "{\"QueueUrl\":\"" + lambdaReachableQueueUrl + "\",\"MaxNumberOfMessages\":1}";
+
+        given()
+            .contentType(CONTENT_TYPE)
+            .header("X-Amz-Target", "AmazonSQS.ReceiveMessage")
+            .header("Authorization", AUTH_SQS_EU_WEST_2)
+            .header("X-Amz-Date", "20260215T120000Z")
+            .header("X-Amz-Security-Token", "session-token")
+            .body(receiveBody)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Messages", hasSize(1))
+            .body("Messages[0].Body", equalTo("hello from signed json"));
     }
 }
