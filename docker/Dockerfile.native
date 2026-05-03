@@ -64,11 +64,9 @@ ENV FLOCI_VERSION=${VERSION}
 ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
 
 COPY --from=build /app/target/*-runner /app/application
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN chmod +x /app/application
-
-COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/app/application"]

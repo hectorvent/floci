@@ -1,0 +1,10 @@
+FROM floci/floci:${VERSION}
+ARG VERSION=latest
+
+USER root
+RUN microdnf install -y --nodocs python3 python3-pip \
+    && pip3 install --no-cache-dir awscli boto3 \
+    && microdnf clean all \
+    && rm -rf /root/.cache/pip
+
+USER 1001

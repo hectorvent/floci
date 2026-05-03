@@ -708,11 +708,33 @@ Available compatibility test modules:
 
 ## Image Tags
 
-| Tag | Description |
-|---|---|
-| `latest` | Native image — sub-second startup **(recommended)** |
-| `latest-jvm` | JVM image |
-| `x.y.z` / `x.y.z-jvm` | Pinned releases |
+Every tag combines two choices: **variant** (what's inside) and **channel** (how stable).
+
+|  | Standard | Compat (+ AWS CLI + boto3) |
+|---|---|---|
+| **Release (latest)** | `latest` ✅ | `latest-compat` |
+| **Release (pinned)** | `x.y.z` | `x.y.z-compat` |
+| **Nightly (floating)** | `nightly` | `nightly-compat` |
+| **Nightly (dated)** | `nightly-mmddyyyy` | `nightly-mmddyyyy-compat` |
+
+- **Standard** — GraalVM native binary. ~24 ms startup, ~40 MB image, ~13 MiB idle memory.
+- **Compat** — Extends the standard image with Python 3, AWS CLI, and boto3. Same startup and memory, larger image.
+- **Release** — Published on every stable version tag.
+- **Nightly** — Built every night at 22:00 CT from `main`. Dated tags (e.g. `nightly-05022026`) are fixed; `nightly` always points to the latest.
+
+```yaml
+# Recommended
+image: floci/floci:latest
+
+# With AWS CLI + boto3
+image: floci/floci:latest-compat
+
+# Pinned
+image: floci/floci:1.5.11
+
+# Track main
+image: floci/floci:nightly
+```
 
 ## Configuration
 

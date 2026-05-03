@@ -14,7 +14,4 @@
 /pom.xml                 @hectorvent
 
 # Container build surface
-/Dockerfile              @hectorvent
-/Dockerfile.jvm-package  @hectorvent
-/Dockerfile.native       @hectorvent
-/Dockerfile.native-package @hectorvent
+/docker/                 @hectorvent

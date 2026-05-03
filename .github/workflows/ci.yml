@@ -7,17 +7,11 @@ on:
     paths:
       - 'src/**'
       - 'pom.xml'
-      - '.mvn/**'
-      - 'mvnw'
-      - 'mvnw.cmd'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'src/**'
       - 'pom.xml'
-      - '.mvn/**'
-      - 'mvnw'
-      - 'mvnw.cmd'
       - '.github/workflows/ci.yml'
 
 permissions:

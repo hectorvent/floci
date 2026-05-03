@@ -12,6 +12,11 @@ RUN mvn clean package -DskipTests -q
 
 # Stage 2: Runtime
 FROM eclipse-temurin:25-jre-alpine
+
+ARG VERSION=latest
+ENV FLOCI_VERSION=${VERSION}
+ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
+
 WORKDIR /app
 
 COPY --from=build /build/target/quarkus-app/ quarkus-app/
@@ -23,9 +28,5 @@ EXPOSE 4566 6379-6399
 
 HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
     CMD wget -q --spider http://localhost:4566/_floci/health || exit 1
-
-ARG VERSION=latest
-ENV FLOCI_VERSION=${VERSION}
-ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
 
 ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-jar", "quarkus-app/quarkus-run.jar"]
