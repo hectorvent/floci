@@ -282,7 +282,7 @@ public class GlueJsonHandler {
         SchemaId schemaId = readSchemaId(request);
         var page = schemaRegistryService.listSchemaVersions(
                 schemaId, region, readMaxResults(request), readNextToken(request));
-        return Response.ok(pageResponse("Schemas", page)).build();
+        return Response.ok(pageResponse("Schemas", schemaVersionListItems(page.items()), page.nextToken())).build();
     }
 
     private Response handleDeleteSchema(JsonNode request, String region) throws Exception {
@@ -365,10 +365,6 @@ public class GlueJsonHandler {
         return node.asText(null);
     }
 
-    private Map<String, Object> pageResponse(String field, GlueSchemaRegistryService.Page<?> page) {
-        return pageResponse(field, page.items(), page.nextToken());
-    }
-
     private Map<String, Object> pageResponse(String field, List<?> items, String nextToken) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put(field, items);
@@ -406,6 +402,20 @@ public class GlueJsonHandler {
         putIfNotNull(item, "SchemaStatus", schema.getSchemaStatus());
         putIfNotNull(item, "CreatedTime", iso(schema.getCreatedTime()));
         putIfNotNull(item, "UpdatedTime", iso(schema.getUpdatedTime()));
+        return item;
+    }
+
+    private List<Map<String, Object>> schemaVersionListItems(List<SchemaVersion> versions) {
+        return versions.stream().map(this::schemaVersionListItem).toList();
+    }
+
+    private Map<String, Object> schemaVersionListItem(SchemaVersion version) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        putIfNotNull(item, "SchemaArn", version.getSchemaArn());
+        putIfNotNull(item, "SchemaVersionId", version.getSchemaVersionId());
+        putIfNotNull(item, "VersionNumber", version.getVersionNumber());
+        putIfNotNull(item, "Status", version.getStatus());
+        putIfNotNull(item, "CreatedTime", iso(version.getCreatedTime()));
         return item;
     }
 

@@ -118,7 +118,13 @@ class GlueSchemaRegistryAdminIntegrationTest {
             .statusCode(200)
             .body("Schemas", hasSize(greaterThanOrEqualTo(2)))
             .body("Schemas.VersionNumber", hasItem(1))
-            .body("Schemas.VersionNumber", hasItem(2));
+            .body("Schemas.VersionNumber", hasItem(2))
+            .body("Schemas.find { it.VersionNumber == 1 }.SchemaArn", notNullValue())
+            .body("Schemas.find { it.VersionNumber == 1 }.SchemaVersionId", notNullValue())
+            .body("Schemas.find { it.VersionNumber == 1 }.Status", equalTo("AVAILABLE"))
+            .body("Schemas.find { it.VersionNumber == 1 }.CreatedTime", notNullValue())
+            .body("Schemas.find { it.VersionNumber == 1 }.DataFormat", nullValue())
+            .body("Schemas.find { it.VersionNumber == 1 }.SchemaDefinition", nullValue());
     }
 
     @Test

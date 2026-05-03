@@ -38,7 +38,7 @@ public class GlueSchemaRegistryService {
     private static final Logger LOG = Logger.getLogger(GlueSchemaRegistryService.class);
 
     static final String DEFAULT_REGISTRY_NAME = "default-registry";
-    private static final Pattern NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_$-]+$");
+    private static final Pattern NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_$#.\\-]+$");
     private static final int NAME_MAX_LENGTH = 255;
     private static final int DEFAULT_MAX_RESULTS = 100;
     private static final int MAX_MAX_RESULTS = 100;

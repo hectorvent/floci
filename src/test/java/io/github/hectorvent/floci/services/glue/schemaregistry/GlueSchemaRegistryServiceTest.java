@@ -78,11 +78,10 @@ class GlueSchemaRegistryServiceTest {
     }
 
     @Test
-    void createRegistryRejectsDotAndHashCharacters() {
-        for (String name : List.of("bad.name", "bad#name")) {
-            AwsException ex = assertThrows(AwsException.class,
-                    () -> service.createRegistry(name, null, null, REGION));
-            assertEquals("InvalidInputException", ex.getErrorCode());
+    void createRegistryAllowsDotAndHashCharacters() {
+        for (String name : List.of("valid.name", "valid#name")) {
+            Registry registry = service.createRegistry(name, null, null, REGION);
+            assertEquals(name, registry.getRegistryName());
         }
     }
 
@@ -332,13 +331,12 @@ class GlueSchemaRegistryServiceTest {
     }
 
     @Test
-    void createSchemaRejectsDotAndHashCharacters() {
+    void createSchemaAllowsDotAndHashCharacters() {
         preCreateRegistry();
-        for (String name : List.of("bad.name", "bad#name")) {
-            AwsException ex = assertThrows(AwsException.class, () ->
-                    service.createSchema(new RegistryId("reg", null),
-                            name, "AVRO", "BACKWARD", null, AVRO_V1, null, REGION));
-            assertEquals("InvalidInputException", ex.getErrorCode());
+        for (String name : List.of("valid.name", "valid#name")) {
+            Schema schema = service.createSchema(new RegistryId("reg", null),
+                    name, "AVRO", "BACKWARD", null, AVRO_V1, null, REGION).schema();
+            assertEquals(name, schema.getSchemaName());
         }
     }
 
