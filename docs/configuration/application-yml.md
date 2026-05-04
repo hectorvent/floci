@@ -278,3 +278,46 @@ floci:
     stepfunctions:
       enabled: false
 ```
+
+## Logging
+
+Floci uses standard [Quarkus logging](https://quarkus.io/guides/logging). The default effective level is `INFO`. Each service logs operation-level events at `DEBUG` (IDs and target resources) and full request/response payloads at `TRACE` — useful when diagnosing TestContainers-based test failures.
+
+Floci ships with `quarkus.log.min-level: TRACE`, so raising a single category to `TRACE` is enough; you don't need to change the min-level yourself.
+
+**Enable TRACE for a service via environment variables:**
+
+```bash
+# SQS: log SendMessage/ReceiveMessage/DeleteMessage bodies and attributes
+QUARKUS_LOG_CATEGORY__IO_GITHUB_HECTORVENT_FLOCI_SERVICES_SQS__LEVEL=TRACE
+
+# DynamoDB: log PutItem/GetItem/UpdateItem/DeleteItem items, Query/Scan counts
+QUARKUS_LOG_CATEGORY__IO_GITHUB_HECTORVENT_FLOCI_SERVICES_DYNAMODB__LEVEL=TRACE
+```
+
+**Or in `application.yml`:**
+
+```yaml
+quarkus:
+  log:
+    category:
+      "io.github.hectorvent.floci.services.sqs":
+        level: TRACE
+      "io.github.hectorvent.floci.services.dynamodb":
+        level: TRACE
+```
+
+**TestContainers example:**
+
+```java
+new GenericContainer<>("floci/floci:latest")
+    .withExposedPorts(4566)
+    .withEnv("QUARKUS_LOG_CATEGORY__IO_GITHUB_HECTORVENT_FLOCI_SERVICES_SQS__LEVEL", "TRACE");
+```
+
+TRACE output includes the payload alongside the existing DEBUG line:
+
+```
+DEBUG [SqsService] Sent message aa7b93e7-... to queue .../events
+TRACE [SqsService] Sent message aa7b93e7-... to queue .../events body={"eventType":"..."} attributes={source=okta}
+```

@@ -89,7 +89,7 @@ class GuardedMessageQueueTest {
         var claimed = queue.claimVisibleMessages(1, 30, false, -1, null);
         String handle = claimed.claimed().get(0).getReceiptHandle();
 
-        assertTrue(queue.removeByReceiptHandle(handle));
+        assertTrue(queue.removeByReceiptHandle(handle).isPresent());
 
         // Message should be gone even with visibility timeout 0
         var result = queue.claimVisibleMessages(1, 0, false, -1, null);
@@ -98,7 +98,7 @@ class GuardedMessageQueueTest {
 
     @Test
     void removeByReceiptHandleInvalidReturnsFalse() {
-        assertFalse(queue.removeByReceiptHandle("nonexistent"));
+        assertFalse(queue.removeByReceiptHandle("nonexistent").isPresent());
     }
 
     @Test

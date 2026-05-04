@@ -134,13 +134,21 @@ class GuardedMessageQueue {
         }
     }
 
-    boolean removeByReceiptHandle(String receiptHandle) {
+    Optional<Message> removeByReceiptHandle(String receiptHandle) {
         try (var _ = hold()) {
-            boolean removed = messages.removeIf(m -> receiptHandle.equals(m.getReceiptHandle()));
-            if (removed) {
+            Message removed = null;
+            for (Iterator<Message> it = messages.iterator(); it.hasNext(); ) {
+                Message m = it.next();
+                if (receiptHandle.equals(m.getReceiptHandle())) {
+                    removed = m;
+                    it.remove();
+                    break;
+                }
+            }
+            if (removed != null) {
                 persist();
             }
-            return removed;
+            return Optional.ofNullable(removed);
         }
     }
 
