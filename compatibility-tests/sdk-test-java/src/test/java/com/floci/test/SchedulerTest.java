@@ -3,6 +3,7 @@ package com.floci.test;
 import org.junit.jupiter.api.*;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
 import software.amazon.awssdk.services.scheduler.model.*;
+import software.amazon.awssdk.services.scheduler.model.Tag;
 
 import java.time.Instant;
 
@@ -453,5 +454,57 @@ class SchedulerTest {
                         .name(GROUP_NAME)
                         .build()))
                 .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    // ──────────────────────────── Tagging ────────────────────────────
+
+    @Test
+    @Order(30)
+    @DisplayName("TagResource / ListTagsForResource / UntagResource - schedule group")
+    void tagAndUntagScheduleGroup() {
+        String tagGroup = "tag-test-group";
+        try {
+            scheduler.createScheduleGroup(CreateScheduleGroupRequest.builder()
+                    .name(tagGroup)
+                    .tags(Tag.builder().key("env").value("dev").build())
+                    .build());
+
+            String arn = scheduler.getScheduleGroup(GetScheduleGroupRequest.builder()
+                    .name(tagGroup).build()).arn();
+
+            ListTagsForResourceResponse listed = scheduler.listTagsForResource(
+                    ListTagsForResourceRequest.builder().resourceArn(arn).build());
+            assertThat(listed.tags())
+                    .extracting(Tag::key, Tag::value)
+                    .containsExactlyInAnyOrder(tuple("env", "dev"));
+
+            scheduler.tagResource(TagResourceRequest.builder()
+                    .resourceArn(arn)
+                    .tags(
+                            Tag.builder().key("owner").value("Alice").build(),
+                            Tag.builder().key("env").value("staging").build())
+                    .build());
+
+            assertThat(scheduler.listTagsForResource(
+                    ListTagsForResourceRequest.builder().resourceArn(arn).build()).tags())
+                    .extracting(Tag::key, Tag::value)
+                    .containsExactlyInAnyOrder(
+                            tuple("env", "staging"),
+                            tuple("owner", "Alice"));
+
+            scheduler.untagResource(UntagResourceRequest.builder()
+                    .resourceArn(arn)
+                    .tagKeys("owner", "env")
+                    .build());
+
+            assertThat(scheduler.listTagsForResource(
+                    ListTagsForResourceRequest.builder().resourceArn(arn).build()).tags())
+                    .isEmpty();
+        } finally {
+            try {
+                scheduler.deleteScheduleGroup(DeleteScheduleGroupRequest.builder()
+                        .name(tagGroup).build());
+            } catch (Exception ignored) {}
+        }
     }
 }

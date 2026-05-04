@@ -16,6 +16,9 @@
 | `UpdateSchedule` | `PUT` | `/schedules/{Name}` | Update a schedule |
 | `DeleteSchedule` | `DELETE` | `/schedules/{Name}` | Delete a schedule |
 | `ListSchedules` | `GET` | `/schedules` | List schedules |
+| `TagResource` | `POST` | `/tags/{ResourceArn}` | Add tags to a schedule group |
+| `UntagResource` | `DELETE` | `/tags/{ResourceArn}?TagKeys=...` | Remove tags from a schedule group |
+| `ListTagsForResource` | `GET` | `/tags/{ResourceArn}` | List tags on a schedule group |
 
 ## Schedule Invocation
 
@@ -36,7 +39,6 @@ Supported target types: SQS, Lambda, SNS, EventBridge `PutEvents`.
 
 ## Not Yet Supported
 
-- `TagResource` / `UntagResource` / `ListTagsForResource`
 - `RetryPolicy` and `DeadLetterConfig` on failed invocations (stored but not honored)
 - `FlexibleTimeWindow` jitter (fires deterministically at the scheduled time)
 - `NextToken`-based pagination for List operations
@@ -104,6 +106,23 @@ aws scheduler delete-schedule \
 # Delete a schedule group (cascades to all schedules in the group)
 aws scheduler delete-schedule-group \
   --name my-group \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+# Add tags to a schedule group (tags apply to schedule groups only)
+aws scheduler tag-resource \
+  --resource-arn arn:aws:scheduler:us-east-1:000000000000:schedule-group/my-group \
+  --tags Key=env,Value=prod Key=owner,Value=Alice \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+# List tags on a schedule group
+aws scheduler list-tags-for-resource \
+  --resource-arn arn:aws:scheduler:us-east-1:000000000000:schedule-group/my-group \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+# Remove tags from a schedule group
+aws scheduler untag-resource \
+  --resource-arn arn:aws:scheduler:us-east-1:000000000000:schedule-group/my-group \
+  --tag-keys env owner \
   --endpoint-url $AWS_ENDPOINT_URL
 ```
 

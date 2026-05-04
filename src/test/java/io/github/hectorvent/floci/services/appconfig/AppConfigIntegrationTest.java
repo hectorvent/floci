@@ -242,7 +242,7 @@ class AppConfigIntegrationTest {
         given()
                 .contentType(ContentType.JSON)
                 .body("{\"tags\": {\"env\": \"local\", \"team\": \"platform\"}}")
-                .when().put("/tags/" + arn)
+                .when().post("/tags/" + arn)
                 .then()
                 .statusCode(204);
     }

@@ -28,7 +28,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [Step Functions](step-functions.md) | `POST /` + `X-Amz-Target: AmazonStatesService.*` | JSON 1.1 | 18 |
 | [CloudFormation](cloudformation.md) | `POST /` with `Action=` param | Query | 19 |
 | [EventBridge](eventbridge.md) | `POST /` + `X-Amz-Target: AmazonEventBridge.*` | JSON 1.1 | 16 |
-| [EventBridge Scheduler](scheduler.md) | `/schedules/*`, `/schedule-groups/*` | REST JSON | 9 |
+| [EventBridge Scheduler](scheduler.md) | `/schedules/*`, `/schedule-groups/*`, `/tags/*` | REST JSON | 12 |
 | [CloudWatch Logs](cloudwatch.md) | `POST /` + `X-Amz-Target: Logs.*` | JSON 1.1 | 17 |
 | [CloudWatch Metrics](cloudwatch.md#metrics) | `POST /` with `Action=` or JSON 1.1 | Query / JSON | 11 |
 | [ElastiCache](elasticache.md) | `POST /` with `Action=` param + TCP proxy | Query + RESP | 8 |

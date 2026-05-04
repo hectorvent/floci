@@ -287,6 +287,18 @@ class ApiGatewayIntegrationTest {
                 .statusCode(204);
     }
 
+    @Test @Order(23)
+    void tagResourcePostReturns405() {
+        // AWS API Gateway only defines PUT for TagResource; POST is not in the spec.
+        String arn = "arn:aws:apigateway:us-east-1::/restapis/" + apiId;
+        given()
+                .contentType(ContentType.JSON)
+                .body("{\"tags\":{\"env\":\"test\"}}")
+                .when().post("/tags/" + arn)
+                .then()
+                .statusCode(405);
+    }
+
     @Test @Order(24)
     void getTags() {
         String arn = "arn:aws:apigateway:us-east-1::/restapis/" + apiId;

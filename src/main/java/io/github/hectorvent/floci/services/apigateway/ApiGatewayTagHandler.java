@@ -31,6 +31,11 @@ public class ApiGatewayTagHandler implements TagHandler {
     }
 
     @Override
+    public boolean tagResourceUsesPut() {
+        return true;
+    }
+
+    @Override
     public Map<String, String> listTags(String region, String arn) {
         return service.getTags(region, apiIdFromArn(arn));
     }

@@ -128,6 +128,31 @@ public class SchedulerService {
         LOG.infov("Deleted schedule group: {0} (removed {1} schedules)", name, orphanKeys.size());
     }
 
+    public Map<String, String> getScheduleGroupTags(String name, String region) {
+        ScheduleGroup group = getScheduleGroup(name, region);
+        return Map.copyOf(group.getTags());
+    }
+
+    public void tagScheduleGroup(String name, String region, Map<String, String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return;
+        }
+        ScheduleGroup group = getScheduleGroup(name, region);
+        group.getTags().putAll(tags);
+        group.setLastModificationDate(Instant.now());
+        groupStore.put(groupKey(region, group.getName()), group);
+    }
+
+    public void untagScheduleGroup(String name, String region, List<String> tagKeys) {
+        if (tagKeys == null || tagKeys.isEmpty()) {
+            return;
+        }
+        ScheduleGroup group = getScheduleGroup(name, region);
+        tagKeys.forEach(group.getTags()::remove);
+        group.setLastModificationDate(Instant.now());
+        groupStore.put(groupKey(region, group.getName()), group);
+    }
+
     public List<ScheduleGroup> listScheduleGroups(String namePrefix, String region) {
         getOrCreateDefaultGroup(region);
         String storagePrefix = "group:" + region + ":";
