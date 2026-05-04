@@ -37,4 +37,8 @@ if [ "$(id -u)" = '0' ]; then
     exec gosu floci "$0" "$@"
 fi
 
+if [ "${LOCALSTACK_PARITY:-true}" != "false" ]; then
+    . /usr/local/bin/localstack-parity.sh
+fi
+
 exec "$@"

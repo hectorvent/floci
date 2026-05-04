@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.lifecycle.inithook;
 
+import io.github.hectorvent.floci.lifecycle.InitLifecycleState;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,12 +16,16 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 @ExtendWith(MockitoExtension.class)
 class InitializationHooksRunnerTest {
 
     @Mock
     private HookScriptExecutor hookScriptExecutorMock;
+
+    @Mock
+    private InitLifecycleState initLifecycleStateMock;
 
     @InjectMocks
     private InitializationHooksRunner initializationHooksRunner;
@@ -156,34 +161,71 @@ class InitializationHooksRunnerTest {
     }
 
     @Test
-    @DisplayName("hasHooks should return true when scripts exist in hook directory")
+    @DisplayName("hasHooks should return true when scripts exist in a primary directory")
     void hasHooksShouldReturnTrueWhenScriptsExist(@TempDir Path tempDir) throws IOException {
         Files.createFile(tempDir.resolve("01-setup.sh"));
         InitializationHook hook = Mockito.mock(InitializationHook.class);
         Mockito.when(hook.getName()).thenReturn("startup");
-        Mockito.when(hook.getPath()).thenReturn(tempDir.toFile());
+        Mockito.when(hook.getPrimaryPaths()).thenReturn(List.of(tempDir.toFile()));
+        Mockito.when(hook.getCompatPaths()).thenReturn(List.of());
 
         Assertions.assertTrue(initializationHooksRunner.hasHooks(hook));
     }
 
     @Test
-    @DisplayName("hasHooks should return false when hook directory is empty")
+    @DisplayName("hasHooks should return true when scripts exist only in a compat directory")
+    void hasHooksShouldReturnTrueWhenScriptsExistInCompatDir(@TempDir Path tempDir) throws IOException {
+        Files.createFile(tempDir.resolve("01-setup.sh"));
+        InitializationHook hook = Mockito.mock(InitializationHook.class);
+        Mockito.when(hook.getName()).thenReturn("startup");
+        Mockito.when(hook.getPrimaryPaths()).thenReturn(List.of());
+        Mockito.when(hook.getCompatPaths()).thenReturn(List.of(tempDir.toFile()));
+
+        Assertions.assertTrue(initializationHooksRunner.hasHooks(hook));
+    }
+
+    @Test
+    @DisplayName("hasHooks should return false when all hook directories are empty")
     void hasHooksShouldReturnFalseWhenDirectoryIsEmpty(@TempDir Path tempDir) {
         InitializationHook hook = Mockito.mock(InitializationHook.class);
         Mockito.when(hook.getName()).thenReturn("startup");
-        Mockito.when(hook.getPath()).thenReturn(tempDir.toFile());
+        Mockito.when(hook.getPrimaryPaths()).thenReturn(List.of(tempDir.toFile()));
+        Mockito.when(hook.getCompatPaths()).thenReturn(List.of());
 
         Assertions.assertFalse(initializationHooksRunner.hasHooks(hook));
     }
 
     @Test
-    @DisplayName("hasHooks should return false when hook directory does not exist")
+    @DisplayName("hasHooks should return false when hook directories do not exist")
     void hasHooksShouldReturnFalseWhenDirectoryDoesNotExist() {
         InitializationHook hook = Mockito.mock(InitializationHook.class);
         Mockito.when(hook.getName()).thenReturn("startup");
-        Mockito.when(hook.getPath()).thenReturn(new File("/nonexistent/path"));
+        Mockito.when(hook.getPrimaryPaths()).thenReturn(List.of(new File("/nonexistent/path")));
+        Mockito.when(hook.getCompatPaths()).thenReturn(List.of());
 
         Assertions.assertFalse(initializationHooksRunner.hasHooks(hook));
+    }
+
+    @Test
+    @DisplayName("Primary path script should shadow same-named compat path script")
+    void primaryPathShouldShadowCompatPathForSameFilename(@TempDir Path primaryDir, @TempDir Path compatDir)
+            throws IOException, InterruptedException {
+        Files.createFile(primaryDir.resolve("01-seed.sh"));
+        Files.createFile(compatDir.resolve("01-seed.sh"));
+        Files.createFile(compatDir.resolve("02-extra.sh"));
+
+        InitializationHook hook = Mockito.mock(InitializationHook.class);
+        Mockito.when(hook.getName()).thenReturn("ready");
+        Mockito.when(hook.getPrimaryPaths()).thenReturn(List.of(primaryDir.toFile()));
+        Mockito.when(hook.getCompatPaths()).thenReturn(List.of(compatDir.toFile()));
+
+        initializationHooksRunner.run(hook);
+
+        // 01-seed.sh from primaryDir wins; 02-extra.sh from compatDir is included
+        var inOrder = Mockito.inOrder(hookScriptExecutorMock);
+        inOrder.verify(hookScriptExecutorMock).run(primaryDir.resolve("01-seed.sh").toFile());
+        inOrder.verify(hookScriptExecutorMock).run(compatDir.resolve("02-extra.sh").toFile());
+        inOrder.verifyNoMoreInteractions();
     }
 
 }

@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.lifecycle;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.ServiceRegistry;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.lifecycle.InitLifecycleState;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHook;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHooksRunner;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerManager;
@@ -51,6 +52,7 @@ class EmulatorLifecycleTest {
     @Mock private DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     @Mock private PipesService pipesService;
     @Mock private Ec2MetadataServer ec2MetadataServer;
+    @Mock private InitLifecycleState initLifecycleState;
 
     private EmulatorLifecycle emulatorLifecycle;
 
@@ -65,7 +67,7 @@ class EmulatorLifecycleTest {
                 elastiCacheContainerManager, elastiCacheProxyManager,
                 rdsContainerManager, rdsProxyManager, initializationHooksRunner,
                 sqsPoller, kinesisPoller, dynamodbStreamsPoller, pipesService,
-                ec2MetadataServer);
+                ec2MetadataServer, initLifecycleState);
     }
 
     private void stubStorageConfig() {
@@ -75,15 +77,32 @@ class EmulatorLifecycleTest {
     }
 
     @Test
-    @DisplayName("Should log Ready immediately when no startup hooks exist")
+    @DisplayName("Should run BOOT hooks before loading storage, then mark boot complete")
+    void shouldRunBootHooksBeforeStorageLoad() throws IOException, InterruptedException {
+        stubStorageConfig();
+        when(initializationHooksRunner.hasHooks(InitializationHook.START)).thenReturn(false);
+        when(initializationHooksRunner.hasHooks(InitializationHook.READY)).thenReturn(false);
+
+        emulatorLifecycle.onStart(Mockito.mock(StartupEvent.class));
+
+        var inOrder = Mockito.inOrder(initializationHooksRunner, storageFactory, initLifecycleState);
+        inOrder.verify(initializationHooksRunner).run(InitializationHook.BOOT);
+        inOrder.verify(initLifecycleState).markBootCompleted();
+        inOrder.verify(storageFactory).loadAll();
+    }
+
+    @Test
+    @DisplayName("Should log Ready immediately when no startup or ready hooks exist")
     void shouldLogReadyImmediatelyWhenNoHooksExist() throws IOException, InterruptedException {
         stubStorageConfig();
         when(initializationHooksRunner.hasHooks(InitializationHook.START)).thenReturn(false);
+        when(initializationHooksRunner.hasHooks(InitializationHook.READY)).thenReturn(false);
 
         emulatorLifecycle.onStart(Mockito.mock(StartupEvent.class));
 
         verify(storageFactory).loadAll();
-        verify(initializationHooksRunner).hasHooks(InitializationHook.START);
+        verify(initLifecycleState).markStartCompleted();
+        verify(initLifecycleState).markReadyCompleted();
         verify(initializationHooksRunner, never()).run(InitializationHook.START);
     }
 
@@ -92,13 +111,14 @@ class EmulatorLifecycleTest {
     void shouldDeferHookExecutionWhenHooksExist() throws IOException, InterruptedException {
         stubStorageConfig();
         when(initializationHooksRunner.hasHooks(InitializationHook.START)).thenReturn(true);
+        when(initializationHooksRunner.hasHooks(InitializationHook.READY)).thenReturn(false);
 
         emulatorLifecycle.onStart(Mockito.mock(StartupEvent.class));
 
         verify(storageFactory).loadAll();
-        verify(initializationHooksRunner).hasHooks(InitializationHook.START);
-        // run() is NOT called synchronously — it will be called by the virtual thread
+        // run() is NOT called synchronously from onStart — it will be called by onHttpStart
         verify(initializationHooksRunner, never()).run(InitializationHook.START);
+        verify(initLifecycleState, never()).markStartCompleted();
     }
 
     @Test

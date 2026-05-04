@@ -195,6 +195,12 @@ class GuardedMessageQueue {
         }
     }
 
+    List<Message> peekAll() {
+        try (var _ = hold()) {
+            return new ArrayList<>(messages);
+        }
+    }
+
     boolean isEmpty() {
         try (var _ = hold()) {
             return messages.isEmpty();

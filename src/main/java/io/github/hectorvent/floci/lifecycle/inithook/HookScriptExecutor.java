@@ -20,12 +20,16 @@ public class HookScriptExecutor {
         this.initHooksConfig = emulatorConfig.initHooks();
     }
 
+    public void run(final File scriptFile) throws IOException, InterruptedException {
+        run(scriptFile.getParentFile(), scriptFile.getName());
+    }
+
     public void run(final File hookDirectory, final String scriptFileName) throws IOException, InterruptedException {
-        final String shellExecutable = initHooksConfig.shellExecutable();
-        LOG.debugv("Executing hook script {0} via {1}", scriptFileName, shellExecutable);
+        final String command = scriptFileName.endsWith(".py") ? "python3" : initHooksConfig.shellExecutable();
+        LOG.debugv("Executing hook script {0} via {1}", scriptFileName, command);
 
         // Inherit parent I/O so script output is streamed directly and does not block on unconsumed buffers.
-        final Process process = new ProcessBuilder(shellExecutable, scriptFileName).directory(hookDirectory).inheritIO().start();
+        final Process process = new ProcessBuilder(command, scriptFileName).directory(hookDirectory).inheritIO().start();
         run(process, scriptFileName);
     }
 

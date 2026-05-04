@@ -10,8 +10,6 @@ services:
       - "9200-9299:9200-9299"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./scripts:/etc/floci/init/start.d
-      - ./scripts:/etc/floci/init/stop.d
       - ./data:/app/data
     environment:
       FLOCI_SERVICES_DOCKER_NETWORK: floci_default

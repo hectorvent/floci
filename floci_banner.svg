@@ -108,7 +108,7 @@
     <!-- Stat 3: Services -->
     <text x="770" y="548"
           font-family="'Courier New', Courier, monospace"
-          font-size="42" font-weight="700" fill="#ffe082" text-anchor="middle">~40
+          font-size="42" font-weight="700" fill="#ffe082" text-anchor="middle">~41
     </text>
     <text x="770" y="574"
           font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"

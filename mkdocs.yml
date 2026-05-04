@@ -59,6 +59,7 @@ nav:
     - Quick Start: getting-started/quick-start.md
     - Installation: getting-started/installation.md
     - AWS CLI & SDK Setup: getting-started/aws-setup.md
+    - Migrate from LocalStack: getting-started/migrate-from-localstack.md
   - Configuration:
     - Docker Images: configuration/docker-images.md
     - Docker Compose: configuration/docker-compose.md

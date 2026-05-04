@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.lifecycle;
 
 import io.github.hectorvent.floci.core.common.ServiceRegistry;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
@@ -9,18 +10,14 @@ import jakarta.ws.rs.core.Response;
 
 import java.util.Map;
 
-/**
- * Internal health endpoint at /_floci/health.
- * Returns the Floci version and the status of each enabled service.
- * Compatible with the LocalStack /_localstack/health pattern.
- */
-@Path("{path:(_floci|_localstack)/health}")
+@Path("/health")
 @Produces(MediaType.APPLICATION_JSON)
 public class HealthController {
 
     private final ServiceRegistry serviceRegistry;
     private final String version;
 
+    @Inject
     public HealthController(ServiceRegistry serviceRegistry) {
         this.serviceRegistry = serviceRegistry;
         this.version = resolveVersion();
@@ -28,10 +25,14 @@ public class HealthController {
 
     @GET
     public Response health() {
-        return Response.ok(Map.of("services", serviceRegistry.getServices(), "edition", "floci-always-free", "version", version)).build();
+        return Response.ok(Map.of(
+                "services", serviceRegistry.getServices(),
+                "edition", "community",
+                "original_edition", "floci-always-free",
+                "version", version)).build();
     }
 
-    private static String resolveVersion() {
+    static String resolveVersion() {
         String env = System.getenv("FLOCI_VERSION");
         if (env != null && !env.isBlank()) {
             return env;

@@ -13,7 +13,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./init/start.d:/etc/floci/init/start.d:ro
-      - ./init/stop.d:/etc/floci/init/stop.d:ro
+      - ./init/ready.d:/etc/floci/init/ready.d:ro
 ```
 
 ## Full Setup (with ElastiCache and RDS)
@@ -98,20 +98,31 @@ This affects any response field that embeds the endpoint hostname:
 
 ## Initialization Hooks
 
-Hook scripts can be mounted into the container to run custom setup and teardown logic:
+Hook scripts can be mounted into the container to run custom setup and teardown logic at each lifecycle phase:
 
-```yaml
+```yaml title="docker-compose.yml"
 services:
   floci:
-    image: floci/floci:latest
+    image: floci/floci:latest-compat
     ports:
       - "4566:4566"
     volumes:
-      - ./init/start.d:/etc/floci/init/start.d:ro
-      - ./init/stop.d:/etc/floci/init/stop.d:ro
+      - ./init/boot.d:/etc/floci/init/boot.d:ro    # before storage loads, no AWS APIs
+      - ./init/start.d:/etc/floci/init/start.d:ro  # after HTTP server is ready
+      - ./init/ready.d:/etc/floci/init/ready.d:ro  # after all start hooks complete
+      - ./init/stop.d:/etc/floci/init/stop.d:ro    # during shutdown, while HTTP is still up
 ```
 
-See [Initialization Hooks](./initialization-hooks.md) for execution behavior and configuration details.
+Phases you don't need can be omitted. Use the `latest-compat` image when your scripts call `aws` or `boto3` — it includes the AWS CLI and boto3 with the local endpoint pre-configured, so no `--endpoint-url` flag is needed.
+
+If you have existing LocalStack init scripts, mount them under the LocalStack-compat paths and they run unchanged:
+
+```yaml title="docker-compose.yml"
+volumes:
+  - ./localstack-init/ready.d:/etc/localstack/init/ready.d:ro
+```
+
+See [Initialization Hooks](./initialization-hooks.md) for execution behavior, script types, and configuration details.
 
 ## Persistence
 

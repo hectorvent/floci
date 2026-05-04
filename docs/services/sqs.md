@@ -28,6 +28,53 @@
 | `StartMessageMoveTask` | Start a DLQ redrive task |
 | `ListMessageMoveTasks` | List DLQ redrive tasks |
 
+## Local Inspection Endpoint
+
+For test assertions and debugging, Floci exposes a LocalStack-compatible endpoint that lets you peek at queue contents without consuming messages:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/_aws/sqs/messages?QueueUrl=<url>` | List all messages in the queue (non-destructive) |
+| `DELETE` | `/_aws/sqs/messages?QueueUrl=<url>` | Purge all messages from the queue |
+
+`GET` returns every message currently in the queue — including in-flight messages — without changing visibility timeouts or advancing receive counts. It does not remove messages.
+
+`DELETE` is equivalent to `PurgeQueue` and removes all messages.
+
+### Response shape
+
+```json
+{
+  "messages": [
+    {
+      "MessageId": "abc123",
+      "MD5OfBody": "...",
+      "Body": "{\"event\":\"order.placed\"}",
+      "ReceiptHandle": null,
+      "Attributes": {
+        "SentTimestamp": "1714000000000",
+        "ApproximateReceiveCount": "0"
+      },
+      "MessageAttributes": {}
+    }
+  ]
+}
+```
+
+`ReceiptHandle` is `null` for messages that have not yet been received. FIFO messages include `MessageGroupId`, `MessageDeduplicationId`, and `SequenceNumber` in `Attributes` when set.
+
+### Example
+
+```bash
+QUEUE_URL="http://localhost:4566/000000000000/orders"
+
+# Peek at messages without consuming them
+curl "http://localhost:4566/_aws/sqs/messages?QueueUrl=$QUEUE_URL"
+
+# Purge the queue
+curl -X DELETE "http://localhost:4566/_aws/sqs/messages?QueueUrl=$QUEUE_URL"
+```
+
 ## Configuration
 
 ```yaml

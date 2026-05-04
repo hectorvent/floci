@@ -76,6 +76,35 @@
 
 **Broad AWS coverage. Free forever.**
 
+## Migrating from LocalStack
+
+Floci is a drop-in replacement for LocalStack Community. The port (`4566`), credentials, and all AWS SDK and CLI calls work unchanged — swap the image and you're done.
+
+```yaml
+# Before
+image: localstack/localstack
+
+# After — no init scripts, or scripts that don't call aws / boto3
+image: floci/floci:latest
+
+# After — init scripts that use aws CLI or boto3
+image: floci/floci:latest-compat   # includes Python 3, AWS CLI, boto3 pre-configured
+```
+
+**LocalStack environment variables are translated automatically** — no renaming required:
+
+| LocalStack | Floci equivalent |
+|---|---|
+| `LOCALSTACK_HOST` | `FLOCI_HOSTNAME` |
+| `PERSISTENCE=1` | `FLOCI_STORAGE_MODE=persistent` |
+| `LAMBDA_DOCKER_NETWORK` | `FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK` |
+| `LAMBDA_REMOVE_CONTAINERS=1` | `FLOCI_SERVICES_LAMBDA_EPHEMERAL=true` |
+| `DEBUG=1` | `QUARKUS_LOG_LEVEL=DEBUG` |
+
+Init scripts mounted under `/etc/localstack/init/` run unchanged. The `/_localstack/init` and `/_localstack/health` endpoints are still served. Set `LOCALSTACK_PARITY=false` to opt out of the automatic translation.
+
+→ [Full migration guide](https://floci.io/floci/getting-started/migrate-from-localstack/)
+
 ## Architecture Overview
 
 ```mermaid

@@ -62,9 +62,28 @@ All images are published as multi-arch manifests supporting `linux/amd64` and `l
 
 The compat image installs the following on top of the standard image:
 
-- Python 3 + pip (via `microdnf` on `ubi9-minimal`)
+- Python 3 + pip
 - [AWS CLI](https://pypi.org/project/awscli/) (via pip)
 - [boto3](https://pypi.org/project/boto3/) (via pip)
+
+The AWS CLI is pre-configured to talk to the local Floci endpoint — no `--endpoint-url` flag is needed in hook scripts:
+
+```sh
+#!/bin/sh
+aws sqs create-queue --queue-name my-queue   # works without --endpoint-url
+aws s3 mb s3://my-bucket
+```
+
+The following environment variables are set in both the standard and compat images:
+
+| Variable | Value |
+|---|---|
+| `AWS_DEFAULT_REGION` | `us-east-1` |
+| `AWS_ACCESS_KEY_ID` | `test` |
+| `AWS_SECRET_ACCESS_KEY` | `test` |
+| `AWS_CONFIG_FILE` | `/etc/floci/aws/config` (sets `endpoint_url = http://localhost:4566`) |
+
+Override any of them at runtime via `docker run -e` or the Compose `environment` block.
 
 ## Local Development
 

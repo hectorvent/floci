@@ -1,147 +1,178 @@
 # Initialization Hooks
 
-Floci allows you to execute custom shell scripts when it starts and stops. These scripts can help set up your
-environment (creating buckets, populating data, configuring resources, etc.) or tidy up during shutdown.
+Floci supports init hook scripts that run at defined points in the startup and shutdown lifecycle.
+Use them to seed resources, configure state, or clean up after a run — before or after the AWS APIs are available.
 
-Hook scripts ending with `.sh` are discovered in the following directories:
+!!! tip "Use the compat image for scripts that call `aws` or `boto3`"
+    Scripts that invoke the AWS CLI or Python boto3 require the compat image, which bundles Python 3, the AWS CLI, and boto3 — all pre-configured for `http://localhost:4566`.
+    Use `floci/floci:latest-compat` (or a pinned `x.y.z-compat`) instead of the standard image.
 
-- **Startup hooks** (`/etc/floci/init/start.d`) run after the HTTP server is ready and accepting connections on port 4566. This means hooks can safely make HTTP calls back to Floci (e.g. using the AWS CLI).
-- **Shutdown hooks** (`/etc/floci/init/stop.d`) run during the pre-shutdown phase, while the HTTP server is still accepting connections, so hooks can make HTTP calls back to Floci (e.g. using the AWS CLI). The server only stops once all shutdown hooks have completed.
+## Lifecycle Phases
 
-If a hook directory does not exist or contains no `.sh` scripts, Floci skips it and continues normally.
-If the hook path exists but is not a directory, it is ignored.
+Floci runs hooks in four ordered phases:
 
-## Execution
+| Phase | When it runs | AWS APIs available? | Directory |
+|---|---|---|---|
+| **boot** | Before storage is loaded, before services start | No | `boot.d` |
+| **start** | After the HTTP server is ready on port 4566 | Yes ✅ | `start.d` |
+| **ready** | After all `start` hooks complete | Yes ✅ | `ready.d` |
+| **stop** | During pre-shutdown, while HTTP server is still up | Yes ✅ | `stop.d` |
 
-### Execution Environment
+The `/_floci/init` and `/_localstack/init` endpoints reflect each phase's completion status in real time, so external tooling can wait for `ready` before proceeding.
 
-Hooks run:
+## Hook Directories
 
-- Inside the Floci runtime environment (same context as Floci services)
-- Using the configured shell (default: `/bin/sh`)
-- With access to configured services and their endpoints
-- With the same environment variables as Floci
+Floci merges scripts from two directory trees. The Floci-native tree has priority — if the same filename exists in both, the Floci copy runs and the LocalStack copy is skipped:
 
-Hooks can call Floci service endpoints directly from inside the container (e.g. `http://localhost:4566`).
+| Phase | Floci path | LocalStack-compat path |
+|---|---|---|
+| boot | `/etc/floci/init/boot.d` | `/etc/localstack/init/boot.d` |
+| start | `/etc/floci/init/start.d` | `/etc/localstack/init/start.d` |
+| ready | `/etc/floci/init/ready.d` | `/etc/localstack/init/ready.d` |
+| stop | `/etc/floci/init/stop.d` or `/etc/floci/init/shutdown.d` | `/etc/localstack/init/shutdown.d` |
 
-The published Docker images are available on Docker Hub:
+The LocalStack-compat paths let existing LocalStack bootstrap scripts work without modification.
+Mount them under `/etc/localstack/init/` and they run as-is.
 
-- `floci/floci:latest` — native image (minimal, no apk)
-- `floci/floci:latest-jvm` — JVM image (Alpine-based, has apk)
-- `floci/floci:latest-aws` — JVM image with AWS CLI pre-installed
+## Script Types
 
-If your hooks require the AWS CLI, use one of these options:
+Floci discovers scripts with the following extensions:
 
-**Option 1: Use the pre-built AWS CLI image**
+- `.sh` — executed with the configured shell (default `/bin/sh`)
+- `.py` — executed with `python3`
 
-```dockerfile
-FROM floci/floci:latest-aws
-# AWS CLI is already installed
+Files with any other extension are ignored.
+
+## Execution Order and Behavior
+
+Within each phase, scripts run in **lexicographical order** and **sequentially** (one at a time).
+Prefix filenames with numbers to control order: `01-`, `02-`, `03-`, etc.
+
+Floci uses a fail-fast strategy:
+
+- If a script exits with a non-zero status, remaining scripts in that phase are skipped.
+- If a script exceeds the configured timeout, it is terminated and treated as a failure.
+- A `boot` or `start`/`ready` hook failure causes Floci to shut down.
+- A `stop` hook failure is logged but does not prevent shutdown or resource cleanup.
+
+## AWS CLI in Hook Scripts
+
+The compat image (`floci/floci:latest-compat`) includes the AWS CLI and boto3 with the local endpoint pre-configured.
+Scripts can call `aws` directly — no `--endpoint-url` flag needed:
+
+```sh
+#!/bin/sh
+set -eu
+aws sqs create-queue --queue-name my-queue
+aws s3 mb s3://my-bucket
+aws ssm put-parameter --name /app/config --type String --value production
 ```
 
-**Option 2: Extend the JVM image (Alpine-based)**
+The following environment variables are pre-set in the compat image:
 
-```dockerfile
-FROM floci/floci:latest-jvm
-RUN apk add --no-cache aws-cli
+| Variable | Value |
+|---|---|
+| `AWS_DEFAULT_REGION` | `us-east-1` |
+| `AWS_ACCESS_KEY_ID` | `test` |
+| `AWS_SECRET_ACCESS_KEY` | `test` |
+| `AWS_CONFIG_FILE` | `/etc/floci/aws/config` (sets `endpoint_url = http://localhost:4566`) |
+
+Override any of them via `docker run -e` or the compose `environment` block.
+
+Python scripts can use boto3 the same way — the config file is read automatically:
+
+```python
+#!/usr/bin/env python3
+import boto3
+
+sqs = boto3.client("sqs")
+sqs.create_queue(QueueName="my-queue")
+
+s3 = boto3.client("s3")
+s3.create_bucket(Bucket="my-bucket")
 ```
 
-**Option 3: Extend the JVM image with additional tools**
+## Mounting Hook Directories
 
-```dockerfile
-FROM floci/floci:latest-jvm
-RUN apk add --no-cache aws-cli jq curl
+```yaml title="docker-compose.yml"
+services:
+  floci:
+    image: floci/floci:latest-compat
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./init/boot.d:/etc/floci/init/boot.d:ro
+      - ./init/start.d:/etc/floci/init/start.d:ro
+      - ./init/ready.d:/etc/floci/init/ready.d:ro
+      - ./init/stop.d:/etc/floci/init/stop.d:ro
 ```
 
-If a hook depends on additional CLI tools, make sure those tools are available in the runtime image.
+Phases you don't need can be omitted — Floci skips missing or empty directories.
 
-### Execution Behavior
+### Migrating from LocalStack
 
-Scripts are executed:
+If you have existing LocalStack init scripts, mount them under the LocalStack-compat paths and they work unchanged:
 
-- In **lexicographical (alphabetical) order**
-- **Sequentially** (one at a time)
+```yaml title="docker-compose.yml"
+volumes:
+  - ./localstack-init/ready.d:/etc/localstack/init/ready.d:ro
+```
 
-When execution order matters, prefix filenames with numbers such as `01-`, `02-`, and `03-`.
+To override individual scripts with Floci-specific versions while keeping the rest:
 
-Execution uses a fail-fast strategy:
-
-- If a script exits with a non-zero status, remaining hooks are not executed.
-- If a script exceeds the configured timeout, it is terminated and remaining hooks are not executed.
-- A startup hook failure triggers application shutdown.
-- A shutdown hook failure is logged but does not prevent the shutdown from completing.
+```yaml title="docker-compose.yml"
+volumes:
+  - ./localstack-init/ready.d:/etc/localstack/init/ready.d:ro   # existing scripts
+  - ./floci-init/ready.d:/etc/floci/init/ready.d:ro             # overrides (take priority)
+```
 
 ## Examples
 
-The following examples assume the runtime image includes the AWS CLI and that Floci is reachable at
-`http://localhost:4566`.
+### Seed resources on startup
 
-### Startup Hook
-
-For example, a startup hook could look like this:
-
-```sh
+```sh title="/etc/floci/init/ready.d/01-seed.sh"
 #!/bin/sh
 set -eu
-
-aws --endpoint-url http://localhost:4566 \
-  ssm put-parameter \
-  --name /demo/app/bootstrapped \
-  --type String \
-  --value true \
-  --overwrite
+aws sqs create-queue --queue-name orders
+aws s3 mb s3://assets
+aws ssm put-parameter --name /app/bootstrapped --type String --value true
 ```
 
-This example assumes the script is stored at `/etc/floci/init/start.d/01-seed-parameter.sh`.
-It seeds a known SSM parameter during startup so tests or local services can rely on it.
+### Seed with Python + boto3
 
-### Shutdown Hook
+```python title="/etc/floci/init/ready.d/01-seed.py"
+#!/usr/bin/env python3
+import boto3
 
-For example, a shutdown hook could look like this:
+boto3.client("sqs").create_queue(QueueName="orders")
+boto3.client("s3").create_bucket(Bucket="assets")
+```
 
-```sh
+### Clean up on shutdown
+
+```sh title="/etc/floci/init/stop.d/01-cleanup.sh"
 #!/bin/sh
 set -eu
-
-aws --endpoint-url http://localhost:4566 \
-  ssm delete-parameter \
-  --name /demo/app/bootstrapped
+aws ssm delete-parameter --name /app/bootstrapped
 ```
-
-This example assumes the script is stored at `/etc/floci/init/stop.d/01-cleanup-parameter.sh`.
-It removes the parameter during shutdown to leave the environment clean.
 
 !!! note "Shutdown timing"
-    Shutdown hooks run before the HTTP server stops, so Floci's total shutdown time
-    grows by the cumulative runtime of all stop hooks. Make sure external orchestrator
-    grace periods accommodate this (e.g. Kubernetes `terminationGracePeriodSeconds`,
-    Docker Compose `stop_grace_period`).
+    Stop hooks run before the HTTP server shuts down, so Floci's total shutdown time grows by
+    the cumulative runtime of all stop hooks. Adjust your orchestrator grace period accordingly
+    (e.g. Kubernetes `terminationGracePeriodSeconds`, Docker Compose `stop_grace_period`).
 
 ## Configuration
 
-You can customize hook behavior via configuration:
+| Key | Default | Description |
+|---|---|---|
+| `floci.init-hooks.shell-executable` | `/bin/sh` | Shell used to run `.sh` scripts |
+| `floci.init-hooks.timeout-seconds` | `30` | Maximum runtime per script before it is killed and treated as a failure |
+| `floci.init-hooks.shutdown-grace-period-seconds` | `2` | Extra wait after terminating a timed-out process |
 
-| Key                                              | Default     | Description                                                                                                      |
-|--------------------------------------------------|-------------|------------------------------------------------------------------------------------------------------------------|
-| `floci.init-hooks.shell-executable`              | `/bin/sh`   | Shell executable used to run scripts                                                                             |
-| `floci.init-hooks.timeout-seconds`               | `30`        | Maximum execution time per script before it is terminated and considered failed                                  |
-| `floci.init-hooks.shutdown-grace-period-seconds` | `2`         | Time to wait after calling `destroy()` before forcefully stopping the process (allows cleanup hooks to complete) |
-
-### Example
-
-The following configuration can be useful when startup hooks perform more in-depth setup work, such as seeding test 
-data or provisioning resources before an integration test suite starts.
-
-```yaml
+```yaml title="application.yml"
 floci:
   init-hooks:
     shell-executable: /bin/sh
     timeout-seconds: 60
     shutdown-grace-period-seconds: 10
 ```
-
-In this example:
-
-- `shell-executable` uses `/bin/sh` for portable POSIX-compatible scripts.
-- `timeout-seconds: 60` gives startup hooks more time to complete initialization tasks.
-- `shutdown-grace-period-seconds: 10` gives shutdown hooks more time to finish cleanup before Floci stops.

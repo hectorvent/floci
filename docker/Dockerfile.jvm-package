@@ -37,6 +37,7 @@ RUN mkdir -p /app/data \
 VOLUME /app/data
 
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chmod=755 docker/localstack-parity.sh /usr/local/bin/localstack-parity.sh
 COPY --chown=1001:root target/quarkus-app quarkus-app/
 
 EXPOSE 4566 6379-6399

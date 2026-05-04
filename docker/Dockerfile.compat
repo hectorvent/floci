@@ -1,6 +1,11 @@
 ARG VERSION=latest
 FROM floci/floci:${VERSION}
 
+ENV AWS_DEFAULT_REGION=us-east-1
+ENV AWS_ACCESS_KEY_ID=test
+ENV AWS_SECRET_ACCESS_KEY=test
+ENV AWS_CONFIG_FILE=/etc/floci/aws/config
+
 USER root
 RUN microdnf install -y --nodocs python3 python3-pip \
     && pip3 install --no-cache-dir awscli boto3 \

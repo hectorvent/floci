@@ -578,6 +578,16 @@ public class SqsService {
         }
     }
 
+    public List<Message> peekMessages(String queueUrl) {
+        return peekMessages(queueUrl, regionResolver.getDefaultRegion());
+    }
+
+    public List<Message> peekMessages(String queueUrl, String region) {
+        String storageKey = regionKey(region, queueUrl);
+        ensureQueueExists(storageKey);
+        return getOrCreateQueue(storageKey).peekAll();
+    }
+
     public void deleteMessage(String queueUrl, String receiptHandle) {
         deleteMessage(queueUrl, receiptHandle, regionResolver.getDefaultRegion());
     }

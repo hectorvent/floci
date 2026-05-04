@@ -46,6 +46,7 @@ public class EmulatorLifecycle {
     private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     private final PipesService pipesService;
     private final Ec2MetadataServer ec2MetadataServer;
+    private final InitLifecycleState initLifecycleState;
 
     @Inject
     public EmulatorLifecycle(StorageFactory storageFactory, ServiceRegistry serviceRegistry,
@@ -59,7 +60,8 @@ public class EmulatorLifecycle {
                              KinesisEventSourcePoller kinesisPoller,
                              DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller,
                              PipesService pipesService,
-                             Ec2MetadataServer ec2MetadataServer) {
+                             Ec2MetadataServer ec2MetadataServer,
+                             InitLifecycleState initLifecycleState) {
         this.storageFactory = storageFactory;
         this.serviceRegistry = serviceRegistry;
         this.config = config;
@@ -73,12 +75,24 @@ public class EmulatorLifecycle {
         this.dynamodbStreamsPoller = dynamodbStreamsPoller;
         this.pipesService = pipesService;
         this.ec2MetadataServer = ec2MetadataServer;
+        this.initLifecycleState = initLifecycleState;
     }
 
     void onStart(@Observes StartupEvent ignored) {
         LOG.info("=== AWS Local Emulator Starting ===");
         LOG.infov("Storage mode: {0}", config.storage().mode());
         LOG.infov("Persistent path: {0}", config.storage().persistentPath());
+
+        // BOOT hooks run before service initialization — scripts cannot use AWS APIs yet.
+        try {
+            initializationHooksRunner.run(InitializationHook.BOOT);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Boot hook execution interrupted", e);
+        } catch (IOException e) {
+            throw new IllegalStateException("Boot hook execution failed", e);
+        }
+        initLifecycleState.markBootCompleted();
 
         serviceRegistry.logEnabledServices();
         storageFactory.loadAll();
@@ -95,29 +109,46 @@ public class EmulatorLifecycle {
             });
         }
 
-        if (!initializationHooksRunner.hasHooks(InitializationHook.START)) {
+        boolean hasStart = initializationHooksRunner.hasHooks(InitializationHook.START);
+        boolean hasReady = initializationHooksRunner.hasHooks(InitializationHook.READY);
+        if (!hasStart && !hasReady) {
+            initLifecycleState.markStartCompleted();
+            initLifecycleState.markReadyCompleted();
             LOG.info("=== AWS Local Emulator Ready ===");
         }
     }
 
     void onHttpStart(@ObservesAsync HttpServerStart event) {
-        if ((event.options().getPort() == HTTP_PORT) &&
-            initializationHooksRunner.hasHooks(InitializationHook.START)){
-            try {
+        if (event.options().getPort() != HTTP_PORT) {
+            return;
+        }
+        boolean hasStart = initializationHooksRunner.hasHooks(InitializationHook.START);
+        boolean hasReady = initializationHooksRunner.hasHooks(InitializationHook.READY);
+        if (!hasStart && !hasReady) {
+            return;
+        }
+        try {
+            if (hasStart) {
                 initializationHooksRunner.run(InitializationHook.START);
-                LOG.info("=== AWS Local Emulator Ready ===");
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                LOG.error("Startup hook execution interrupted — shutting down", e);
-            } catch (Exception e) {
-                LOG.error("Startup hook execution failed — shutting down", e);
-                Quarkus.asyncExit();
             }
+            initLifecycleState.markStartCompleted();
+            if (hasReady) {
+                initializationHooksRunner.run(InitializationHook.READY);
+            }
+            initLifecycleState.markReadyCompleted();
+            LOG.info("=== AWS Local Emulator Ready ===");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.error("Startup hook execution interrupted — shutting down", e);
+        } catch (Exception e) {
+            LOG.error("Startup hook execution failed — shutting down", e);
+            Quarkus.asyncExit();
         }
     }
 
     void onPreShutdown(@Observes ShutdownDelayInitiatedEvent ignored) {
         LOG.info("=== AWS Local Emulator Shutting Down ===");
+        initLifecycleState.markShutdownStarted();
 
         // Log-and-continue for every failure mode. Resource cleanup in onStop() must still run,
         // and cleanup routines (proxy/container/storage shutdown) must not see an interrupted

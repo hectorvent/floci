@@ -1,5 +1,6 @@
 *
 !docker/entrypoint.sh
+!docker/localstack-parity.sh
 !pom.xml
 !src/**
 !target/*.so

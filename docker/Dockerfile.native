@@ -65,6 +65,7 @@ ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
 
 COPY --from=build /app/target/*-runner /app/application
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --chmod=755 docker/localstack-parity.sh /usr/local/bin/localstack-parity.sh
 
 RUN chmod +x /app/application
 
