@@ -16,6 +16,9 @@
 | `DeleteSecret` | Delete a secret (with recovery window) |
 | `RotateSecret` | Trigger secret rotation via a Lambda |
 | `ListSecretVersionIds` | List all versions of a secret |
+| `UpdateSecretVersionStage` | Move a staging label between versions |
+| `BatchGetSecretValue` | Retrieve multiple secret values in one call |
+| `GetRandomPassword` | Generate a random password |
 | `GetResourcePolicy` | Get the resource policy |
 | `PutResourcePolicy` | Attach a resource policy |
 | `DeleteResourcePolicy` | Remove the resource policy |
@@ -73,5 +76,24 @@ aws secretsmanager delete-secret \
 aws secretsmanager delete-secret \
   --secret-id /app/database-url \
   --force-delete-without-recovery \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+# Generate a random password
+aws secretsmanager get-random-password \
+  --password-length 24 \
+  --exclude-punctuation \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+# Batch-fetch multiple secrets in one call
+aws secretsmanager batch-get-secret-value \
+  --secret-id-list /app/database-url /app/api-keys \
+  --endpoint-url $AWS_ENDPOINT_URL
+
+# Move the AWSCURRENT label to a different version (e.g. during a rotation)
+aws secretsmanager update-secret-version-stage \
+  --secret-id /app/database-url \
+  --version-stage AWSCURRENT \
+  --move-to-version-id <new-version-id> \
+  --remove-from-version-id <old-version-id> \
   --endpoint-url $AWS_ENDPOINT_URL
 ```
