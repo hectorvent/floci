@@ -398,6 +398,8 @@ public class SqsService {
             notifyReceivers(storageKey);
             LOG.debugv("Sent FIFO message {0} to queue {1}, group={2}, seq={3}",
                     message.getMessageId(), queueUrl, messageGroupId, message.getSequenceNumber());
+            LOG.tracev("Sent message {0} to queue {1} body={2} attributes={3}",
+                    message.getMessageId(), queueUrl, body, message.getMessageAttributes());
             return message;
         }
 
@@ -414,6 +416,8 @@ public class SqsService {
         getOrCreateQueue(storageKey).addMessage(message);
         notifyReceivers(storageKey);
         LOG.debugv("Sent message {0} to queue {1}", message.getMessageId(), queueUrl);
+        LOG.tracev("Sent message {0} to queue {1} body={2} attributes={3}",
+                message.getMessageId(), queueUrl, body, message.getMessageAttributes());
         return message;
     }
 
@@ -488,6 +492,12 @@ public class SqsService {
         while (true) {
             List<Message> result = doReceiveMessage(storageKey, maxMessages, visibilityTimeout, region);
             if (!result.isEmpty() || maxWait <= 0) {
+                if (!result.isEmpty() && LOG.isTraceEnabled()) {
+                    for (Message m : result) {
+                        LOG.tracev("Received message {0} from queue {1} body={2} attributes={3}",
+                                m.getMessageId(), queueUrl, m.getBody(), m.getMessageAttributes());
+                    }
+                }
                 return result;
             }
             long elapsed = System.currentTimeMillis() - start;
@@ -596,13 +606,18 @@ public class SqsService {
         String storageKey = regionKey(region, queueUrl);
         ensureQueueExists(storageKey);
 
-        boolean removed = getOrCreateQueue(storageKey).removeByReceiptHandle(receiptHandle);
+        Optional<Message> removed = getOrCreateQueue(storageKey).removeByReceiptHandle(receiptHandle);
 
-        if (!removed) {
+        if (removed.isEmpty()) {
             throw new AwsException("ReceiptHandleIsInvalid",
                     "The input receipt handle is not a valid receipt handle.", 400);
         }
         LOG.debugv("Deleted message with receipt handle {0}", receiptHandle);
+        if (LOG.isTraceEnabled()) {
+            Message m = removed.get();
+            LOG.tracev("Deleted message {0} from queue {1} body={2}",
+                    m.getMessageId(), queueUrl, m.getBody());
+        }
     }
 
     public void changeMessageVisibility(String queueUrl, String receiptHandle, int visibilityTimeout) {

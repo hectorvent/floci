@@ -305,6 +305,7 @@ public class DynamoDbService {
             tableItems.put(itemKey, item);
             persistItems(storageKey);
             LOG.debugv("Put item in {0}: key={1}", canonicalTableName, itemKey);
+            LOG.tracev("Put item in {0}: key={1} item={2}", canonicalTableName, itemKey, item);
 
             String eventName = existing == null ? "INSERT" : "MODIFY";
             if (streamService != null) {
@@ -328,9 +329,16 @@ public class DynamoDbService {
 
         String itemKey = buildItemKey(table, key);
         var items = itemsByTable.get(storageKey);
-        if (items == null) return null;
+        if (items == null) {
+            LOG.tracev("Got item from {0}: key={1} item=<not found>", canonicalTableName, itemKey);
+            return null;
+        }
         JsonNode item = items.get(itemKey);
-        if (item != null && isExpired(item, table)) return null;
+        if (item != null && isExpired(item, table)) {
+            LOG.tracev("Got item from {0}: key={1} item=<expired>", canonicalTableName, itemKey);
+            return null;
+        }
+        LOG.tracev("Got item from {0}: key={1} item={2}", canonicalTableName, itemKey, item);
         return item;
     }
 
@@ -365,6 +373,7 @@ public class DynamoDbService {
             JsonNode removed = items.remove(itemKey);
             persistItems(storageKey);
             LOG.debugv("Deleted item from {0}: key={1}", canonicalTableName, itemKey);
+            LOG.tracev("Deleted item from {0}: key={1} removed={2}", canonicalTableName, itemKey, removed);
 
             if (removed != null) {
                 if (streamService != null) {
@@ -451,6 +460,8 @@ public class DynamoDbService {
 
             items.put(itemKey, item);
             persistItems(storageKey);
+            LOG.tracev("Updated item in {0}: key={1} updateExpression={2} item={3}",
+                    canonicalTableName, itemKey, updateExpression, item);
 
             if (streamService != null) {
                 streamService.captureEvent(canonicalTableName, "MODIFY", existing, item, table, region);
@@ -609,6 +620,8 @@ public class DynamoDbService {
                     .toList();
         }
 
+        LOG.tracev("Query on {0}: returned={1} scanned={2}",
+                canonicalTableName, evaluatedItems.size(), scannedCount);
         return new QueryResult(evaluatedItems, scannedCount, lastEvaluatedKey);
     }
 
@@ -663,6 +676,8 @@ public class DynamoDbService {
             results = results.subList(0, limit);
         }
 
+        LOG.tracev("Scan on {0}: returned={1} scanned={2}",
+                canonicalTableName, results.size(), totalScanned);
         return new ScanResult(results, totalScanned, lastEvaluatedKey);
     }
 

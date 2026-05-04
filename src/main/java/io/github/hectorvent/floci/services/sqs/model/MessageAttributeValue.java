@@ -31,4 +31,15 @@ public class MessageAttributeValue {
 
     public String getDataType() { return dataType; }
     public void setDataType(String dataType) { this.dataType = dataType; }
+
+    @Override
+    public String toString() {
+        if (stringValue != null) {
+            return stringValue;
+        }
+        if (binaryValue != null) {
+            return "<binary:" + binaryValue.length + "B>";
+        }
+        return "";
+    }
 }
