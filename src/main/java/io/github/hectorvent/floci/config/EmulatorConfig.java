@@ -718,6 +718,7 @@ public interface EmulatorConfig {
         DetectiveServiceConfig detective();
         ServiceQuotasServiceConfig servicequotas();
         RamServiceConfig ram();
+        ControlCatalogServiceConfig controlcatalog();
         ControlTowerServiceConfig controltower();
         ConnectServiceConfig connect();
         CognitoIdentityServiceConfig cognitoidentity();
@@ -826,6 +827,11 @@ public interface EmulatorConfig {
     }
 
     interface RumServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface ControlCatalogServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
