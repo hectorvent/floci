@@ -629,6 +629,8 @@ floci:
       enabled: true
     budgets:
       enabled: true
+    inspector2:
+      enabled: true
     detective:
       enabled: true
     controltower:
