@@ -38,7 +38,8 @@ class StepFunctionsUnresolvableJsonPathIntegrationTest {
 
         assertEquals("FAILED", describe.jsonPath().getString("status"), describe.body().asString());
         assertEquals("States.Runtime", describe.jsonPath().getString("error"));
-        assertEquals("The JSONPath '$.nope.deep' specified for the field 'missing.$' could not "
+        assertEquals("An error occurred while executing the state 'Pick' (entered at the event id #2). "
+                + "The JSONPath '$.nope.deep' specified for the field 'missing.$' could not "
                 + "be found in the input '{\"other\":1}'",
                 describe.jsonPath().getString("cause"));
     }
@@ -92,7 +93,8 @@ class StepFunctionsUnresolvableJsonPathIntegrationTest {
 
         assertEquals("FAILED", describe.jsonPath().getString("status"), describe.body().asString());
         assertEquals("States.Runtime", describe.jsonPath().getString("error"));
-        assertEquals("The JSONPath '$.nope' specified for the field 'missing.$' could not be "
+        assertEquals("An error occurred while executing the state 'M' (entered at the event id #2). "
+                + "The JSONPath '$.nope' specified for the field 'missing.$' could not be "
                 + "found in the input '[1,2]'",
                 describe.jsonPath().getString("cause"));
     }

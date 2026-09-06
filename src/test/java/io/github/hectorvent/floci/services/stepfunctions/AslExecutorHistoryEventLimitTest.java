@@ -238,17 +238,20 @@ class AslExecutorHistoryEventLimitTest {
     }
 
     /**
-     * The branch produced the events that ran the execution out of them, and floci publishes none
-     * of them. What the caller reads back is the four events the top-level flow did produce, ending
-     * in the failure: an unbroken chain, not four events numbered as if 25,000 had happened.
+     * The branch produced the events that ran the execution out of them, and they are published
+     * into the execution's history like any other: what the caller reads back is one history,
+     * numbered without a gap and ending in the failure.
      */
     @Test
     void aParallelBranchLeavesThePublishedHistoryUnbroken() {
         run(RUNAWAY_PARALLEL_BRANCH);
 
         assertEquals(List.of("PassStateEntered", "PassStateExited", "ParallelStateEntered",
-                             "ExecutionFailed"),
-                history.stream().map(HistoryEvent::getType).toList());
+                             "ParallelStateStarted", "ChoiceStateEntered"),
+                history.subList(0, 5).stream().map(HistoryEvent::getType).toList());
+        HistoryEvent last = history.get(history.size() - 1);
+        assertEquals("ExecutionFailed", last.getType());
+        assertEquals(25_000, history.size());
         for (int index = 0; index < history.size(); index++) {
             assertEquals(index + 1L, history.get(index).getId(), "unexpected id at index " + index);
             assertEquals((long) index, history.get(index).getPreviousEventId(),

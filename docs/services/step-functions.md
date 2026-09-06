@@ -62,9 +62,32 @@ A `Retry` re-entry emits its own Scheduled, Started, and Failed triple for each 
 mocked Task (`SFN_MOCK_CONFIG`) emits the same events as a real one, because Step Functions
 Local does the same.
 
-Every event's `previousEventId` points to the id of the event right before it. The one
-exception is the first state's `*StateEntered` event. Its `previousEventId` is `0`. That
-matches `ExecutionStarted`, which is always `id: 1, previousEventId: 0`.
+Every event's `previousEventId` points to the id of the event right before it on the same
+chain of states. The one exception is the first state's `*StateEntered` event. Its
+`previousEventId` is `0`. That matches `ExecutionStarted`, which is always
+`id: 1, previousEventId: 0`.
+
+### Parallel branches and Map iterations
+
+The states inside a `Parallel` branch or an inline `Map` iteration publish their events into
+the parent execution's history, as on AWS. A `Parallel` records `ParallelStateStarted`,
+`ParallelStateSucceeded` and `ParallelStateFailed`. An inline `Map` records `MapStateStarted`,
+`MapIterationStarted`, `MapIterationSucceeded`, `MapIterationFailed`, `MapStateSucceeded` and
+`MapStateFailed`. A Distributed `Map` records `MapRunStarted`, `MapRunSucceeded` and
+`MapRunFailed` instead. Its items are child executions and publish nothing into the parent
+history. A `Task` whose failure ends its branch also records `TaskStateAborted`.
+
+Branches and iterations run concurrently, so the order in which their events interleave differs
+from run to run. Each branch chains its own events through `previousEventId`, and that chain is
+the same every time.
+
+### The cause of a failure
+
+The `cause` of a failure the interpreter raises starts with
+`An error occurred while executing the state '<name>' (entered at the event id #<n>). `, as on
+AWS. The prefix is added once, at the innermost state. A `Fail` state's `Cause` and a cause a
+task's resource answered with pass through unchanged. A `Choice` that matches no rule and has
+no `Default`, and a payload template path that matches nothing, fail with `States.Runtime`.
 
 `inputDetails` appears on `ExecutionStarted`, on `stateEnteredEventDetails`, and on
 `LambdaFunctionScheduled`/`ActivityScheduled`. `outputDetails` appears on
@@ -76,9 +99,13 @@ When the request sets `includeExecutionData` to false, the details objects stay 
 `taskScheduledEventDetails.parameters`. This matches AWS.
 
 A few gaps remain. `TaskStarted`, `LambdaFunctionStarted`, and `ActivityStarted` fire at
-scheduling time, not when a worker actually picks up the task. Events inside a `Parallel` or
-`Map` branch are not recorded in the parent execution's history. `TaskSubmitted`, which real
-AWS emits for `.sync` and `.waitForTaskToken` integrations, is not emitted yet.
+scheduling time, not when a worker actually picks up the task. `TaskSubmitted`, which real
+AWS emits for `.sync` and `.waitForTaskToken` integrations, is not emitted yet. A JSONata
+failure does not emit the `EvaluationFailed` event AWS records before `ExecutionFailed`. When a
+branch fails, AWS records `*StateAborted` and `MapIterationAborted` events for the states its
+sibling branches were in; Floci cancels the siblings without recording them. A Distributed
+`Map` whose item fails reports the item's own error rather than AWS's
+`States.ExceedToleratedFailureThreshold`, and emits `MapRunFailed` with that error.
 
 ## Map concurrency
 
@@ -187,9 +214,8 @@ index: `Output`, `Output/a/b[0]`, `Assign/x`, `Arguments/MessageGroupId`, `Choic
 `Choices[1]/Output/v`, `Choices[0]/Assign/x`, `Catch[1]/Output/v`. A `Choice` stops at the first rule
 that matches, so an undefined condition in a later rule is never evaluated.
 
-One deviation. AWS prefixes the cause of a real execution with
-`An error occurred while executing the state '<name>' (entered at the event id #<n>).`; Floci
-returns the cause without it, which is the form AWS's own `TestState` returns.
+The cause of a real execution carries the state prefix described under
+[The cause of a failure](#the-cause-of-a-failure).
 
 ## JSONata functions
 

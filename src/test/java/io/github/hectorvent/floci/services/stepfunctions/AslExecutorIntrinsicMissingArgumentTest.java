@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -162,6 +163,14 @@ class AslExecutorIntrinsicMissingArgumentTest {
         assertEquals("The function 'States.Format('{}', $.items[5])' had the following error: "
                 + "The JsonPath argument for the field '$.items[5]' could not be found in the "
                 + "input '{\"items\":[1,2]}'", failure.cause);
+    }
+
+    /** The plain form of the same path is not a miss. AWS resolves it to null and the execution succeeds. */
+    @Test
+    void plainReferencePastTheEndOfAnArrayResolvesToNull() throws Exception {
+        var resolved = resolve("{\"v.$\":\"$.items[5]\"}", "{\"items\":[1,2]}");
+
+        assertTrue(resolved.path("v").isNull());
     }
 
     /** Reading a field off the absent element fails alike. */

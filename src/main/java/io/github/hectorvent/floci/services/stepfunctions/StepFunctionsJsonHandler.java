@@ -16,6 +16,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -367,7 +368,12 @@ public class StepFunctionsJsonHandler {
         var arn = request.path("executionArn").asText();
         var includeExecutionData = request.path("includeExecutionData").asBoolean(true);
 
-        List<HistoryEvent> events = service.getExecutionHistory(arn);
+        var live = service.getExecutionHistory(arn);
+        List<HistoryEvent> events;
+        // Branch and iteration threads append under the history's own monitor while a client reads.
+        synchronized (live) {
+            events = new ArrayList<>(live);
+        }
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode array = response.putArray("events");
         for (HistoryEvent e : events) {
