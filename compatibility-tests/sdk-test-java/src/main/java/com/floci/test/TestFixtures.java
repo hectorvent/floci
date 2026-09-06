@@ -36,6 +36,7 @@ import software.amazon.awssdk.services.ssoadmin.SsoAdminClient;
 import software.amazon.awssdk.services.identitystore.IdentitystoreClient;
 import software.amazon.awssdk.services.budgets.BudgetsClient;
 import software.amazon.awssdk.services.macie2.Macie2Client;
+import software.amazon.awssdk.services.securityhub.SecurityHubClient;
 import software.amazon.awssdk.services.detective.DetectiveClient;
 import software.amazon.awssdk.services.rum.RumClient;
 import software.amazon.awssdk.services.resourceexplorer2.ResourceExplorer2Client;
@@ -348,6 +349,14 @@ public final class TestFixtures {
 
     public static DetectiveClient detectiveClient(String accountId) {
         return DetectiveClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(accountId, "test")))
+                .build();
+    }
+
+    public static SecurityHubClient securityHubClient(String accountId) {
+        return SecurityHubClient.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(accountId, "test")))
