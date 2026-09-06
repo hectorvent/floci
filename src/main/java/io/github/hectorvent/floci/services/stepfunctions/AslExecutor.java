@@ -462,19 +462,24 @@ public class AslExecutor {
         var jsonata = isJsonata(stateDef, topLevelQueryLanguage);
         StateResult result;
         try {
-            result = executeStateWithRetry(name, type, stateDef, input, chain, sm, jsonata,
+            result = executeStateWithRetry(name, enteredEventId, type, stateDef, input, chain, sm, jsonata,
                     topLevelQueryLanguage, context, variables, executionDeadlineNanos);
             if ("Succeed".equals(type) || stateDef.path("End").asBoolean(false)) {
                 result = new StateResult(result.output(), null);
             }
-        } catch (FailStateException e) {
-            var failure = e.attributedTo(name, enteredEventId);
+        } catch (FailStateException failure) {
+            var beforeFailed = chain.lastEventId();
             publishStateFailedEvent(chain, type, failure);
             try {
                 result = handleCatch(stateDef, input, failure, jsonata, context, variables);
             } catch (FailStateException catchClauseFailure) {
-                // AWS reports a failure inside the Catch clause itself, and no later clause catches it.
-                throw catchClauseFailure.attributedTo(name, enteredEventId);
+                // AWS reports a failure inside the Catch clause itself, and no later clause catches
+                // it. The clause's EvaluationFailed is recorded from before the state's Failed event.
+                var clauseFailure = catchClauseFailure.attributedTo(name, enteredEventId);
+                chain.continueFrom(beforeFailed);
+                publishEvaluationFailedEvent(chain, name, clauseFailure);
+                publishStateFailedEvent(chain, type, clauseFailure);
+                throw clauseFailure;
             }
             if (result == null) {
                 if (chain.isBranch() && "Task".equals(type) && !failure.isRuntimeError()) {
@@ -497,6 +502,19 @@ public class AslExecutor {
         }
     }
 
+    /** Recorded once per attempt, before Retry and Catch, as on AWS. */
+    private void publishEvaluationFailedEvent(HistoryChain chain, String stateName, FailStateException failure) {
+        if (!"States.QueryEvaluationError".equals(failure.error)) {
+            return;
+        }
+        var details = failureDetails(failure);
+        if (failure.location != null) {
+            details.put("location", failure.location);
+        }
+        details.put("state", stateName);
+        chain.publish("EvaluationFailed", details);
+    }
+
     private void registerMocks(Execution exec, MockedTestCase mockedTestCase) {
         if (mockedTestCase != null) {
             activeMocks.put(exec.getExecutionArn(), mockedTestCase);
@@ -509,8 +527,8 @@ public class AslExecutor {
      * used up. Errors that no retrier matches (or that exhaust their retrier) propagate to the
      * caller's Catch handling, preserving Retry-before-Catch order.
      */
-    private StateResult executeStateWithRetry(String name, String type, JsonNode stateDef, JsonNode input,
-                                              HistoryChain chain, StateMachine sm, boolean jsonata,
+    private StateResult executeStateWithRetry(String name, long enteredEventId, String type, JsonNode stateDef,
+                                              JsonNode input, HistoryChain chain, StateMachine sm, boolean jsonata,
                                               String topLevelQueryLanguage, JsonNode context,
                                               ObjectNode variables, long executionDeadlineNanos)
             throws Exception {
@@ -521,7 +539,11 @@ public class AslExecutor {
             try {
                 return executeState(name, type, stateDef, input, chain, sm, jsonata,
                         topLevelQueryLanguage, context, variables, attempt, executionDeadlineNanos);
-            } catch (FailStateException e) {
+            } catch (FailStateException raised) {
+                var e = raised.attributedTo(name, enteredEventId);
+                if (!raised.hasFinalCause()) {
+                    publishEvaluationFailedEvent(chain, name, e);
+                }
                 var retrierIndex = findMatchingRetrier(retriers, e);
                 if (retrierIndex < 0) {
                     throw e;
@@ -2319,7 +2341,7 @@ public class AslExecutor {
         if (!value.isIntegralNumber() || value.bigIntegerValue().signum() < 0) {
             throw new FailStateException(
                     jsonataExpression ? "States.QueryEvaluationError" : "States.Runtime",
-                    "MaxConcurrency must resolve to a non-negative integer");
+                    "MaxConcurrency must resolve to a non-negative integer", "MaxConcurrency");
         }
         return value.bigIntegerValue().compareTo(java.math.BigInteger.valueOf(Integer.MAX_VALUE)) > 0
                 ? Integer.MAX_VALUE
@@ -2456,7 +2478,7 @@ public class AslExecutor {
                 throw new FailStateException(
                         jsonata ? "States.QueryEvaluationError" : "States.ResultWriterFailed",
                         "ResultWriter " + (jsonata ? "Arguments" : "Parameters")
-                                + " must resolve to an object");
+                                + " must resolve to an object", "ResultWriter/Arguments");
             }
             JsonNode bucketNode = loc.get("Bucket");
             if (bucketNode == null) {
@@ -2466,7 +2488,7 @@ public class AslExecutor {
             if (!bucketNode.isTextual()) {
                 throw new FailStateException(
                         jsonata ? "States.QueryEvaluationError" : "States.ResultWriterFailed",
-                        "ResultWriter Bucket must resolve to a string");
+                        "ResultWriter Bucket must resolve to a string", "ResultWriter/Arguments/Bucket");
             }
             String bucket = bucketNode.asText();
             if (bucket.isBlank()) {
@@ -2477,7 +2499,7 @@ public class AslExecutor {
             if (prefixNode != null && !prefixNode.isTextual()) {
                 throw new FailStateException(
                         jsonata ? "States.QueryEvaluationError" : "States.ResultWriterFailed",
-                        "ResultWriter Prefix must resolve to a string");
+                        "ResultWriter Prefix must resolve to a string", "ResultWriter/Arguments/Prefix");
             }
             String prefix = prefixNode == null ? "" : prefixNode.asText();
 
@@ -4264,21 +4286,36 @@ public class AslExecutor {
 
         final String error;
         final String cause;
+        /** The field of the failed JSONata expression, as the cause names it. */
+        final String location;
         private final boolean causeFinal;
 
         FailStateException(String error, String cause) {
             this(error, cause, false);
         }
 
+        FailStateException(String error, String cause, boolean causeFinal) {
+            this(error, cause, causeFinal, null);
+        }
+
+        FailStateException(String error, String cause, String location) {
+            this(error, cause, false, location);
+        }
+
         /**
          * A Fail state's Cause and a cause a resource answered with are final. AWS prefixes every
          * other cause with the state name, once, at the innermost state.
          */
-        FailStateException(String error, String cause, boolean causeFinal) {
+        private FailStateException(String error, String cause, boolean causeFinal, String location) {
             super(error + ": " + cause);
             this.error = error;
             this.cause = cause;
             this.causeFinal = causeFinal;
+            this.location = location;
+        }
+
+        boolean hasFinalCause() {
+            return causeFinal || cause == null;
         }
 
         /** States.Runtime skips Retry, Catch and the *StateFailed event on AWS. */
@@ -4287,18 +4324,18 @@ public class AslExecutor {
         }
 
         FailStateException attributedTo(String stateName, long enteredEventId) {
-            if (causeFinal || cause == null) {
+            if (hasFinalCause()) {
                 return this;
             }
             return new FailStateException(error,
-                    ATTRIBUTION_PREFIX.formatted(stateName, enteredEventId) + cause, true);
+                    ATTRIBUTION_PREFIX.formatted(stateName, enteredEventId) + cause, true, location);
         }
 
         FailStateException withFinalCause() {
-            if (causeFinal || cause == null) {
+            if (hasFinalCause()) {
                 return this;
             }
-            return new FailStateException(error, cause, true);
+            return new FailStateException(error, cause, true, location);
         }
 
         /**

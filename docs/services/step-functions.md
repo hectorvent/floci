@@ -88,6 +88,8 @@ The `cause` of a failure the interpreter raises starts with
 AWS. The prefix is added once, at the innermost state. A `Fail` state's `Cause` and a cause a
 task's resource answered with pass through unchanged. A `Choice` that matches no rule and has
 no `Default`, and a payload template path that matches nothing, fail with `States.Runtime`.
+A JSONata expression that fails also records an `EvaluationFailed` event with `error`, `cause`,
+`location` and `state`, once per attempt.
 
 `inputDetails` appears on `ExecutionStarted`, on `stateEnteredEventDetails`, and on
 `LambdaFunctionScheduled`/`ActivityScheduled`. `outputDetails` appears on
@@ -100,8 +102,7 @@ When the request sets `includeExecutionData` to false, the details objects stay 
 
 A few gaps remain. `TaskStarted`, `LambdaFunctionStarted`, and `ActivityStarted` fire at
 scheduling time, not when a worker actually picks up the task. `TaskSubmitted`, which real
-AWS emits for `.sync` and `.waitForTaskToken` integrations, is not emitted yet. A JSONata
-failure does not emit the `EvaluationFailed` event AWS records before `ExecutionFailed`. When a
+AWS emits for `.sync` and `.waitForTaskToken` integrations, is not emitted yet. When a
 branch fails, AWS records `*StateAborted` and `MapIterationAborted` events for the states its
 sibling branches were in; Floci cancels the siblings without recording them. A Distributed
 `Map` whose item fails reports the item's own error rather than AWS's

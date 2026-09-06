@@ -171,15 +171,17 @@ class AslExecutorBranchHistoryEventsTest {
                 """, "{\"x\":\"a\"}");
 
         assertEquals(List.of("ExecutionStarted", "ParallelStateEntered", "ParallelStateStarted",
-                "PassStateEntered", "ParallelStateFailed", "ParallelStateExited", "PassStateEntered",
-                "PassStateExited", "ExecutionSucceeded"), typesOf(history));
-        assertEquals(List.of(0L, 0L, 2L, 3L, 4L, 5L, 6L, 7L, 8L), previousEventIdsOf(history));
+                "PassStateEntered", "EvaluationFailed", "ParallelStateFailed", "ParallelStateExited",
+                "PassStateEntered", "PassStateExited", "ExecutionSucceeded"), typesOf(history));
+        assertEquals(List.of(0L, 0L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L), previousEventIdsOf(history));
         var cause = "An error occurred while executing the state 'Undef' (entered at the event id #4). "
                 + "The JSONata expression '$states.input.missing' specified for the field 'Output/v' "
                 + "returned nothing (undefined).";
+        assertEquals(Map.of("error", "States.QueryEvaluationError", "cause", cause, "location", "Output/v",
+                "state", "Undef"), history.get(4).getDetails());
         var errorOutput = "{\"Error\":\"States.QueryEvaluationError\",\"Cause\":\"" + cause.replace("\"", "\\\"") + "\"}";
-        assertEquals(errorOutput, history.get(5).getDetails().get("output"));
-        assertEquals(errorOutput, history.get(8).getDetails().get("output"));
+        assertEquals(errorOutput, history.get(6).getDetails().get("output"));
+        assertEquals(errorOutput, history.get(9).getDetails().get("output"));
     }
 
     @Test
@@ -322,15 +324,18 @@ class AslExecutorBranchHistoryEventsTest {
                 """, "{\"items\":[1,2]}");
 
         assertEquals(List.of("ExecutionStarted", "MapStateEntered", "MapStateStarted", "MapIterationStarted",
-                "PassStateEntered", "MapIterationFailed", "MapStateFailed", "ExecutionFailed"), typesOf(history));
+                "PassStateEntered", "EvaluationFailed", "MapIterationFailed", "MapStateFailed", "ExecutionFailed"),
+                typesOf(history));
         // MapIterationFailed points at the iteration's last event and is passed by: MapStateFailed
         // points at that same event.
-        assertEquals(List.of(0L, 0L, 2L, 3L, 4L, 5L, 5L, 7L), previousEventIdsOf(history));
-        assertEquals(Map.of("name", "M", "index", 0), history.get(5).getDetails());
-        assertNull(history.get(6).getDetails());
-        assertEquals("An error occurred while executing the state 'Undef' (entered at the event id #5). "
+        assertEquals(List.of(0L, 0L, 2L, 3L, 4L, 5L, 6L, 6L, 8L), previousEventIdsOf(history));
+        var cause = "An error occurred while executing the state 'Undef' (entered at the event id #5). "
                 + "The JSONata expression '$states.input.missing' specified for the field 'Output/v' "
-                + "returned nothing (undefined).", history.get(7).getDetails().get("cause"));
+                + "returned nothing (undefined).";
+        assertEquals("Undef", history.get(5).getDetails().get("state"));
+        assertEquals(Map.of("name", "M", "index", 0), history.get(6).getDetails());
+        assertNull(history.get(7).getDetails());
+        assertEquals(cause, history.get(8).getDetails().get("cause"));
     }
 
     @Test
@@ -405,6 +410,70 @@ class AslExecutorBranchHistoryEventsTest {
         assertEquals(lastBranchEvent, eventOfType(history, "ParallelStateSucceeded").getPreviousEventId());
         assertEquals(lastBranchEvent, parallelExited.getPreviousEventId());
         assertEquals("ExecutionSucceeded", history.get(19).getType());
+    }
+
+    @Test
+    void jsonataFailureRecordsAnEvaluationFailedEventPerAttempt() {
+        var history = run("""
+                {"QueryLanguage":"JSONata","StartAt":"Send","States":{
+                  "Send":{"Type":"Task","Resource":"arn:aws:states:::sqs:sendMessage",
+                    "Arguments":{"QueueUrl":"https://sqs.us-east-1.amazonaws.com/000000000000/q","MessageBody":"{% $states.input.missing %}"},
+                    "Retry":[{"ErrorEquals":["States.ALL"],"MaxAttempts":1,"IntervalSeconds":0}],"End":true}}}
+                """, "{\"x\":\"a\"}");
+
+        assertEquals(List.of("ExecutionStarted", "TaskStateEntered", "EvaluationFailed", "EvaluationFailed",
+                "ExecutionFailed"), typesOf(history));
+        assertEquals(List.of(0L, 0L, 2L, 3L, 4L), previousEventIdsOf(history));
+        var cause = "An error occurred while executing the state 'Send' (entered at the event id #2). "
+                + "The JSONata expression '$states.input.missing' specified for the field 'Arguments/MessageBody' "
+                + "returned nothing (undefined).";
+        var expected = Map.of("error", "States.QueryEvaluationError", "cause", cause,
+                "location", "Arguments/MessageBody", "state", "Send");
+        assertEquals(expected, history.get(2).getDetails());
+        assertEquals(expected, history.get(3).getDetails());
+        assertEquals(Map.of("error", "States.QueryEvaluationError", "cause", cause), history.get(4).getDetails());
+    }
+
+    @Test
+    void mapItemsExpressionFailureIsRecordedBeforeTheMapStarts() {
+        var history = run("""
+                {"QueryLanguage":"JSONata","StartAt":"Fan","States":{
+                  "Fan":{"Type":"Map","Items":"{% $states.input.missing %}",
+                    "ItemProcessor":{"ProcessorConfig":{"Mode":"INLINE"},"StartAt":"I","States":{"I":{"Type":"Pass","End":true}}},
+                    "End":true}}}
+                """, "{\"x\":\"a\"}");
+
+        assertEquals(List.of("ExecutionStarted", "MapStateEntered", "EvaluationFailed", "MapStateFailed",
+                "ExecutionFailed"), typesOf(history));
+        assertEquals(List.of(0L, 0L, 2L, 3L, 4L), previousEventIdsOf(history));
+        assertEquals("Items", history.get(2).getDetails().get("location"));
+    }
+
+    /**
+     * A Catch clause whose own Output fails. AWS records the clause's EvaluationFailed from where the
+     * state stood before its first Failed event, then fails the state a second time.
+     */
+    @Test
+    void catchClauseOutputFailureIsRecordedFromBeforeTheStateFailedEvent() {
+        var history = run("""
+                {"QueryLanguage":"JSONata","StartAt":"P","States":{
+                  "P":{"Type":"Parallel","Branches":[
+                    {"StartAt":"Boom","States":{"Boom":{"Type":"Fail","Error":"MyError","Cause":"my cause"}}}
+                  ],"Catch":[{"ErrorEquals":["Other"],"Next":"Done"},
+                             {"ErrorEquals":["States.ALL"],"Output":{"v":"{% $states.input.missing %}"},"Next":"Done"}],
+                  "End":true},
+                  "Done":{"Type":"Pass","End":true}}}
+                """, "{\"x\":\"a\"}");
+
+        assertEquals(List.of("ExecutionStarted", "ParallelStateEntered", "ParallelStateStarted", "FailStateEntered",
+                "ParallelStateFailed", "EvaluationFailed", "ParallelStateFailed", "ExecutionFailed"), typesOf(history));
+        assertEquals(List.of(0L, 0L, 2L, 3L, 4L, 4L, 6L, 7L), previousEventIdsOf(history));
+        var cause = "An error occurred while executing the state 'P' (entered at the event id #2). "
+                + "The JSONata expression '$states.input.missing' specified for the field 'Catch[1]/Output/v' "
+                + "returned nothing (undefined).";
+        assertEquals(Map.of("error", "States.QueryEvaluationError", "cause", cause,
+                "location", "Catch[1]/Output/v", "state", "P"), history.get(5).getDetails());
+        assertEquals(Map.of("error", "States.QueryEvaluationError", "cause", cause), history.get(7).getDetails());
     }
 
     @Test
