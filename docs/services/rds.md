@@ -107,6 +107,21 @@ services:
       FLOCI_SERVICES_RDS_PROXY_BASE_PORT: "7001"
 ```
 
+### Without a reachable Docker daemon
+
+A DB instance or cluster record is metadata. Its identifier, ARN, endpoint address and tags come
+from Floci's configuration, not from Docker. When no daemon is reachable, because Floci runs inside
+Docker with no socket mounted or the daemon on the host is stopped, `CreateDBInstance` and
+`CreateDBCluster` still succeed and the resource reaches `available`. `DescribeDBInstances`,
+`ModifyDBInstance`, the tagging APIs and `DeleteDBInstance` all work on that record, and Floci logs
+a warning naming the missing daemon.
+
+Nothing listens behind the endpoint in that state. The backing container is retried by every
+operation that needs the live database, so it starts as soon as a daemon becomes reachable. Until
+then, RDS Data API calls fail with a modelled `InternalServerErrorException` that names the missing
+daemon. A daemon that is reachable but cannot start the container still fails `CreateDBInstance`
+outright, since that is a real error rather than a degraded mode.
+
 ### Mock mode (CI / tests)
 
 Set `FLOCI_SERVICES_RDS_MOCK=true` when you only need the management API shape: clusters and

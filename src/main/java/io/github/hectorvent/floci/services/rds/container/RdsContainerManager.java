@@ -57,6 +57,7 @@ public class RdsContainerManager {
     private final Map<String, RdsContainerHandle> activeContainers = new ConcurrentHashMap<>();
     private final Map<String, String> activeStorageOwners = new ConcurrentHashMap<>();
     private final Set<String> claimedRuntimes = ConcurrentHashMap.newKeySet();
+    private volatile boolean dockerUnavailableLogged;
 
     @Inject
     public RdsContainerManager(ContainerBuilder containerBuilder,
@@ -89,6 +90,68 @@ public class RdsContainerManager {
                 config, "rds", volumeId, instanceId);
         return start(runtimeId, instanceId, instanceId, exactVolumeName,
                 engine, image, masterUsername, masterPassword, dbName);
+    }
+
+    /**
+     * Attempts {@link #start} and reports the backend as unavailable instead of propagating the
+     * failure when the cause is that no Docker daemon is reachable from Floci: Floci running
+     * inside Docker without a mounted socket, or a stopped daemon on the host. A failure raised
+     * while the daemon <em>is</em> reachable is a genuine container problem and still propagates,
+     * so nothing changes for a Floci that can start database containers.
+     * <p>
+     * A start that fails before Docker answers leaves the runtime holding a cleanup identity for
+     * a container that was never created. That identity is dropped here so the same runtime can
+     * retry once a daemon appears; a stale container under the fixed name is removed by that
+     * retry anyway.
+     *
+     * @return the container handle, or {@code null} when no Docker daemon is reachable
+     */
+    public RdsContainerHandle tryStart(
+            String runtimeId, String instanceId, String containerStorageResourceId,
+            String dockerVolumeName, DatabaseEngine engine, String image,
+            String masterUsername, String masterPassword, String dbName) {
+        try {
+            RdsContainerHandle handle = start(runtimeId, instanceId, containerStorageResourceId,
+                    dockerVolumeName, engine, image, masterUsername, masterPassword, dbName);
+            dockerUnavailableLogged = false;
+            return handle;
+        } catch (RuntimeException e) {
+            if (isDockerReachable()) {
+                throw e;
+            }
+            discardCleanupIdentity(runtimeId == null || runtimeId.isBlank() ? instanceId : runtimeId);
+            if (!dockerUnavailableLogged) {
+                dockerUnavailableLogged = true;
+                LOG.warnv("No Docker daemon is reachable from Floci ({0}). RDS metadata operations "
+                        + "keep working and DB instances still reach 'available', but they have no "
+                        + "backing database container until a daemon becomes reachable.",
+                        e.getMessage());
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Probes the configured Docker endpoint, which is how a missing daemon is told apart from a
+     * container that failed for its own reasons.
+     */
+    public boolean isDockerReachable() {
+        try {
+            lifecycleManager.getDockerClient().pingCmd().exec();
+            return true;
+        } catch (Exception e) {
+            LOG.debugv("Docker daemon is not reachable: {0}", e.getMessage());
+            return false;
+        }
+    }
+
+    private void discardCleanupIdentity(String runtimeId) {
+        RdsContainerHandle retained = activeContainers.get(runtimeId);
+        if (retained == null || retained.getHost() != null) {
+            return;
+        }
+        activeContainers.remove(runtimeId, retained);
+        releaseOwnership(retained.getStorageKey(), retained.getContainerKey(), runtimeId);
     }
 
     public RdsContainerHandle start(

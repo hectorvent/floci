@@ -530,6 +530,93 @@ class RdsContainerManagerTest {
     }
 
     @Test
+    void tryStartReportsUnavailableInsteadOfThrowingWhenNoDockerDaemonIsReachable() {
+        // Floci running inside Docker without a mounted daemon socket: the RDS control plane must
+        // keep working, so the failure is reported rather than propagated.
+        ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
+        doThrow(new IllegalStateException("Failed to remove stale container floci-rds-db1"))
+                .when(lifecycleManager).removeIfExistsStrict(any());
+        doThrow(new IllegalStateException("Failed to remove container floci-rds-db1"))
+                .when(lifecycleManager).stopAndRemoveStrict(any(), any());
+        when(lifecycleManager.getDockerClient()).thenThrow(
+                new RuntimeException("java.net.SocketException: No such file or directory"));
+        RdsContainerManager manager = daemonlessCapableManager(lifecycleManager);
+        String runtimeId = "arn:aws:rds:us-east-1:000000000000:db:db1";
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            assertNull(manager.tryStart(runtimeId, "db1", "db1", "floci-rds-db1",
+                    DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db"),
+                    "attempt " + attempt + " should report unavailable");
+        }
+        assertFalse(manager.isDockerReachable());
+        // No container was created, so no cleanup identity is retained for the runtime.
+        assertNull(manager.getActiveHandle(runtimeId));
+    }
+
+    @Test
+    void tryStartPropagatesFailuresRaisedWhileTheDaemonIsReachable() {
+        // A reachable daemon that cannot start the container is a genuine failure, not a
+        // degraded mode: CreateDBInstance must still surface it.
+        ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
+        when(lifecycleManager.create(any()))
+                .thenThrow(new IllegalStateException("no such image: mysql:8.0"));
+        DockerClient dockerClient = mock(DockerClient.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(lifecycleManager.getDockerClient()).thenReturn(dockerClient);
+        RdsContainerManager manager = daemonlessCapableManager(lifecycleManager);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> manager.tryStart("arn:aws:rds:us-east-1:000000000000:db:db1", "db1", "db1",
+                        "floci-rds-db1", DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db"));
+
+        assertEquals("no such image: mysql:8.0", failure.getMessage());
+        assertTrue(manager.isDockerReachable());
+    }
+
+    @Test
+    void tryStartSucceedsForTheSameRuntimeOnceADaemonAppears() {
+        ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
+        doThrow(new IllegalStateException("Failed to remove stale container floci-rds-db1"))
+                .when(lifecycleManager).removeIfExistsStrict(any());
+        doThrow(new IllegalStateException("Failed to remove container floci-rds-db1"))
+                .when(lifecycleManager).stopAndRemoveStrict(any(), any());
+        when(lifecycleManager.getDockerClient()).thenThrow(
+                new RuntimeException("java.net.SocketException: No such file or directory"));
+        RdsContainerManager manager = daemonlessCapableManager(lifecycleManager);
+        String runtimeId = "arn:aws:rds:us-east-1:000000000000:db:db1";
+
+        assertNull(manager.tryStart(runtimeId, "db1", "db1", "floci-rds-db1",
+                DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db"));
+
+        // A Docker daemon appears.
+        org.mockito.Mockito.reset(lifecycleManager);
+        stubStarts(lifecycleManager, new ContainerLifecycleManager.ContainerInfo(
+                "late-container", Map.of(3306, new ContainerLifecycleManager.EndpointInfo("db1", 3306))));
+        DockerClient dockerClient = mock(DockerClient.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(lifecycleManager.getDockerClient()).thenReturn(dockerClient);
+
+        RdsContainerHandle handle = manager.tryStart(runtimeId, "db1", "db1", "floci-rds-db1",
+                DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db");
+
+        assertEquals("late-container", handle.getContainerId());
+        assertEquals(3306, handle.getPort());
+        assertEquals(handle, manager.getActiveHandle(runtimeId));
+    }
+
+    private RdsContainerManager daemonlessCapableManager(ContainerLifecycleManager lifecycleManager) {
+        EmulatorConfig config = config(tempDir.resolve("host-root"));
+        ContainerLogStreamer logStreamer = mock(ContainerLogStreamer.class);
+        lenient().when(logStreamer.generateLogStreamName(any())).thenReturn("log-stream");
+        return new RdsContainerManager(
+                new ContainerBuilder(config, mock(DockerHostResolver.class), mock(EmbeddedDnsServer.class)),
+                lifecycleManager,
+                logStreamer,
+                mock(ContainerDetector.class),
+                config,
+                new RegionResolver("us-east-1", "000000000000"),
+                mock(ServiceConfigAccess.class));
+    }
+
+    @Test
     void failedStartReleasesClaimsForSameRuntimeRetry() {
         EmulatorConfig config = config(tempDir.resolve("host-root"));
         ContainerDetector containerDetector = mock(ContainerDetector.class);
