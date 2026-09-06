@@ -1095,7 +1095,9 @@ public class Ec2ContainerManager {
                     return;
                 }
                 byte[] payload = frame.getPayload();
-                if (payload == null) return;
+                if (payload == null) {
+                    return;
+                }
                 try { output.write(payload); } catch (IOException ignored) {}
                 String line = new String(payload, StandardCharsets.UTF_8).stripTrailing();
                 if (!line.isEmpty()) {
