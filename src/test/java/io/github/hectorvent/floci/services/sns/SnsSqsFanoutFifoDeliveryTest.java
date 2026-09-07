@@ -238,6 +238,28 @@ class SnsSqsFanoutFifoDeliveryTest {
     }
 
     @Test
+    void publish_afterThroughputScopeChanges_doesNotHitTheOtherScopesCacheEntry() {
+        // Arrange
+        String queueUrl = createGroupScopedQueue("fifo-scope-switch-queue.fifo");
+        String topicArn = createFifoTopic("fifo-scope-switch-topic.fifo",
+                Map.of("FifoTopic", "true", "FifoThroughputScope", "MessageGroup"),
+                "fifo-scope-switch-queue.fifo");
+
+        // Act: publish group-scoped, then again topic-scoped with a dedup id shaped like the
+        // group-scoped key, inside the deduplication window.
+        snsService.publish(topicArn, null, null, "group-scoped", null, null, "a", "b", REGION);
+        snsService.setTopicAttributes(topicArn, "FifoThroughputScope", "Topic", REGION);
+        snsService.publish(topicArn, null, null, "topic-scoped", null, null, "z", "1#ab", REGION);
+
+        // Assert: the two scopes keep separate cache namespaces, so neither suppresses the other.
+        List<Message> messages = sqsService.receiveMessage(queueUrl, 10, 30, 0, REGION);
+        assertEquals(2, messages.size());
+        List<String> bodies = messages.stream().map(Message::getBody).toList();
+        assertTrue(bodies.stream().anyMatch(b -> b.contains("group-scoped")));
+        assertTrue(bodies.stream().anyMatch(b -> b.contains("topic-scoped")));
+    }
+
+    @Test
     void publishBatch_withMessageGroupThroughputScope_deliversSameDedupIdInDifferentGroups() {
         // Arrange
         String queueUrl = createGroupScopedQueue("fifo-batch-group-scope-queue.fifo");

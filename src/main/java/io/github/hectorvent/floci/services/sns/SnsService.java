@@ -1265,11 +1265,12 @@ public class SnsService implements Resettable, ResourceProvider {
 
     private boolean isDuplicate(String topicArn, String messageGroupId, String deduplicationId,
                                 boolean groupScoped) {
-        // Length-prefixed rather than delimited: nothing validates the characters in either id,
-        // so a delimiter inside one could make two different pairs share a key.
+        // The scope is part of the key: the attribute can change inside the deduplication window,
+        // and a topic-scoped id must never land on a group-scoped entry. The group is
+        // length-prefixed because nothing validates the characters in either id.
         String scopedId = groupScoped
-                ? messageGroupId.length() + "#" + messageGroupId + deduplicationId
-                : deduplicationId;
+                ? "group:" + messageGroupId.length() + ":" + messageGroupId + deduplicationId
+                : "topic:" + deduplicationId;
         String cacheKey = topicArn + ":" + scopedId;
         Instant now = Instant.now();
         Instant existing = fifoDeduplicationCache.get(cacheKey);
