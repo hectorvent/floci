@@ -641,6 +641,40 @@ class RdsContainerManagerTest {
                 org.mockito.ArgumentMatchers.eq("created-container"), any());
     }
 
+    @Test
+    void tryStartRetriesACleanupThatFailedAfterAStop() {
+        // The service stops a container whose auth proxy did not start. When that stop fails
+        // the handle and claim stay retained, and the runtime's next start must clean them up
+        // rather than fail on the claim forever.
+        ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
+        stubStarts(lifecycleManager,
+                new ContainerLifecycleManager.ContainerInfo("first-container",
+                        Map.of(3306, new ContainerLifecycleManager.EndpointInfo("db1", 3306))),
+                new ContainerLifecycleManager.ContainerInfo("second-container",
+                        Map.of(3306, new ContainerLifecycleManager.EndpointInfo("db1", 3306))));
+        DockerClient dockerClient = mock(DockerClient.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(lifecycleManager.getDockerClient()).thenReturn(dockerClient);
+        doThrow(new IllegalStateException("Failed to remove container first-container"))
+                .doNothing()
+                .when(lifecycleManager).stopAndRemoveStrict(
+                        org.mockito.ArgumentMatchers.eq("first-container"), any());
+        RdsContainerManager manager = daemonlessCapableManager(lifecycleManager);
+        String runtimeId = "arn:aws:rds:us-east-1:000000000000:db:db1";
+
+        RdsContainerHandle first = manager.start(runtimeId, "db1", "db1", "floci-rds-db1",
+                DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db");
+        assertThrows(IllegalStateException.class, () -> manager.stop(first));
+        assertEquals(first, manager.getActiveHandle(runtimeId));
+
+        RdsContainerHandle retried = manager.tryStart(runtimeId, "db1", "db1", "floci-rds-db1",
+                DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db");
+
+        assertEquals("second-container", retried.getContainerId());
+        assertEquals(retried, manager.getActiveHandle(runtimeId));
+        verify(lifecycleManager, times(2)).stopAndRemoveStrict(
+                org.mockito.ArgumentMatchers.eq("first-container"), any());
+    }
+
     private RdsContainerManager daemonlessCapableManager(ContainerLifecycleManager lifecycleManager) {
         EmulatorConfig config = config(tempDir.resolve("host-root"));
         ContainerLogStreamer logStreamer = mock(ContainerLogStreamer.class);
