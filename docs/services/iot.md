@@ -64,7 +64,7 @@ Status: control plane only.
 
 Current limitations:
 
-- A custom domain does not change where the broker listens. `DescribeEndpoint` keeps returning Floci's own address, and pointing DNS at the emulator is outside its scope.
+- A custom domain does not change where the broker listens or what `DescribeEndpoint` returns (see [Endpoint address](#endpoint-address)), and pointing DNS at the emulator is outside its scope.
 - Server certificate ARNs are stored as given and reported `VALID`; they are not checked against ACM.
 
 ## MQTT Broker
@@ -111,6 +111,28 @@ The connection is admitted when all of these hold, otherwise the broker answers 
 Policy variables are substituted and are also available as condition keys: `iot:ClientId`, `aws:SourceIp`, `iot:DomainName` (the server name the client sent in the TLS handshake, absent when it dialled an IP address), `iot:Connection.Thing.IsAttached` and, only when the client id names a thing attached to the certificate with `AttachThingPrincipal`, `iot:Connection.Thing.ThingName`, `iot:Connection.Thing.ThingTypeName` and `iot:Connection.Thing.Attributes[name]`. A statement that uses a variable Floci cannot resolve, such as the certificate variables `iot:Certificate.*`, matches nothing.
 
 Differences from AWS: AWS rejects an unregistered, inactive or expired certificate during the TLS handshake and closes an MQTT 3.1.1 connection it does not authorize without a `CONNACK`; Floci completes the handshake and always answers with the return code, so the reason is visible to the client. Deactivating the certificate or detaching the policy takes effect on the next connect; established sessions are not dropped. Policies attached to thing groups are not consulted, and exclusive thing attachment (`thingPrincipalType`) is not modelled: the thing is always the one named by the client id.
+
+### Endpoint address
+
+`DescribeEndpoint` returns `host:4566` by default, the host and port of Floci's base URL, because that is where the HTTP data plane lives and IoT Data clients build `https://<endpointAddress>` from it. The four AWS-managed domain configurations report the same value as their `domainName`.
+
+AWS returns a bare hostname and lets each client add its own port: 8883 for MQTT with a client certificate, 443 for HTTPS and MQTT over WebSocket, 8443 for HTTPS with a client certificate. With TLS enabled, Floci serves MQTT on 8883 and HTTPS on 443 next to 4566. When those ports reach Floci, set `FLOCI_SERVICES_IOT_ENDPOINT_ADDRESS` and `DescribeEndpoint` answers like AWS:
+
+```yaml
+services:
+  floci:
+    image: floci/floci:latest
+    environment:
+      FLOCI_TLS_ENABLED: "true"
+      FLOCI_SERVICES_IOT_ENDPOINT_ADDRESS: iot.example.localhost.floci.io
+    ports:
+      - "4566:4566"
+      - "8883:8883"   # MQTT over TLS
+      - "443:443"     # HTTPS data plane, https://<endpointAddress>/topics/<topic>
+      - "8443:443"    # optional: the HTTPS port AWS uses with client certificates
+```
+
+The value is a hostname or `host:port`, never a URL, and is returned as is for every endpoint type: AWS hands out one hostname per type (`iot:Data-ATS`, `iot:Data`, `iot:Jobs`, `iot:CredentialProvider`), Floci answers all four with this one. The name is added to the generated server certificate, like `FLOCI_HOSTNAME`, so devices verify it on 8883 and 443; a name under `localhost.floci.io` resolves to `127.0.0.1` on its own, any other needs a DNS or `/etc/hosts` entry. Floci does not detect published ports itself: unset, or set to an empty value, `DescribeEndpoint` keeps returning `host:4566`, so the plain `-p 4566:4566` setup keeps working for IoT Data clients.
 
 ## Reserved Topics
 

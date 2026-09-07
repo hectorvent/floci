@@ -58,7 +58,7 @@ When `FLOCI_TLS_ENABLED=true` and no custom certificate is provided, Floci keeps
 - Includes `localhost`, `127.0.0.1`, `0.0.0.0`, `*.localhost`, `localhost.floci.io`,
   `*.localhost.floci.io`, `*.execute-api.localhost.floci.io`, and
   `*.execute-api.localhost.localstack.cloud` as Subject Alternative Names (SANs)
-- Automatically includes custom hostnames from `FLOCI_HOSTNAME` and `FLOCI_BASE_URL` in the SANs
+- Automatically includes custom hostnames from `FLOCI_HOSTNAME`, `FLOCI_BASE_URL` and `FLOCI_SERVICES_IOT_ENDPOINT_ADDRESS` in the SANs
 - Is regenerated when hostname configuration changes between restarts, or when it was not issued by the current CA
 
 The CA is created once and never rotates on its own. If its files are missing, corrupt or do not match each other, Floci generates a new CA, logs a warning, and reissues the server certificate; clients then need the new `ca.pem`.
@@ -125,7 +125,7 @@ No additional configuration is needed: Vert.x handles TLS at the transport layer
 
 ## MQTT over TLS (8883)
 
-When TLS is enabled, the IoT MQTT broker also listens on port 8883 with the same certificate as the HTTPS endpoint, hostnames learned at runtime included. Devices connect with `ssl://` trusting `ca.pem`; see [IoT Core](../services/iot.md#mqtt-over-tls).
+When TLS is enabled, the IoT MQTT broker also listens on port 8883 with the same certificate as the HTTPS endpoint, hostnames learned at runtime included. Devices connect with `ssl://` trusting `ca.pem`; see [IoT Core](../services/iot.md#mqtt-over-tls). Devices that take the hostname from `DescribeEndpoint` and add their own port need `FLOCI_SERVICES_IOT_ENDPOINT_ADDRESS`, see [Endpoint address](../services/iot.md#endpoint-address).
 
 ## SDK Configuration Examples
 
