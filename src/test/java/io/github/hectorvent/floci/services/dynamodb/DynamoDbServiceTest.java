@@ -3017,6 +3017,67 @@ class DynamoDbServiceTest {
     }
 
     @Test
+    void batchWriteItemReportsAKeySchemaMismatchTheWayAwsDoes() {
+        createUsersTable("us-east-1");
+        var wrongType = mapper.createObjectNode();
+        wrongType.set("userId", attributeValue("N", "5"));
+
+        var error = assertThrows(AwsException.class, () -> service.batchWriteItem(
+                Map.of("Users", List.of(putRequest(wrongType))), "us-east-1"));
+        assertEquals("The provided key element does not match the schema", error.getMessage());
+    }
+
+    @Test
+    void putItemStillNamesTheMismatchedKeyTypes() {
+        createUsersTable("us-east-1");
+        var wrongType = mapper.createObjectNode();
+        wrongType.set("userId", attributeValue("N", "5"));
+
+        var error = assertThrows(AwsException.class,
+                () -> service.putItem("Users", wrongType, "us-east-1"));
+        assertEquals("One or more parameter values were invalid: Type mismatch for key userId "
+                + "expected: S actual: N", error.getMessage());
+    }
+
+    @Test
+    void batchWriteItemUsesItsOwnEmptyStringKeyWording() {
+        createUsersTable("us-east-1");
+        ObjectNode emptyKey = mapper.createObjectNode();
+        emptyKey.set("userId", attributeValue("S", ""));
+
+        AwsException batchError = assertThrows(AwsException.class, () -> service.batchWriteItem(
+                Map.of("Users", List.of(putRequest(emptyKey))), "us-east-1"));
+        assertEquals("One or more parameter values are not valid. The AttributeValue for a key "
+                + "attribute cannot contain an empty string value. Key: userId", batchError.getMessage());
+
+        AwsException putError = assertThrows(AwsException.class,
+                () -> service.putItem("Users", emptyKey, "us-east-1"));
+        assertEquals("One or more parameter values were invalid: The AttributeValue for a key "
+                + "attribute cannot contain an empty string value. Key: userId", putError.getMessage());
+    }
+
+    @Test
+    void rejectsAnEmptyBinaryKeyValue() {
+        service.createTable("Binaries",
+                List.of(new KeySchemaElement("pk", "HASH")),
+                List.of(new AttributeDefinition("pk", "B")),
+                5L, 5L, "us-east-1");
+        ObjectNode emptyBinary = mapper.createObjectNode();
+        emptyBinary.set("pk", attributeValue("B", ""));
+
+        AwsException error = assertThrows(AwsException.class,
+                () -> service.putItem("Binaries", emptyBinary, "us-east-1"));
+        assertEquals("One or more parameter values are not valid. The AttributeValue for a key "
+                + "attribute cannot contain an empty binary value. Key: pk", error.getMessage());
+    }
+
+    private JsonNode putRequest(ObjectNode item) {
+        ObjectNode request = mapper.createObjectNode();
+        request.set("PutRequest", mapper.createObjectNode().set("Item", item));
+        return request;
+    }
+
+    @Test
     void updateItemWithNestedDottedPathSetAndRemove() {
         createOrdersTable("us-east-1");
         service.putItem("Orders", item("customerId", "c1", "orderId", "o1"), "us-east-1");
