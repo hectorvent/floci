@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 @DisplayName("Detective organization administration")
 class DetectiveOrganizationAdministrationTest {
     private static final String MANAGEMENT_ACCOUNT = "222222222222";
-    private static final String ADMIN_ACCOUNT = "111111111111";
+    private static final String ADMIN_ACCOUNT = MANAGEMENT_ACCOUNT;
     private static final String MEMBER_ACCOUNT = "333333333333";
 
     @Test
@@ -21,8 +21,15 @@ class DetectiveOrganizationAdministrationTest {
     void organizationAdministrationUsesAwsSdk() {
         assumeFalse(TestFixtures.isRealAws(), "Avoids changing Detective organization settings in real AWS");
 
-        try (DetectiveClient management = TestFixtures.detectiveClient(MANAGEMENT_ACCOUNT);
+        try (var organizations = TestFixtures.organizationsClient(MANAGEMENT_ACCOUNT);
+             DetectiveClient management = TestFixtures.detectiveClient(MANAGEMENT_ACCOUNT);
              DetectiveClient administrator = TestFixtures.detectiveClient(ADMIN_ACCOUNT)) {
+            try {
+                organizations.describeOrganization();
+            } catch (software.amazon.awssdk.services.organizations.model.AwsOrganizationsNotInUseException e) {
+                organizations.createOrganization();
+            }
+
             assertThat(management.listOrganizationAdminAccounts(request -> request.maxResults(200)).administrators())
                     .isEmpty();
 

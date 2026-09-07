@@ -1,7 +1,9 @@
 package io.github.hectorvent.floci.services.detective;
 
+import io.github.hectorvent.floci.services.organizations.OrganizationsService;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DetectiveIntegrationTest {
     private static final String AUTH = "AWS4-HMAC-SHA256 Credential=AKID/20260904/us-east-1/detective/aws4_request";
 
+    @Inject
+    OrganizationsService organizationsService;
+
     @BeforeAll
     static void configureRestAssured() {
         RestAssuredJsonUtils.configureAwsContentTypes();
@@ -21,6 +26,7 @@ class DetectiveIntegrationTest {
 
     @Test
     void organizationGraphAndMemberLifecycleMatchesAwsContract() {
+        organizationsService.createOrganization("000000000000", "ALL");
         String enableBody = post("/orgs/enableAdminAccount", "{\"AccountId\":\"000000000000\"}")
                 .statusCode(200).extract().asString();
         assertTrue(enableBody.isEmpty());
@@ -38,6 +44,12 @@ class DetectiveIntegrationTest {
                 .statusCode(200);
         post("/orgs/describeOrganizationConfiguration", "{\"GraphArn\":\"" + graphArn + "\"}")
                 .statusCode(200).body("AutoEnable", equalTo(true));
+
+        post("/graph/members", "{\"GraphArn\":\"" + graphArn
+                + "\",\"Accounts\":[{\"AccountId\":\"444444444444\"},{\"AccountId\":\"bad\"}]}")
+                .statusCode(400).body("__type", equalTo("ValidationException"));
+        post("/graph/members/list", "{\"GraphArn\":\"" + graphArn + "\"}")
+                .statusCode(200).body("MemberDetails", hasSize(0));
 
         String create = "{\"GraphArn\":\"" + graphArn
                 + "\",\"Accounts\":[{\"AccountId\":\"111111111111\"}]}";

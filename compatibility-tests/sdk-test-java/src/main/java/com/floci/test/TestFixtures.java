@@ -275,10 +275,14 @@ public final class TestFixtures {
     }
 
     public static OrganizationsClient organizationsClient() {
+        return organizationsClient("test");
+    }
+
+    public static OrganizationsClient organizationsClient(String accountId) {
         return OrganizationsClient.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
-                .credentialsProvider(CREDENTIALS)
+                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(accountId, "test")))
                 .build();
     }
 

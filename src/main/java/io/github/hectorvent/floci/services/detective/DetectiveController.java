@@ -52,7 +52,8 @@ public class DetectiveController {
     @POST
     @Path("/orgs/enableAdminAccount")
     public Response enableOrganizationAdminAccount(@Context HttpHeaders headers, String body) {
-        service.enableAdmin(region(headers), parse(body).path("AccountId").asText(null));
+        service.enableAdmin(region(headers), regionResolver.getAccountId(),
+                parse(body).path("AccountId").asText(null));
         return Response.ok().build();
     }
 
@@ -131,6 +132,12 @@ public class DetectiveController {
         if (accounts == null || !accounts.isArray() || accounts.isEmpty() || accounts.size() > 50) {
             throw new AwsException("ValidationException", "Accounts must contain between 1 and 50 members.", 400);
         }
+        List<String> accountIds = new java.util.ArrayList<>(accounts.size());
+        for (JsonNode account : accounts) {
+            accountIds.add(account.path("AccountId").asText(null));
+        }
+        service.validateCreateMembers(region, graphArn, accountIds);
+
         var response = objectMapper.createObjectNode();
         var members = response.putArray("Members");
         var unprocessed = response.putArray("UnprocessedAccounts");

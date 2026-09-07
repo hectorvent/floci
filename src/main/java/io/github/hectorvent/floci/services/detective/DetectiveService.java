@@ -8,6 +8,7 @@ import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.detective.model.DetectiveMember;
 import io.github.hectorvent.floci.services.detective.model.DetectiveState;
+import io.github.hectorvent.floci.services.organizations.OrganizationsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -22,16 +23,20 @@ public class DetectiveService implements Resettable {
 
     private final AccountAwareStorageBackend<DetectiveState> states;
     private final RegionResolver regionResolver;
+    private final OrganizationsService organizationsService;
 
     @Inject
-    public DetectiveService(StorageFactory storageFactory, RegionResolver regionResolver) {
+    public DetectiveService(StorageFactory storageFactory, RegionResolver regionResolver,
+                            OrganizationsService organizationsService) {
         this(storageFactory.create("detective", "detective-state.json",
-                new TypeReference<Map<String, DetectiveState>>() {}), regionResolver);
+                new TypeReference<Map<String, DetectiveState>>() {}), regionResolver, organizationsService);
     }
 
-    DetectiveService(AccountAwareStorageBackend<DetectiveState> states, RegionResolver regionResolver) {
+    DetectiveService(AccountAwareStorageBackend<DetectiveState> states, RegionResolver regionResolver,
+                     OrganizationsService organizationsService) {
         this.states = states;
         this.regionResolver = regionResolver;
+        this.organizationsService = organizationsService;
     }
 
     public DetectiveState state(String region) {
@@ -42,8 +47,19 @@ public class DetectiveService implements Resettable {
         return graphArnForAccount(regionResolver.getAccountId(), region);
     }
 
-    public synchronized void enableAdmin(String region, String accountId) {
+    public synchronized void enableAdmin(String region, String callerAccountId, String accountId) {
         requireAccountId(accountId);
+        var organization = organizationsService.describeOrganization(callerAccountId);
+        if (!callerAccountId.equals(organization.getMasterAccountId())) {
+            throw new AwsException("AccessDeniedException",
+                    "Only the organization management account can designate the Detective administrator account.", 403);
+        }
+        boolean accountInOrganization = organizationsService.listAccounts(callerAccountId).stream()
+                .anyMatch(account -> accountId.equals(account.getId()));
+        if (!accountInOrganization) {
+            throw new AwsException("ValidationException",
+                    "AccountId must identify an account in the organization.", 400);
+        }
         DetectiveState management = state(region);
         if (management.getAdminAccountId() != null && !management.getAdminAccountId().equals(accountId)) {
             throw new AwsException("ConflictException",
@@ -84,6 +100,23 @@ public class DetectiveService implements Resettable {
         state.getMembers().put(accountId, member);
         states.put(region, state);
         return member;
+    }
+
+    public synchronized void validateCreateMembers(String region, String graphArn, List<String> accountIds) {
+        requireGraphArn(region, graphArn);
+        DetectiveState state = requireGraph(region);
+        int newMembers = 0;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String accountId : accountIds) {
+            requireAccountId(accountId);
+            if (seen.add(accountId) && !state.getMembers().containsKey(accountId)) {
+                newMembers++;
+            }
+        }
+        if (state.getMembers().size() + newMembers > MAX_MEMBERS) {
+            throw new AwsException("ServiceQuotaExceededException",
+                    "The behavior graph member quota has been exceeded.", 402);
+        }
     }
 
     public synchronized DetectiveMember startMonitoring(String region, String accountId, String graphArn) {
