@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.dynamodb.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -50,6 +51,11 @@ public class TableDefinition {
     // Replica regions for a global table (single-process emulator backs them all with this table's
     // data; the list drives the DescribeTable Replicas/GlobalTableVersion projection).
     private List<String> replicaRegions;
+    // Resource-based policy attached via PutResourcePolicy (JSON policy document text), and the
+    // opaque revision id AWS hands back so callers can pass ExpectedRevisionId for optimistic
+    // concurrency on subsequent Put/DeleteResourcePolicy calls. Null when no policy is attached.
+    private String resourcePolicy;
+    private String resourcePolicyRevisionId;
 
     public TableDefinition() {
         this.keySchema = new ArrayList<>();
@@ -206,6 +212,13 @@ public class TableDefinition {
     public Integer getOnDemandMaxWriteRequestUnits() { return onDemandMaxWriteRequestUnits; }
     public void setOnDemandMaxWriteRequestUnits(Integer v) { this.onDemandMaxWriteRequestUnits = v; }
 
+    public String getResourcePolicy() { return resourcePolicy; }
+    public void setResourcePolicy(String resourcePolicy) { this.resourcePolicy = resourcePolicy; }
+
+    public String getResourcePolicyRevisionId() { return resourcePolicyRevisionId; }
+    public void setResourcePolicyRevisionId(String resourcePolicyRevisionId) { this.resourcePolicyRevisionId = resourcePolicyRevisionId; }
+
+    @JsonIgnore
     public String getPartitionKeyName() {
         return keySchema.stream()
                 .filter(k -> "HASH".equals(k.getKeyType()))
@@ -215,6 +228,7 @@ public class TableDefinition {
     }
 
     /** Returns the sort key attribute name, or null if none. */
+    @JsonIgnore
     public String getSortKeyName() {
         return keySchema.stream()
                 .filter(k -> "RANGE".equals(k.getKeyType()))
@@ -226,7 +240,13 @@ public class TableDefinition {
     /**
      * Returns all sort key attribute names in key-schema order. For a composite sort key this
      * contains more than one element; ordering must consider all of them, not just the first.
+     *
+     * <p>{@code @JsonIgnore}d: it is derived from {@code keySchema} (redundant with
+     * {@link #getSortKeyName()}), and without a backing setter Jackson's getter-as-setter
+     * fallback tries to append into the immutable list this method returns, throwing
+     * {@code UnsupportedOperationException} on deserialization whenever the table has a sort key.
      */
+    @JsonIgnore
     public List<String> getSortKeyNames() {
         return keySchema.stream()
                 .filter(k -> "RANGE".equals(k.getKeyType()))

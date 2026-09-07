@@ -231,6 +231,20 @@ class CognitoIntegrationTest {
     }
 
     @Test
+    @Order(5)
+    void describeUnknownUserPoolNamesPoolInResourceNotFoundMessage() {
+        String missingPoolId = "us-east-1_000000000";
+
+        cognitoAction("DescribeUserPool", """
+                { "UserPoolId": "%s" }
+                """.formatted(missingPoolId))
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("ResourceNotFoundException"))
+                .body("message", equalTo("User pool " + missingPoolId + " does not exist."));
+    }
+
+    @Test
     @Order(6)
     void confirmForgotPasswordRejectsWrongConfirmationCode() throws Exception {
         JsonNode poolResponse = cognitoJson("CreateUserPool", """
@@ -340,6 +354,55 @@ class CognitoIntegrationTest {
         String destination = signUpResponse.jsonPath().getString("CodeDeliveryDetails.Destination");
         assertThat(destination, notNullValue());
         assertThat(destination, containsString("4567"));
+    }
+
+    @Test
+    void signUpEnforcesTheConfiguredPasswordPolicy() throws Exception {
+        JsonNode poolResponse = cognitoJson("CreateUserPool", """
+                {
+                  "PoolName": "StrictPasswordPolicyPool",
+                  "Policies": {
+                    "PasswordPolicy": {
+                      "MinimumLength": 12,
+                      "RequireUppercase": true,
+                      "RequireLowercase": true,
+                      "RequireNumbers": true,
+                      "RequireSymbols": true,
+                      "PasswordHistorySize": 10
+                    }
+                  }
+                }
+                """);
+        String strictPoolId = poolResponse.path("UserPool").path("Id").asText();
+
+        JsonNode clientResponse = cognitoJson("CreateUserPoolClient", """
+                {
+                  "UserPoolId": "%s",
+                  "ClientName": "strict-password-policy-client"
+                }
+                """.formatted(strictPoolId));
+        String strictClientId = clientResponse.path("UserPoolClient").path("ClientId").asText();
+
+        cognitoAction("SignUp", """
+                {
+                  "ClientId": "%s",
+                  "Username": "invalid-password-user",
+                  "Password": "Short1!"
+                }
+                """.formatted(strictClientId))
+                .then()
+                .statusCode(400)
+                .body("__type", org.hamcrest.Matchers.equalTo("InvalidPasswordException"));
+
+        cognitoAction("SignUp", """
+                {
+                  "ClientId": "%s",
+                  "Username": "valid-password-user",
+                  "Password": "ValidPassword1!"
+                }
+                """.formatted(strictClientId))
+                .then()
+                .statusCode(200);
     }
 
     @Test
@@ -810,7 +873,7 @@ class CognitoIntegrationTest {
                 }
                 """.formatted(poolId))
                 .then()
-                .statusCode(404);
+                .statusCode(400);
     }
 
     // ── UpdateGroup & ListUsersInGroup ────────────────────────────────
@@ -1440,7 +1503,7 @@ class CognitoIntegrationTest {
                 }
                 """.formatted(clientId, poolId))
                 .then()
-                .statusCode(404);
+                .statusCode(400);
     }
 
     @Test

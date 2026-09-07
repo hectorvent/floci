@@ -8,11 +8,13 @@ import io.github.hectorvent.floci.services.ec2.Ec2Service;
 import io.github.hectorvent.floci.services.ec2.model.Instance;
 import io.github.hectorvent.floci.services.ec2.model.LaunchTemplate;
 import io.github.hectorvent.floci.services.ec2.model.Reservation;
+import io.github.hectorvent.floci.services.elb.ElbClassicService;
 import io.github.hectorvent.floci.services.elbv2.ElbV2Service;
 import io.github.hectorvent.floci.services.elbv2.model.TargetDescription;
 import io.github.hectorvent.floci.services.elbv2.model.TargetHealth;
 import io.github.hectorvent.floci.services.ssm.SsmCommandService;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
@@ -36,27 +38,35 @@ public class AutoScalingReconciler {
     private final AutoScalingService asgService;
     private final Ec2Service ec2Service;
     private final ElbV2Service elbV2Service;
+    private final ElbClassicService elbClassicService;
     private final SsmCommandService ssmCommandService;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
             r -> new Thread(r, "asg-reconciler"));
 
     @Inject
     AutoScalingReconciler(AutoScalingService asgService, Ec2Service ec2Service,
-                          ElbV2Service elbV2Service, SsmCommandService ssmCommandService) {
+                          ElbV2Service elbV2Service, ElbClassicService elbClassicService,
+                          SsmCommandService ssmCommandService) {
         this.asgService = asgService;
         this.ec2Service = ec2Service;
         this.elbV2Service = elbV2Service;
+        this.elbClassicService = elbClassicService;
         this.ssmCommandService = ssmCommandService;
     }
 
     AutoScalingReconciler(AutoScalingService asgService, Ec2Service ec2Service,
                           ElbV2Service elbV2Service) {
-        this(asgService, ec2Service, elbV2Service, null);
+        this(asgService, ec2Service, elbV2Service, null, null);
     }
 
     @PostConstruct
     void start() {
         scheduler.scheduleAtFixedRate(this::reconcileAll, 5, 10, TimeUnit.SECONDS);
+    }
+
+    @PreDestroy
+    void stop() {
+        scheduler.shutdownNow();
     }
 
     void onStart(@Observes StartupEvent event) {
@@ -118,6 +128,7 @@ public class AutoScalingReconciler {
                     asgInst.setLifecycleState("InService");
                     asgInst.setHealthStatus("Healthy");
                     registerWithTargetGroups(asg, asgInst);
+                    registerWithClassicLoadBalancers(asg, asgInst);
                     changed = true;
                     asgService.recordActivity(asg.getRegion(), asg.getAutoScalingGroupName(),
                             "Launching a new EC2 instance: " + asgInst.getInstanceId(),
@@ -148,6 +159,8 @@ public class AutoScalingReconciler {
                 .map(AsgInstance::getInstanceId)
                 .collect(Collectors.toList());
         failActiveSsmInvocations(asg, instanceIds);
+        deregisterFromTargetGroups(asg, instanceIds);
+        deregisterFromClassicLoadBalancers(asg, instanceIds);
         asg.getInstances().removeIf(instance -> instanceIds.contains(instance.getInstanceId()));
         asgService.saveAutoScalingGroup(asg);
         asgService.recordActivity(asg.getRegion(), asg.getAutoScalingGroupName(),
@@ -252,6 +265,7 @@ public class AutoScalingReconciler {
                 .map(AsgInstance::getInstanceId)
                 .collect(Collectors.toList());
         deregisterFromTargetGroups(asg, instanceIds);
+        deregisterFromClassicLoadBalancers(asg, instanceIds);
         try {
             ec2Service.terminateInstances(asg.getRegion(), instanceIds);
         } catch (Exception e) {
@@ -355,6 +369,7 @@ public class AutoScalingReconciler {
                 .collect(Collectors.toList());
 
         deregisterFromTargetGroups(asg, instanceIds);
+        deregisterFromClassicLoadBalancers(asg, instanceIds);
 
         try {
             ec2Service.terminateInstances(asg.getRegion(), instanceIds);
@@ -381,6 +396,45 @@ public class AutoScalingReconciler {
             } catch (Exception e) {
                 LOG.debugv("ASG {0}: could not deregister from TG {1}: {2}",
                         asg.getAutoScalingGroupName(), tgArn, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Registers a newly launched instance with every Classic load balancer the group names.
+     *
+     * <p>An ASG attached through {@code LoadBalancerNames} feeds a Classic load balancer, not a
+     * target group, and the two lists are independent — a group can carry either or both. Without
+     * this the Classic load balancer would stay empty, and a {@code min_elb_capacity} wait would
+     * never be satisfied.
+     */
+    private void registerWithClassicLoadBalancers(AutoScalingGroup asg, AsgInstance asgInst) {
+        if (elbClassicService == null) {
+            return;
+        }
+        for (String lbName : asg.getLoadBalancerNames()) {
+            try {
+                elbClassicService.registerInstances(asg.getRegion(), lbName,
+                        List.of(asgInst.getInstanceId()));
+                LOG.debugv("ASG {0}: registered {1} with Classic ELB {2}",
+                        asg.getAutoScalingGroupName(), asgInst.getInstanceId(), lbName);
+            } catch (Exception e) {
+                LOG.warnv("ASG {0}: could not register {1} with Classic ELB {2}: {3}",
+                        asg.getAutoScalingGroupName(), asgInst.getInstanceId(), lbName, e.getMessage());
+            }
+        }
+    }
+
+    private void deregisterFromClassicLoadBalancers(AutoScalingGroup asg, List<String> instanceIds) {
+        if (elbClassicService == null) {
+            return;
+        }
+        for (String lbName : asg.getLoadBalancerNames()) {
+            try {
+                elbClassicService.deregisterInstances(asg.getRegion(), lbName, instanceIds);
+            } catch (Exception e) {
+                LOG.debugv("ASG {0}: could not deregister from Classic ELB {1}: {2}",
+                        asg.getAutoScalingGroupName(), lbName, e.getMessage());
             }
         }
     }
@@ -434,13 +488,13 @@ public class AutoScalingReconciler {
                     : asg.getLaunchTemplateVersion();
             return new LaunchSource(
                     null,
-                    version.getImageId(),
-                    version.getInstanceType(),
-                    version.getKeyName(),
-                    version.getSecurityGroupIds(),
-                    version.getInstanceTags(),
-                    version.getUserData(),
-                    version.getIamInstanceProfileArn(),
+                    version.getData().getImageId(),
+                    version.getData().getInstanceType(),
+                    version.getData().getKeyName(),
+                    version.getData().effectiveSecurityGroupIds(),
+                    version.getData().getInstanceTags(),
+                    version.getData().getUserData(),
+                    ec2Service.iamInstanceProfileArn(version.getData()),
                     asg.getLaunchTemplateId(),
                     asg.getLaunchTemplateName(),
                     resolvedVersion,
@@ -464,13 +518,13 @@ public class AutoScalingReconciler {
                 String instanceType = mixedInstancesInstanceType(asg, version);
                 return new LaunchSource(
                         null,
-                        version.getImageId(),
+                        version.getData().getImageId(),
                         instanceType,
-                        version.getKeyName(),
-                        version.getSecurityGroupIds(),
-                        version.getInstanceTags(),
-                        version.getUserData(),
-                        version.getIamInstanceProfileArn(),
+                        version.getData().getKeyName(),
+                        version.getData().effectiveSecurityGroupIds(),
+                        version.getData().getInstanceTags(),
+                        version.getData().getUserData(),
+                        ec2Service.iamInstanceProfileArn(version.getData()),
                         specification.getLaunchTemplateId() == null
                                 ? mixedLaunchTemplate.getLaunchTemplateId()
                                 : specification.getLaunchTemplateId(),
@@ -551,7 +605,7 @@ public class AutoScalingReconciler {
                 }
             }
         }
-        return version.getInstanceType();
+        return version.getData().getInstanceType();
     }
 
     private record LaunchSource(

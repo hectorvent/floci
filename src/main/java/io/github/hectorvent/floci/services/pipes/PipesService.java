@@ -4,6 +4,9 @@ import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.TagHandler;
+import io.github.hectorvent.floci.core.resource.ExplorerResource;
+import io.github.hectorvent.floci.core.resource.ResourceProvider;
+import io.github.hectorvent.floci.core.resource.SupportedResourceType;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -17,13 +20,16 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 @ApplicationScoped
-public class PipesService implements TagHandler {
+public class PipesService implements TagHandler, ResourceProvider {
 
     private static final Logger LOG = Logger.getLogger(PipesService.class);
 
@@ -118,20 +124,61 @@ public class PipesService implements TagHandler {
                         "Pipe " + name + " does not exist.", 404));
     }
 
+    /**
+     * The UpdatePipe API: a property given as null is left as the pipe holds it.
+     */
     public Pipe updatePipe(String name, String target, String roleArn, String description,
                            DesiredState desiredState, String enrichment,
                            JsonNode sourceParameters, JsonNode targetParameters,
                            JsonNode enrichmentParameters, String region) {
+        return writePipeConfiguration(name, target, roleArn, description, desiredState, enrichment,
+                sourceParameters, targetParameters, enrichmentParameters, region, false);
+    }
+
+    /**
+     * Puts the pipe back to a configuration held in full: a property given as null is cleared, so
+     * the pipe ends up carrying exactly what is passed here and nothing the caller left out.
+     */
+    public Pipe restorePipe(String name, String target, String roleArn, String description,
+                            DesiredState desiredState, String enrichment,
+                            JsonNode sourceParameters, JsonNode targetParameters,
+                            JsonNode enrichmentParameters, String region) {
+        return writePipeConfiguration(name, target, roleArn, description, desiredState, enrichment,
+                sourceParameters, targetParameters, enrichmentParameters, region, true);
+    }
+
+    /**
+     * Writes the pipe's configuration under the two meanings an unset property carries.
+     *
+     * <p>With {@code clearUnsetProperties} false, a null property leaves the pipe's value alone:
+     * that is what UpdatePipe promises its callers. With it true, a null property clears the pipe's
+     * value, which is what putting a pipe back to a configuration recorded in full needs.
+     */
+    private Pipe writePipeConfiguration(String name, String target, String roleArn, String description,
+                                        DesiredState desiredState, String enrichment,
+                                        JsonNode sourceParameters, JsonNode targetParameters,
+                                        JsonNode enrichmentParameters, String region,
+                                        boolean clearUnsetProperties) {
         String key = region + "::" + name;
         Pipe pipe = storage.get(key)
                 .orElseThrow(() -> new AwsException("NotFoundException",
                         "Pipe " + name + " does not exist.", 404));
 
-        validateSourceConfiguration(pipe.getSource(), sourceParameters != null ? sourceParameters : pipe.getSourceParameters());
+        JsonNode effectiveSourceParameters = sourceParameters == null && !clearUnsetProperties
+                ? pipe.getSourceParameters()
+                : sourceParameters;
+        validateSourceConfiguration(pipe.getSource(), effectiveSourceParameters);
 
-        if (target != null) pipe.setTarget(target);
-        if (roleArn != null) pipe.setRoleArn(roleArn);
-        if (description != null) pipe.setDescription(description);
+        writeProperty(target, clearUnsetProperties, pipe::setTarget);
+        writeProperty(roleArn, clearUnsetProperties, pipe::setRoleArn);
+        writeProperty(description, clearUnsetProperties, pipe::setDescription);
+        writeProperty(enrichment, clearUnsetProperties, pipe::setEnrichment);
+        writeProperty(sourceParameters, clearUnsetProperties, pipe::setSourceParameters);
+        writeProperty(targetParameters, clearUnsetProperties, pipe::setTargetParameters);
+        writeProperty(enrichmentParameters, clearUnsetProperties, pipe::setEnrichmentParameters);
+        // A pipe always has a desired state: createPipe defaults it to RUNNING and currentState is
+        // read off it. A null therefore leaves both alone on either path, rather than clearing a
+        // state the poller and currentState would then contradict.
         if (desiredState != null) {
             pipe.setDesiredState(desiredState);
             pipe.setCurrentState(desiredState == DesiredState.RUNNING ? PipeState.RUNNING : PipeState.STOPPED);
@@ -141,15 +188,18 @@ public class PipesService implements TagHandler {
                 poller.stopPolling(pipe);
             }
         }
-        if (enrichment != null) pipe.setEnrichment(enrichment);
-        if (sourceParameters != null) pipe.setSourceParameters(sourceParameters);
-        if (targetParameters != null) pipe.setTargetParameters(targetParameters);
-        if (enrichmentParameters != null) pipe.setEnrichmentParameters(enrichmentParameters);
 
         pipe.setLastModifiedTime(Instant.now());
         storage.put(key, pipe);
         LOG.infov("Updated pipe: {0}", name);
         return pipe;
+    }
+
+    /** Applies one property under the unset meaning {@code clearUnsetProperties} selects. */
+    private static <T> void writeProperty(T value, boolean clearUnsetProperties, Consumer<T> setter) {
+        if (value != null || clearUnsetProperties) {
+            setter.accept(value);
+        }
     }
 
     public void deletePipe(String name, String region) {
@@ -202,6 +252,29 @@ public class PipesService implements TagHandler {
         storage.put(key, pipe);
         LOG.infov("Stopped pipe: {0}", name);
         return pipe;
+    }
+
+    @Override
+    public List<ExplorerResource> getResources() {
+        List<ExplorerResource> resources = new ArrayList<>();
+        for (Pipe pipe : storage.scan(k -> true)) {
+            String arn = pipe.getArn();
+            if (arn == null) {
+                continue;
+            }
+            AwsArnUtils.Arn parsed = AwsArnUtils.parse(arn);
+            resources.add(new ExplorerResource(
+                    arn, "pipes:pipe", "pipes",
+                    parsed.region(), parsed.accountId(),
+                    pipe.getCreationTime() != null ? pipe.getCreationTime() : Instant.now(),
+                    pipe.getTags() != null ? pipe.getTags() : Map.of()));
+        }
+        return resources;
+    }
+
+    @Override
+    public Set<SupportedResourceType> getSupportedResourceTypes() {
+        return Set.of(new SupportedResourceType("pipes:pipe", "pipes", true));
     }
 
     @Override

@@ -40,6 +40,13 @@ public class DeliveryStreamDescription {
     @JsonProperty("Tags")
     private List<Tag> tags = new ArrayList<>();
 
+    // Field-level default so streams persisted before this field existed deserialize to
+    // the AWS-shaped DISABLED configuration instead of null (Jackson only overwrites it
+    // when the stored JSON actually carries the property).
+    @JsonProperty("DeliveryStreamEncryptionConfiguration")
+    private DeliveryStreamEncryptionConfiguration deliveryStreamEncryptionConfiguration =
+            DeliveryStreamEncryptionConfiguration.disabled();
+
     public DeliveryStreamDescription() {}
     public DeliveryStreamDescription(String name, String arn, S3Destination s3) {
         this(name, arn, s3, null);
@@ -54,6 +61,7 @@ public class DeliveryStreamDescription {
             s3.applyDefaults();
         }
         this.destinations = List.of(new Destination(s3));
+        this.deliveryStreamEncryptionConfiguration = DeliveryStreamEncryptionConfiguration.disabled();
         if (kinesisStreamSource != null) {
             this.source = new Source(kinesisStreamSource);
         }
@@ -80,6 +88,12 @@ public class DeliveryStreamDescription {
     public void setLastUpdateTimestamp(Instant lastUpdateTimestamp) { this.lastUpdateTimestamp = lastUpdateTimestamp; }
     public List<Destination> getDestinations() { return destinations; }
     public void setDestinations(List<Destination> destinations) { this.destinations = destinations; }
+    public DeliveryStreamEncryptionConfiguration getDeliveryStreamEncryptionConfiguration() {
+        return deliveryStreamEncryptionConfiguration;
+    }
+    public void setDeliveryStreamEncryptionConfiguration(DeliveryStreamEncryptionConfiguration configuration) {
+        this.deliveryStreamEncryptionConfiguration = configuration;
+    }
     public Source getSource() { return source; }
     public void setSource(Source source) { this.source = source; }
 
@@ -129,10 +143,15 @@ public class DeliveryStreamDescription {
         }
     }
 
-    /** Convenience: returns the first S3 destination, or null if none. */
+    /**
+     * Convenience: returns the first S3 destination, or null if none. Reads through the
+     * extended getter - the live, full object - not getS3DestinationDescription(), which
+     * returns a filtered view for the plain wire shape and would otherwise silently drop
+     * FileExtension/CustomTimeZone/S3BackupMode from every caller of this method.
+     */
     public S3Destination s3Destination() {
         if (destinations == null || destinations.isEmpty()) return null;
-        return destinations.get(0).getS3DestinationDescription();
+        return destinations.get(0).getExtendedS3DestinationDescription();
     }
 
     @RegisterForReflection
@@ -142,9 +161,10 @@ public class DeliveryStreamDescription {
         @JsonProperty("DestinationId")
         private String destinationId = "destinationId-000000000001";
 
-        // Single canonical S3 config, serialized under both wire keys: real AWS
-        // returns ExtendedS3DestinationDescription plus the deprecated
-        // S3DestinationDescription mirror for every S3-backed stream.
+        // Single canonical S3 config, serialized under both wire keys: real AWS returns
+        // ExtendedS3DestinationDescription plus the deprecated S3DestinationDescription mirror
+        // for every S3-backed stream. The mirror is a filtered view (see standardView()) since
+        // extended-only fields like S3BackupMode aren't part of the plain shape.
         private S3Destination s3;
 
         public Destination() {}
@@ -154,7 +174,7 @@ public class DeliveryStreamDescription {
         public void setDestinationId(String destinationId) { this.destinationId = destinationId; }
 
         @JsonProperty("S3DestinationDescription")
-        public S3Destination getS3DestinationDescription() { return s3; }
+        public S3Destination getS3DestinationDescription() { return s3 != null ? s3.standardView() : null; }
         @JsonProperty("S3DestinationDescription")
         public void setS3DestinationDescription(S3Destination s3) {
             // Guarded so persisted JSON carrying both keys (identical content) stays
@@ -184,12 +204,16 @@ public class DeliveryStreamDescription {
         private String errorOutputPrefix;
         @JsonProperty("CompressionFormat")
         private String compressionFormat;
+        @JsonProperty("FileExtension")
+        private String fileExtension;
         @JsonProperty("CustomTimeZone")
         private String customTimeZone;
         @JsonProperty("BufferingHints")
         private BufferingHints bufferingHints;
         @JsonProperty("EncryptionConfiguration")
         private EncryptionConfiguration encryptionConfiguration;
+        @JsonProperty("S3BackupMode")
+        private String s3BackupMode;
 
         public S3Destination() {}
         public String getRoleArn() { return roleArn; }
@@ -202,12 +226,16 @@ public class DeliveryStreamDescription {
         public void setErrorOutputPrefix(String errorOutputPrefix) { this.errorOutputPrefix = errorOutputPrefix; }
         public String getCompressionFormat() { return compressionFormat; }
         public void setCompressionFormat(String compressionFormat) { this.compressionFormat = compressionFormat; }
+        public String getFileExtension() { return fileExtension; }
+        public void setFileExtension(String fileExtension) { this.fileExtension = fileExtension; }
         public String getCustomTimeZone() { return customTimeZone; }
         public void setCustomTimeZone(String customTimeZone) { this.customTimeZone = customTimeZone; }
         public BufferingHints getBufferingHints() { return bufferingHints; }
         public void setBufferingHints(BufferingHints bufferingHints) { this.bufferingHints = bufferingHints; }
         public EncryptionConfiguration getEncryptionConfiguration() { return encryptionConfiguration; }
         public void setEncryptionConfiguration(EncryptionConfiguration encryptionConfiguration) { this.encryptionConfiguration = encryptionConfiguration; }
+        public String getS3BackupMode() { return s3BackupMode; }
+        public void setS3BackupMode(String s3BackupMode) { this.s3BackupMode = s3BackupMode; }
 
         /**
          * Fills the members the wire contract marks required with the AWS defaults.
@@ -217,6 +245,9 @@ public class DeliveryStreamDescription {
         public void applyDefaults() {
             if (compressionFormat == null) {
                 compressionFormat = "UNCOMPRESSED";
+            }
+            if (s3BackupMode == null) {
+                s3BackupMode = "Disabled";
             }
             if (encryptionConfiguration == null) {
                 encryptionConfiguration = EncryptionConfiguration.noEncryption();
@@ -233,6 +264,24 @@ public class DeliveryStreamDescription {
                     bufferingHints.setIntervalInSeconds(300);
                 }
             }
+        }
+
+        /**
+         * A view of this config with only the fields AWS's plain S3DestinationDescription
+         * actually has - FileExtension, CustomTimeZone, and S3BackupMode are extended-only.
+         * Used for the standard/legacy wire shape; ExtendedS3DestinationDescription serializes
+         * this same object directly instead, with every field included.
+         */
+        S3Destination standardView() {
+            S3Destination view = new S3Destination();
+            view.roleArn = roleArn;
+            view.bucketArn = bucketArn;
+            view.prefix = prefix;
+            view.errorOutputPrefix = errorOutputPrefix;
+            view.compressionFormat = compressionFormat;
+            view.bufferingHints = bufferingHints;
+            view.encryptionConfiguration = encryptionConfiguration;
+            return view;
         }
 
         /** Extracts bucket name from ARN: arn:aws:s3:::my-bucket → my-bucket */
@@ -329,5 +378,36 @@ public class DeliveryStreamDescription {
         public void setKey(String key) { this.key = key; }
         public String getValue() { return value; }
         public void setValue(String value) { this.value = value; }
+    }
+
+    @RegisterForReflection
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class DeliveryStreamEncryptionConfiguration {
+        @JsonProperty("KeyType")
+        private String keyType;
+        @JsonProperty("KeyARN")
+        private String keyArn;
+        @JsonProperty("Status")
+        private String status;
+
+        public DeliveryStreamEncryptionConfiguration() {}
+
+        public DeliveryStreamEncryptionConfiguration(String keyType, String keyArn, String status) {
+            this.keyType = keyType;
+            this.keyArn = keyArn;
+            this.status = status;
+        }
+
+        public static DeliveryStreamEncryptionConfiguration disabled() {
+            return new DeliveryStreamEncryptionConfiguration("AWS_OWNED_CMK", null, "DISABLED");
+        }
+
+        public String getKeyType() { return keyType; }
+        public void setKeyType(String keyType) { this.keyType = keyType; }
+        public String getKeyArn() { return keyArn; }
+        public void setKeyArn(String keyArn) { this.keyArn = keyArn; }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
     }
 }

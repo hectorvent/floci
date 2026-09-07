@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 @Path("/2020-05-31")
@@ -29,6 +30,17 @@ public class CloudFrontController {
 
     private static final String NS = AwsNamespaces.CLOUDFRONT;
     private static final String XML = "application/xml";
+    private static final String OCTET_STREAM = "application/octet-stream";
+    private static final String GEO_RESTRICTION = "GeoRestriction";
+    private static final String ORIGIN_GROUPS = "OriginGroups";
+    private static final String ITEMS = "Items";
+    private static final String LOCATION = "Location";
+    private static final String LOCATIONS = "Locations";
+    private static final String QUANTITY = "Quantity";
+    private static final String RESTRICTION_TYPE = "RestrictionType";
+    private static final String RESTRICTIONS = "Restrictions";
+    private static final String DEFAULT_GEO_RESTRICTION_TYPE = "none";
+    private static final int EMPTY_QUANTITY = 0;
 
     private static final XMLInputFactory XML_FACTORY;
 
@@ -510,12 +522,12 @@ public class CloudFrontController {
     public Response getResponseHeadersPolicyConfig(@PathParam("Id") String id) {
         try {
             ResponseHeadersPolicy policy = service.getResponseHeadersPolicy(id);
-            String xml = new XmlBuilder()
+            XmlBuilder builder = new XmlBuilder()
                     .start("ResponseHeadersPolicyConfig", NS)
                     .elem("Name", policy.getName())
-                    .elem("Comment", policy.getComment() != null ? policy.getComment() : "")
-                    .end("ResponseHeadersPolicyConfig")
-                    .build();
+                    .elem("Comment", policy.getComment() != null ? policy.getComment() : "");
+            ResponseHeadersPolicyConfigCodec.serialize(builder, policy.getConfig());
+            String xml = builder.end("ResponseHeadersPolicyConfig").build();
             return Response.ok(xml, XML).header("ETag", policy.getEtag()).build();
         } catch (AwsException e) {
             return xmlErrorResponse(e);
@@ -563,23 +575,32 @@ public class CloudFrontController {
                                                 @QueryParam("MaxItems") @DefaultValue("100") int maxItems,
                                                 @QueryParam("Type") String type) {
         try {
+            if (maxItems < 1 || maxItems > 100) {
+                throw new AwsException("InvalidArgument",
+                        "MaxItems must be between 1 and 100.", 400);
+            }
             Page<ResponseHeadersPolicy> page = page(
-                    service.listResponseHeadersPolicies(marker, paginationFetchLimit(maxItems)),
+                    service.listResponseHeadersPolicies(
+                            marker, paginationFetchLimit(maxItems), type),
                     maxItems, ResponseHeadersPolicy::getId);
 
             XmlBuilder xml = new XmlBuilder()
                     .start("ResponseHeadersPolicyList", NS)
-                    .elem("NextMarker", page.nextMarker())
-                    .elem("MaxItems", maxItems)
-                    .elem("Quantity", page.items().size())
                     .start("Items");
             for (ResponseHeadersPolicy p : page.items()) {
                 xml.start("ResponseHeadersPolicySummary")
-                        .elem("Type", "custom")
+                        .elem("Type", CloudFrontService.isManagedResponseHeadersPolicy(p.getId())
+                                ? "managed" : "custom")
                         .raw(xmlResponseHeadersPolicyResponse(p))
                         .end("ResponseHeadersPolicySummary");
             }
-            xml.end("Items").end("ResponseHeadersPolicyList");
+            xml.end("Items")
+                    .elem("MaxItems", maxItems);
+            if (page.nextMarker() != null) {
+                xml.elem("NextMarker", page.nextMarker());
+            }
+            xml.elem("Quantity", page.items().size())
+                    .end("ResponseHeadersPolicyList");
             return Response.ok(xml.build(), XML).build();
         } catch (AwsException e) {
             return xmlErrorResponse(e);
@@ -835,6 +856,20 @@ public class CloudFrontController {
 
     @GET
     @Path("/function/{Name}")
+    public Response getFunction(@PathParam("Name") String name,
+                                @QueryParam("Stage") String stage) {
+        try {
+            CloudFrontFunction fn = service.describeFunction(name, stage);
+            return Response.ok(fn.getFunctionCode() != null ? fn.getFunctionCode() : "", OCTET_STREAM)
+                    .header("ETag", fn.getEtag())
+                    .build();
+        } catch (AwsException e) {
+            return xmlErrorResponse(e);
+        }
+    }
+
+    @GET
+    @Path("/function/{Name}/describe")
     public Response describeFunction(@PathParam("Name") String name,
                                      @QueryParam("Stage") String stage) {
         try {
@@ -1751,6 +1786,7 @@ public class CloudFrontController {
         List<Origin> origins = cfg.getOrigins();
         xml.raw(xmlQuantityItems("Origins", "Origin", origins != null ? origins.size() : 0,
                 origins != null ? origins.stream().map(this::xmlOrigin).toList() : List.of()));
+        xml.raw(xmlEmptyOriginGroups());
 
         if (cfg.getDefaultCacheBehavior() != null) {
             xml.raw(xmlDefaultCacheBehavior(cfg.getDefaultCacheBehavior()));
@@ -1806,8 +1842,67 @@ public class CloudFrontController {
         xml.end("Aliases");
 
         xml.raw(xmlViewerCertificate(cfg.getViewerCertificate()));
+        xml.raw(xmlRestrictions(cfg.getGeoRestriction()));
 
         return xml.build();
+    }
+
+    private String xmlEmptyOriginGroups() {
+        // Presence-only OriginGroups is intentional for Terraform compatibility; round-tripping groups is deferred.
+        return new XmlBuilder()
+                .start(ORIGIN_GROUPS)
+                .elem(QUANTITY, EMPTY_QUANTITY)
+                .end(ORIGIN_GROUPS)
+                .build();
+    }
+
+    private String xmlRestrictions(Map<String, Object> geoRestriction) {
+        String restrictionType = DEFAULT_GEO_RESTRICTION_TYPE;
+        int quantity = EMPTY_QUANTITY;
+        List<String> locations = List.of();
+        if (geoRestriction != null) {
+            restrictionType = String.valueOf(
+                    geoRestriction.getOrDefault(RESTRICTION_TYPE, DEFAULT_GEO_RESTRICTION_TYPE));
+            locations = stringList(geoRestriction.get(LOCATIONS));
+            quantity = parseInt(geoRestriction.get(QUANTITY), EMPTY_QUANTITY);
+            if (quantity == EMPTY_QUANTITY && !locations.isEmpty()) {
+                quantity = locations.size();
+            }
+        }
+
+        XmlBuilder xml = new XmlBuilder()
+                .start(RESTRICTIONS)
+                .start(GEO_RESTRICTION)
+                .elem(RESTRICTION_TYPE, restrictionType)
+                .elem(QUANTITY, quantity);
+        if (!locations.isEmpty()) {
+            xml.start(ITEMS);
+            for (String location : locations) {
+                xml.elem(LOCATION, location);
+            }
+            xml.end(ITEMS);
+        }
+        return xml.end(GEO_RESTRICTION)
+                .end(RESTRICTIONS)
+                .build();
+    }
+
+    private List<String> stringList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        return List.of();
+    }
+
+    private int parseInt(Object value, int defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 
     private String xmlOrigin(Origin o) {
@@ -1842,6 +1937,22 @@ public class CloudFrontController {
                     .end("CustomOriginConfig");
         }
 
+        List<Map<String, String>> customHeaders = o.getCustomHeaders();
+        int customHeaderCount = customHeaders == null ? 0 : customHeaders.size();
+        xml.start("CustomHeaders")
+                .elem("Quantity", customHeaderCount);
+        if (customHeaderCount > 0) {
+            xml.start("Items");
+            for (Map<String, String> header : customHeaders) {
+                xml.start("OriginCustomHeader")
+                        .elem("HeaderName", header.getOrDefault("HeaderName", ""))
+                        .elem("HeaderValue", header.getOrDefault("HeaderValue", ""))
+                        .end("OriginCustomHeader");
+            }
+            xml.end("Items");
+        }
+        xml.end("CustomHeaders");
+
         xml.end("Origin");
         return xml.build();
     }
@@ -1857,6 +1968,7 @@ public class CloudFrontController {
                 .elem("ResponseHeadersPolicyId", dcb.getResponseHeadersPolicyId())
                 .elem("Compress", dcb.isCompress());
 
+        xml.raw(xmlTrustedSigners());
         xml.raw(xmlTrustedKeyGroups(
                 dcb.isTrustedKeyGroupsEnabled(), dcb.getTrustedKeyGroups()));
 
@@ -1867,8 +1979,8 @@ public class CloudFrontController {
         xml.raw(xmlQuantityItems("AllowedMethods", "Method", allowed.size(),
                 allowed.stream().map(m -> "<Method>" + XmlBuilder.escape(m) + "</Method>").toList()));
 
-        xml.start("FunctionAssociations").elem("Quantity", 0).end("FunctionAssociations");
-        xml.start("LambdaFunctionAssociations").elem("Quantity", 0).end("LambdaFunctionAssociations");
+        xml.raw(xmlFunctionAssociations(dcb.getFunctionAssociations()));
+        xml.raw(xmlLambdaFunctionAssociations(dcb.getLambdaFunctionAssociations()));
 
         xml.end("DefaultCacheBehavior");
         return xml.build();
@@ -1886,6 +1998,7 @@ public class CloudFrontController {
                 .elem("ResponseHeadersPolicyId", cb.getResponseHeadersPolicyId())
                 .elem("Compress", cb.isCompress());
 
+        xml.raw(xmlTrustedSigners());
         xml.raw(xmlTrustedKeyGroups(
                 cb.isTrustedKeyGroupsEnabled(), cb.getTrustedKeyGroups()));
 
@@ -1896,11 +2009,48 @@ public class CloudFrontController {
         xml.raw(xmlQuantityItems("AllowedMethods", "Method", allowed.size(),
                 allowed.stream().map(m -> "<Method>" + XmlBuilder.escape(m) + "</Method>").toList()));
 
-        xml.start("FunctionAssociations").elem("Quantity", 0).end("FunctionAssociations");
-        xml.start("LambdaFunctionAssociations").elem("Quantity", 0).end("LambdaFunctionAssociations");
+        xml.raw(xmlFunctionAssociations(cb.getFunctionAssociations()));
+        xml.raw(xmlLambdaFunctionAssociations(cb.getLambdaFunctionAssociations()));
 
         xml.end("CacheBehavior");
         return xml.build();
+    }
+
+    private String xmlLambdaFunctionAssociations(List<Map<String, Object>> associations) {
+        List<Map<String, Object>> list = associations != null ? associations : List.of();
+        XmlBuilder xml = new XmlBuilder()
+                .start("LambdaFunctionAssociations")
+                .elem("Quantity", list.size());
+        if (!list.isEmpty()) {
+            xml.start("Items");
+            for (Map<String, Object> a : list) {
+                xml.start("LambdaFunctionAssociation")
+                        .elem("LambdaFunctionARN", str(a.get("LambdaFunctionARN")))
+                        .elem("EventType", str(a.get("EventType")))
+                        .elem("IncludeBody", Boolean.TRUE.equals(a.get("IncludeBody")))
+                        .end("LambdaFunctionAssociation");
+            }
+            xml.end("Items");
+        }
+        return xml.end("LambdaFunctionAssociations").build();
+    }
+
+    private String xmlFunctionAssociations(List<Map<String, String>> associations) {
+        List<Map<String, String>> list = associations != null ? associations : List.of();
+        XmlBuilder xml = new XmlBuilder()
+                .start("FunctionAssociations")
+                .elem("Quantity", list.size());
+        if (!list.isEmpty()) {
+            xml.start("Items");
+            for (Map<String, String> a : list) {
+                xml.start("FunctionAssociation")
+                        .elem("FunctionARN", str(a.get("FunctionARN")))
+                        .elem("EventType", str(a.get("EventType")))
+                        .end("FunctionAssociation");
+            }
+            xml.end("Items");
+        }
+        return xml.end("FunctionAssociations").build();
     }
 
     private String xmlTrustedKeyGroups(
@@ -1918,6 +2068,18 @@ public class CloudFrontController {
             xml.end("Items");
         }
         return xml.end("TrustedKeyGroups").build();
+    }
+
+    // AWS always echoes a (usually empty) TrustedSigners object in every cache behavior. Floci models
+    // only the modern TrustedKeyGroups, but the Terraform AWS provider reads TrustedSigners.Items with
+    // no nil guard, so an omitted object segfaults it on read-back. Emit the disabled form AWS returns.
+    private String xmlTrustedSigners() {
+        return new XmlBuilder()
+                .start("TrustedSigners")
+                .elem("Enabled", false)
+                .elem("Quantity", 0)
+                .end("TrustedSigners")
+                .build();
     }
 
     private String xmlActiveTrustedKeyGroups(DistributionConfig config) {
@@ -1986,10 +2148,9 @@ public class CloudFrontController {
         List<Origin> origins = cfg != null ? cfg.getOrigins() : null;
         xml.raw(xmlQuantityItems("Origins", "Origin",
                 origins != null ? origins.size() : 0,
-                origins != null ? origins.stream().map(o ->
-                        "<Origin><Id>" + XmlBuilder.escape(o.getId()) + "</Id><DomainName>"
-                                + XmlBuilder.escape(o.getDomainName()) + "</DomainName></Origin>").toList()
+                origins != null ? origins.stream().map(this::xmlOrigin).toList()
                         : List.of()));
+        xml.raw(xmlEmptyOriginGroups());
 
         List<String> aliases = cfg != null ? cfg.getAliases() : null;
         int aliasCount = aliases != null ? aliases.size() : 0;
@@ -2004,6 +2165,7 @@ public class CloudFrontController {
         xml.end("Aliases");
 
         xml.raw(xmlViewerCertificate(cfg != null ? cfg.getViewerCertificate() : null));
+        xml.raw(xmlRestrictions(cfg != null ? cfg.getGeoRestriction() : null));
 
         xml.end("DistributionSummary");
         return xml.build();
@@ -2060,15 +2222,16 @@ public class CloudFrontController {
     }
 
     private String xmlResponseHeadersPolicyResponse(ResponseHeadersPolicy policy) {
-        return new XmlBuilder()
+        XmlBuilder xml = new XmlBuilder()
                 .start("ResponseHeadersPolicy")
                 .elem("Id", policy.getId())
                 .elem("LastModifiedTime",
                         policy.getLastModifiedTime() != null ? policy.getLastModifiedTime().toString() : "")
                 .start("ResponseHeadersPolicyConfig")
                 .elem("Name", policy.getName())
-                .elem("Comment", policy.getComment() != null ? policy.getComment() : "")
-                .end("ResponseHeadersPolicyConfig")
+                .elem("Comment", policy.getComment() != null ? policy.getComment() : "");
+        ResponseHeadersPolicyConfigCodec.serialize(xml, policy.getConfig());
+        return xml.end("ResponseHeadersPolicyConfig")
                 .end("ResponseHeadersPolicy")
                 .build();
     }
@@ -2221,6 +2384,7 @@ public class CloudFrontController {
         cfg.setAliases(parseAliases(body));
         cfg.setViewerCertificate(parseViewerCertificate(body));
         cfg.setCustomErrorResponses(parseCustomErrorResponses(body));
+        cfg.setGeoRestriction(parseGeoRestriction(body));
 
         return cfg;
     }
@@ -2354,6 +2518,19 @@ public class CloudFrontController {
         return result;
     }
 
+    private Map<String, Object> parseGeoRestriction(String body) {
+        List<Map<String, String>> groups = XmlParser.extractGroups(body, GEO_RESTRICTION);
+        if (groups.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> geoRestriction = new LinkedHashMap<>(groups.getFirst());
+        List<String> locations = XmlParser.extractAll(body, LOCATION);
+        if (!locations.isEmpty()) {
+            geoRestriction.put(LOCATIONS, locations);
+        }
+        return geoRestriction;
+    }
+
     private List<Origin> parseOrigins(String body) {
         List<Origin> result = new ArrayList<>();
         if (body == null || body.isEmpty()) {
@@ -2368,11 +2545,37 @@ public class CloudFrontController {
             Origin current = null;
             Map<String, String> s3Config = null;
             Map<String, Object> customConfig = null;
+            boolean inCustomHeaders = false;
+            boolean inCustomHeaderItems = false;
+            boolean customHeaderItemsSeen = false;
+            List<Map<String, String>> customHeaders = null;
+            Map<String, String> currentHeader = null;
+            Integer customHeadersQuantity = null;
 
             while (r.hasNext()) {
                 int event = r.next();
                 if (event == XMLStreamConstants.START_ELEMENT) {
                     String local = r.getLocalName();
+                    if (inCustomHeaders) {
+                        boolean validElement = switch (local) {
+                            case "Quantity" -> !inCustomHeaderItems
+                                    && currentHeader == null
+                                    && customHeadersQuantity == null;
+                            case "Items" -> !inCustomHeaderItems
+                                    && currentHeader == null
+                                    && !customHeaderItemsSeen;
+                            case "OriginCustomHeader" ->
+                                    inCustomHeaderItems && currentHeader == null;
+                            case "HeaderName" -> currentHeader != null
+                                    && !currentHeader.containsKey("HeaderName");
+                            case "HeaderValue" -> currentHeader != null
+                                    && !currentHeader.containsKey("HeaderValue");
+                            default -> false;
+                        };
+                        if (!validElement) {
+                            throw invalidOriginCustomHeadersStructure();
+                        }
+                    }
                     switch (local) {
                         case "Origins" -> inOrigins = true;
                         case "Origin" -> {
@@ -2417,7 +2620,8 @@ public class CloudFrontController {
                             if (inOrigin && !inS3OriginConfig && !inCustomOriginConfig && current != null) {
                                 try {
                                     current.setConnectionAttempts(Integer.parseInt(r.getElementText()));
-                                } catch (NumberFormatException ignored) {
+                                } catch (NumberFormatException e) {
+                                    LOG.debugv("Ignoring malformed ConnectionAttempts during parse: {0}", e.getMessage());
                                 }
                             }
                         }
@@ -2425,7 +2629,8 @@ public class CloudFrontController {
                             if (inOrigin && !inS3OriginConfig && !inCustomOriginConfig && current != null) {
                                 try {
                                     current.setConnectionTimeout(Integer.parseInt(r.getElementText()));
-                                } catch (NumberFormatException ignored) {
+                                } catch (NumberFormatException e) {
+                                    LOG.debugv("Ignoring malformed ConnectionTimeout during parse: {0}", e.getMessage());
                                 }
                             }
                         }
@@ -2449,6 +2654,45 @@ public class CloudFrontController {
                                 customConfig.put("OriginProtocolPolicy", r.getElementText());
                             }
                         }
+                        case "CustomHeaders" -> {
+                            if (inOrigin) {
+                                inCustomHeaders = true;
+                                inCustomHeaderItems = false;
+                                customHeaderItemsSeen = false;
+                                customHeaders = new ArrayList<>();
+                                customHeadersQuantity = null;
+                            }
+                        }
+                        case "Quantity" -> {
+                            if (inCustomHeaders && currentHeader == null) {
+                                try {
+                                    customHeadersQuantity = Integer.parseInt(r.getElementText());
+                                } catch (NumberFormatException e) {
+                                    throw inconsistentQuantities();
+                                }
+                            }
+                        }
+                        case "Items" -> {
+                            if (inCustomHeaders) {
+                                inCustomHeaderItems = true;
+                                customHeaderItemsSeen = true;
+                            }
+                        }
+                        case "OriginCustomHeader" -> {
+                            if (inCustomHeaders) {
+                                currentHeader = new LinkedHashMap<>();
+                            }
+                        }
+                        case "HeaderName" -> {
+                            if (inCustomHeaders && currentHeader != null) {
+                                currentHeader.put("HeaderName", r.getElementText());
+                            }
+                        }
+                        case "HeaderValue" -> {
+                            if (inCustomHeaders && currentHeader != null) {
+                                currentHeader.put("HeaderValue", r.getElementText());
+                            }
+                        }
                         default -> {
                         }
                     }
@@ -2468,6 +2712,37 @@ public class CloudFrontController {
                             inCustomOriginConfig = false;
                             customConfig = null;
                         }
+                        case "OriginCustomHeader" -> {
+                            if (inCustomHeaders && currentHeader != null && customHeaders != null) {
+                                customHeaders.add(currentHeader);
+                            }
+                            currentHeader = null;
+                        }
+                        case "Items" -> {
+                            if (inCustomHeaders) {
+                                if (currentHeader != null) {
+                                    throw invalidOriginCustomHeadersStructure();
+                                }
+                                inCustomHeaderItems = false;
+                            }
+                        }
+                        case "CustomHeaders" -> {
+                            if (inCustomHeaders && current != null) {
+                                int itemCount = customHeaders == null ? 0 : customHeaders.size();
+                                if (customHeadersQuantity == null || customHeadersQuantity != itemCount) {
+                                    throw inconsistentQuantities();
+                                }
+                                if (itemCount > 0 && !customHeaderItemsSeen) {
+                                    throw invalidOriginCustomHeadersStructure();
+                                }
+                                current.setCustomHeaders(customHeaders);
+                            }
+                            inCustomHeaders = false;
+                            inCustomHeaderItems = false;
+                            customHeaderItemsSeen = false;
+                            customHeaders = null;
+                            customHeadersQuantity = null;
+                        }
                         case "Origin" -> {
                             if (inOrigin && current != null) {
                                 result.add(current);
@@ -2482,9 +2757,82 @@ public class CloudFrontController {
                 }
             }
             r.close();
-        } catch (Exception ignored) {
+            return result;
+        } catch (AwsException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.debugv("Rejecting malformed Origins during parse: {0}", e.getMessage());
+            throw new AwsException(
+                    "InvalidArgument",
+                    "The origin configuration is invalid.",
+                    400);
         }
-        return result;
+    }
+
+    private static AwsException inconsistentQuantities() {
+        return new AwsException(
+                "InconsistentQuantities",
+                "The value of Quantity and the size of Items do not match.",
+                400);
+    }
+
+    private static AwsException invalidOriginCustomHeadersStructure() {
+        return new AwsException(
+                "InvalidArgument",
+                "The origin custom headers structure is invalid.",
+                400);
+    }
+
+    // Event types accepted by AWS for each association kind. Lambda@Edge runs at all
+    // four points; CloudFront Functions only at the viewer edge.
+    private static final Set<String> LAMBDA_EVENT_TYPES = Set.of(
+            "viewer-request", "viewer-response", "origin-request", "origin-response");
+    private static final Set<String> FUNCTION_EVENT_TYPES = Set.of(
+            "viewer-request", "viewer-response");
+
+    private void validateLambdaFunctionAssociations(List<Map<String, Object>> associations) {
+        for (Map<String, Object> a : associations) {
+            if (str(a.get("LambdaFunctionARN")).isEmpty()) {
+                throw new AwsException("InvalidArgument",
+                        "The Lambda function association must include a LambdaFunctionARN.", 400);
+            }
+            if (!LAMBDA_EVENT_TYPES.contains(str(a.get("EventType")))) {
+                throw new AwsException("InvalidArgument",
+                        "The event type for the Lambda function association is not valid.", 400);
+            }
+        }
+    }
+
+    private void validateFunctionAssociations(List<Map<String, String>> associations) {
+        for (Map<String, String> a : associations) {
+            if (str(a.get("FunctionARN")).isEmpty()) {
+                throw new AwsException("InvalidArgument",
+                        "The CloudFront function association must include a FunctionARN.", 400);
+            }
+            if (!FUNCTION_EVENT_TYPES.contains(str(a.get("EventType")))) {
+                throw new AwsException("InvalidArgument",
+                        "The event type for the CloudFront function association is not valid.", 400);
+            }
+        }
+    }
+
+    private static int parseAssociationsQuantity(String value) {
+        try {
+            int quantity = Integer.parseInt(value.trim());
+            if (quantity < 0) {
+                throw new NumberFormatException("negative quantity");
+            }
+            return quantity;
+        } catch (NumberFormatException e) {
+            throw new AwsException("InvalidArgument",
+                    "The association Quantity must be a non-negative integer.", 400);
+        }
+    }
+
+    private static void validateAssociationsQuantity(Integer declared, int itemCount) {
+        if (declared != null && declared != itemCount) {
+            throw inconsistentQuantities();
+        }
     }
 
     private DefaultCacheBehavior parseDefaultCacheBehavior(String body) {
@@ -2502,6 +2850,14 @@ public class CloudFrontController {
             Integer trustedKeyGroupsQuantity = null;
             List<String> allowedMethods = new ArrayList<>();
             List<String> trustedKeyGroups = new ArrayList<>();
+            boolean inLambdaAssociations = false;
+            boolean inFunctionAssociations = false;
+            Map<String, Object> currentLambdaAssociation = null;
+            Map<String, String> currentFunctionAssociation = null;
+            List<Map<String, Object>> lambdaAssociations = new ArrayList<>();
+            List<Map<String, String>> functionAssociations = new ArrayList<>();
+            Integer lambdaAssociationsQuantity = null;
+            Integer functionAssociationsQuantity = null;
 
             while (r.hasNext()) {
                 int event = r.next();
@@ -2509,6 +2865,49 @@ public class CloudFrontController {
                     String local = r.getLocalName();
                     switch (local) {
                         case "DefaultCacheBehavior" -> inDcb = true;
+                        case "LambdaFunctionAssociations" -> {
+                            if (inDcb) {
+                                inLambdaAssociations = true;
+                            }
+                        }
+                        case "FunctionAssociations" -> {
+                            if (inDcb) {
+                                inFunctionAssociations = true;
+                            }
+                        }
+                        case "LambdaFunctionAssociation" -> {
+                            if (inLambdaAssociations) {
+                                currentLambdaAssociation = new LinkedHashMap<>();
+                            }
+                        }
+                        case "FunctionAssociation" -> {
+                            if (inFunctionAssociations) {
+                                currentFunctionAssociation = new LinkedHashMap<>();
+                            }
+                        }
+                        case "LambdaFunctionARN" -> {
+                            if (currentLambdaAssociation != null) {
+                                currentLambdaAssociation.put("LambdaFunctionARN", r.getElementText());
+                            }
+                        }
+                        case "FunctionARN" -> {
+                            if (currentFunctionAssociation != null) {
+                                currentFunctionAssociation.put("FunctionARN", r.getElementText());
+                            }
+                        }
+                        case "IncludeBody" -> {
+                            if (currentLambdaAssociation != null) {
+                                currentLambdaAssociation.put(
+                                        "IncludeBody", "true".equalsIgnoreCase(r.getElementText()));
+                            }
+                        }
+                        case "EventType" -> {
+                            if (currentLambdaAssociation != null) {
+                                currentLambdaAssociation.put("EventType", r.getElementText());
+                            } else if (currentFunctionAssociation != null) {
+                                currentFunctionAssociation.put("EventType", r.getElementText());
+                            }
+                        }
                         case "TrustedKeyGroups" -> {
                             if (inDcb) {
                                 inTrustedKeyGroups = true;
@@ -2525,6 +2924,12 @@ public class CloudFrontController {
                             if (inTrustedKeyGroups) {
                                 trustedKeyGroupsQuantity =
                                         parseTrustedKeyGroupsQuantity(r.getElementText());
+                            } else if (inLambdaAssociations && currentLambdaAssociation == null) {
+                                lambdaAssociationsQuantity =
+                                        parseAssociationsQuantity(r.getElementText());
+                            } else if (inFunctionAssociations && currentFunctionAssociation == null) {
+                                functionAssociationsQuantity =
+                                        parseAssociationsQuantity(r.getElementText());
                             }
                         }
                         case "KeyGroup" -> {
@@ -2570,6 +2975,20 @@ public class CloudFrontController {
                         case "AllowedMethods" -> inAllowedMethods = false;
                         case "TrustedKeyGroups" -> inTrustedKeyGroups = false;
                         case "DefaultCacheBehavior" -> inDcb = false;
+                        case "LambdaFunctionAssociations" -> inLambdaAssociations = false;
+                        case "FunctionAssociations" -> inFunctionAssociations = false;
+                        case "LambdaFunctionAssociation" -> {
+                            if (currentLambdaAssociation != null) {
+                                lambdaAssociations.add(currentLambdaAssociation);
+                                currentLambdaAssociation = null;
+                            }
+                        }
+                        case "FunctionAssociation" -> {
+                            if (currentFunctionAssociation != null) {
+                                functionAssociations.add(currentFunctionAssociation);
+                                currentFunctionAssociation = null;
+                            }
+                        }
                         default -> {
                         }
                     }
@@ -2581,6 +3000,16 @@ public class CloudFrontController {
             }
             if (!trustedKeyGroups.isEmpty()) {
                 dcb.setTrustedKeyGroups(trustedKeyGroups);
+            }
+            validateAssociationsQuantity(lambdaAssociationsQuantity, lambdaAssociations.size());
+            validateAssociationsQuantity(functionAssociationsQuantity, functionAssociations.size());
+            validateLambdaFunctionAssociations(lambdaAssociations);
+            validateFunctionAssociations(functionAssociations);
+            if (!lambdaAssociations.isEmpty()) {
+                dcb.setLambdaFunctionAssociations(lambdaAssociations);
+            }
+            if (!functionAssociations.isEmpty()) {
+                dcb.setFunctionAssociations(functionAssociations);
             }
             if (sawTrustedKeyGroups) {
                 if (trustedKeyGroupsEnabled == null) {
@@ -2622,6 +3051,14 @@ public class CloudFrontController {
             Integer trustedKeyGroupsQuantity = null;
             List<String> allowedMethods = new ArrayList<>();
             List<String> trustedKeyGroups = new ArrayList<>();
+            boolean inLambdaAssociations = false;
+            boolean inFunctionAssociations = false;
+            Map<String, Object> currentLambdaAssociation = null;
+            Map<String, String> currentFunctionAssociation = null;
+            List<Map<String, Object>> lambdaAssociations = new ArrayList<>();
+            List<Map<String, String>> functionAssociations = new ArrayList<>();
+            Integer lambdaAssociationsQuantity = null;
+            Integer functionAssociationsQuantity = null;
 
             while (r.hasNext()) {
                 int event = r.next();
@@ -2638,6 +3075,53 @@ public class CloudFrontController {
                                 trustedKeyGroupsQuantity = null;
                                 allowedMethods = new ArrayList<>();
                                 trustedKeyGroups = new ArrayList<>();
+                                lambdaAssociations = new ArrayList<>();
+                                functionAssociations = new ArrayList<>();
+                                lambdaAssociationsQuantity = null;
+                                functionAssociationsQuantity = null;
+                            }
+                        }
+                        case "LambdaFunctionAssociations" -> {
+                            if (inCacheBehavior) {
+                                inLambdaAssociations = true;
+                            }
+                        }
+                        case "FunctionAssociations" -> {
+                            if (inCacheBehavior) {
+                                inFunctionAssociations = true;
+                            }
+                        }
+                        case "LambdaFunctionAssociation" -> {
+                            if (inLambdaAssociations) {
+                                currentLambdaAssociation = new LinkedHashMap<>();
+                            }
+                        }
+                        case "FunctionAssociation" -> {
+                            if (inFunctionAssociations) {
+                                currentFunctionAssociation = new LinkedHashMap<>();
+                            }
+                        }
+                        case "LambdaFunctionARN" -> {
+                            if (currentLambdaAssociation != null) {
+                                currentLambdaAssociation.put("LambdaFunctionARN", r.getElementText());
+                            }
+                        }
+                        case "FunctionARN" -> {
+                            if (currentFunctionAssociation != null) {
+                                currentFunctionAssociation.put("FunctionARN", r.getElementText());
+                            }
+                        }
+                        case "IncludeBody" -> {
+                            if (currentLambdaAssociation != null) {
+                                currentLambdaAssociation.put(
+                                        "IncludeBody", "true".equalsIgnoreCase(r.getElementText()));
+                            }
+                        }
+                        case "EventType" -> {
+                            if (currentLambdaAssociation != null) {
+                                currentLambdaAssociation.put("EventType", r.getElementText());
+                            } else if (currentFunctionAssociation != null) {
+                                currentFunctionAssociation.put("EventType", r.getElementText());
                             }
                         }
                         case "TrustedKeyGroups" -> {
@@ -2656,6 +3140,12 @@ public class CloudFrontController {
                             if (inTrustedKeyGroups) {
                                 trustedKeyGroupsQuantity =
                                         parseTrustedKeyGroupsQuantity(r.getElementText());
+                            } else if (inLambdaAssociations && currentLambdaAssociation == null) {
+                                lambdaAssociationsQuantity =
+                                        parseAssociationsQuantity(r.getElementText());
+                            } else if (inFunctionAssociations && currentFunctionAssociation == null) {
+                                functionAssociationsQuantity =
+                                        parseAssociationsQuantity(r.getElementText());
                             }
                         }
                         case "KeyGroup" -> {
@@ -2701,6 +3191,20 @@ public class CloudFrontController {
                     switch (r.getLocalName()) {
                         case "AllowedMethods" -> inAllowedMethods = false;
                         case "TrustedKeyGroups" -> inTrustedKeyGroups = false;
+                        case "LambdaFunctionAssociations" -> inLambdaAssociations = false;
+                        case "FunctionAssociations" -> inFunctionAssociations = false;
+                        case "LambdaFunctionAssociation" -> {
+                            if (currentLambdaAssociation != null) {
+                                lambdaAssociations.add(currentLambdaAssociation);
+                                currentLambdaAssociation = null;
+                            }
+                        }
+                        case "FunctionAssociation" -> {
+                            if (currentFunctionAssociation != null) {
+                                functionAssociations.add(currentFunctionAssociation);
+                                currentFunctionAssociation = null;
+                            }
+                        }
                         case "CacheBehavior" -> {
                             if (inCacheBehavior && current != null) {
                                 if (!allowedMethods.isEmpty()) {
@@ -2708,6 +3212,18 @@ public class CloudFrontController {
                                 }
                                 if (!trustedKeyGroups.isEmpty()) {
                                     current.setTrustedKeyGroups(trustedKeyGroups);
+                                }
+                                validateAssociationsQuantity(
+                                        lambdaAssociationsQuantity, lambdaAssociations.size());
+                                validateAssociationsQuantity(
+                                        functionAssociationsQuantity, functionAssociations.size());
+                                validateLambdaFunctionAssociations(lambdaAssociations);
+                                validateFunctionAssociations(functionAssociations);
+                                if (!lambdaAssociations.isEmpty()) {
+                                    current.setLambdaFunctionAssociations(lambdaAssociations);
+                                }
+                                if (!functionAssociations.isEmpty()) {
+                                    current.setFunctionAssociations(functionAssociations);
                                 }
                                 if (sawTrustedKeyGroups) {
                                     if (trustedKeyGroupsEnabled == null) {
@@ -2883,6 +3399,7 @@ public class CloudFrontController {
         ResponseHeadersPolicy policy = new ResponseHeadersPolicy();
         policy.setName(XmlParser.extractFirst(body, "Name", null));
         policy.setComment(XmlParser.extractFirst(body, "Comment", null));
+        policy.setConfig(ResponseHeadersPolicyConfigCodec.parse(body));
         return policy;
     }
 

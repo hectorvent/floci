@@ -41,7 +41,11 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class EksServiceTest {
@@ -67,9 +71,14 @@ class EksServiceTest {
     }
 
     private EmulatorConfig testConfig() {
+        return testConfig(true);
+    }
+
+    private EmulatorConfig testConfig(boolean mock) {
         EmulatorConfig.EksServiceConfig eksConfig = proxy(EmulatorConfig.EksServiceConfig.class,
                 (proxy, method, args) -> switch (method.getName()) {
-                    case "enabled", "mock" -> true;
+                    case "enabled" -> true;
+                    case "mock" -> mock;
                     case "apiServerBasePort" -> 6500;
                     default -> defaultValue(method);
                 });
@@ -256,7 +265,9 @@ class EksServiceTest {
     void initBackfillsUnderTheOwningAccountNotTheDefault() {
         // Startup has no request context, so the account-scoped put() resolves to the default
         // account. A cluster owned by another account must still be migrated in place, or the owner
-        // keeps an issuer-less record while a duplicate appears under the default account.
+        // keeps an issuer-less record while a duplicate appears under the default account. The
+        // record itself carries no accountId (it is @JsonIgnore, dropped on reload) — the owner
+        // can only come from the storage key.
         String otherAccount = "999999999999";
         StorageBackend<String, Cluster> rawClusters = new InMemoryStorage<>();
         StorageBackend<String, ClusterOidcKey> rawKeys = new InMemoryStorage<>();
@@ -265,7 +276,6 @@ class EksServiceTest {
 
         Cluster legacy = new Cluster();
         legacy.setName("legacy-cluster");
-        legacy.setAccountId(otherAccount);
         legacy.setStatus(ClusterStatus.ACTIVE);
         clusterStore.putForAccount(otherAccount, "legacy-cluster", legacy);
 
@@ -277,11 +287,175 @@ class EksServiceTest {
         Cluster migrated = clusterStore.getForAccount(otherAccount, "legacy-cluster").orElseThrow();
         String issuer = migrated.getIdentity().getOidc().getIssuer();
         assertNotNull(issuer);
+        // The owner rehydrated from the storage key sticks to the record for later puts.
+        assertEquals(otherAccount, migrated.getAccountId());
         // No duplicate stranded under the default account.
         assertTrue(clusterStore.getForAccount("000000000000", "legacy-cluster").isEmpty());
         // The signing key is stored under the owner too, and is still resolvable by issuer.
         assertTrue(keyStore.getForAccount(otherAccount, "legacy-cluster").isPresent());
         assertTrue(oidcService.findVerificationKey(issuer).isPresent());
+    }
+
+    @Test
+    void initRestoresPersistedClustersAfterARestart() {
+        // A cluster restored from eks-clusters.json after a Floci/Docker restart (#2609) has no
+        // container attached — init must re-latch it and hand it back to the readiness poller.
+        StorageBackend<String, Cluster> rawClusters = new InMemoryStorage<>();
+        var clusterStore = new AccountAwareStorageBackend<>(rawClusters, null, "000000000000");
+        Cluster persisted = new Cluster();
+        persisted.setName("persisted-cluster");
+        persisted.setStatus(ClusterStatus.ACTIVE);
+        clusterStore.putForAccount("000000000000", "persisted-cluster", persisted);
+
+        Cluster failed = new Cluster();
+        failed.setName("failed-cluster");
+        failed.setStatus(ClusterStatus.FAILED);
+        clusterStore.putForAccount("000000000000", "failed-cluster", failed);
+
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        EksService restarted = new EksService(fixedStorageFactory(clusterStore), testConfig(false),
+                new RegionResolver("us-east-1", "000000000000"), clusterManager, null,
+                new EksOidcService(fixedStorageFactory(new InMemoryStorage<String, ClusterOidcKey>()),
+                        new ObjectMapper()));
+        try {
+            restarted.init();
+
+            verify(clusterManager).restoreCluster(persisted);
+            // CREATING hands the cluster to the readiness poller, which re-extracts the CA and
+            // flips it back to ACTIVE once the API server answers.
+            assertEquals(ClusterStatus.CREATING,
+                    restarted.describeCluster("persisted-cluster").getStatus());
+            // A FAILED record has nothing to re-latch.
+            verify(clusterManager, never()).restoreCluster(failed);
+            assertEquals(ClusterStatus.FAILED,
+                    restarted.describeCluster("failed-cluster").getStatus());
+        } finally {
+            restarted.shutdown();
+        }
+    }
+
+    @Test
+    void initRestoresUnderTheOwningAccountNotTheDefault() {
+        // Cluster.accountId is @JsonIgnore: a record reloaded from eks-clusters.json carries no
+        // account — only its storage key does. Restoration must derive the owner from the key,
+        // or the restored state lands under the default account while the owner keeps a stale
+        // record with no restored runtime fields.
+        String otherAccount = "999999999999";
+        StorageBackend<String, Cluster> rawClusters = new InMemoryStorage<>();
+        var clusterStore = new AccountAwareStorageBackend<>(rawClusters, null, "000000000000");
+
+        Cluster persisted = new Cluster();
+        persisted.setName("persisted-cluster");
+        persisted.setStatus(ClusterStatus.ACTIVE);
+        // An existing identity keeps backfillOidcIdentities from writing the record itself.
+        persisted.setIdentity(new ClusterIdentity(new OidcIdentity(
+                "https://oidc.eks.us-east-1.amazonaws.com/id/ABCDEF0123456789ABCDEF0123456789")));
+        clusterStore.putForAccount(otherAccount, "persisted-cluster", persisted);
+
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        EksService restarted = new EksService(fixedStorageFactory(clusterStore), testConfig(false),
+                new RegionResolver("us-east-1", "000000000000"), clusterManager, null,
+                new EksOidcService(fixedStorageFactory(new InMemoryStorage<String, ClusterOidcKey>()),
+                        new ObjectMapper()));
+        try {
+            restarted.init();
+
+            verify(clusterManager).restoreCluster(persisted);
+            Cluster restored = clusterStore.getForAccount(otherAccount, "persisted-cluster").orElseThrow();
+            assertEquals(ClusterStatus.CREATING, restored.getStatus());
+            // Rehydrated from the storage key, so the readiness poller's later put also lands
+            // under the owner.
+            assertEquals(otherAccount, restored.getAccountId());
+            // No duplicate stranded under the default account.
+            assertTrue(clusterStore.getForAccount("000000000000", "persisted-cluster").isEmpty());
+        } finally {
+            restarted.shutdown();
+        }
+    }
+
+    @Test
+    void initDoesNotRestoreClustersWithNamesOutsideTheAwsCharset() {
+        // A record persisted before create-time name validation can carry a name with a dot —
+        // which would map to another account's qualified Docker name (999999999999.demo in the
+        // default account aliases account 999999999999's "demo"). Restoration must refuse it
+        // rather than adopt or remove that account's container.
+        StorageBackend<String, Cluster> rawClusters = new InMemoryStorage<>();
+        var clusterStore = new AccountAwareStorageBackend<>(rawClusters, null, "000000000000");
+        Cluster invalid = new Cluster();
+        invalid.setName("999999999999.demo");
+        invalid.setStatus(ClusterStatus.ACTIVE);
+        clusterStore.putForAccount("000000000000", "999999999999.demo", invalid);
+
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        EksService restarted = new EksService(fixedStorageFactory(clusterStore), testConfig(false),
+                new RegionResolver("us-east-1", "000000000000"), clusterManager, null,
+                new EksOidcService(fixedStorageFactory(new InMemoryStorage<String, ClusterOidcKey>()),
+                        new ObjectMapper()));
+        try {
+            restarted.init();
+
+            verify(clusterManager, never()).restoreCluster(any(Cluster.class));
+            assertEquals(ClusterStatus.FAILED,
+                    restarted.describeCluster("999999999999.demo").getStatus());
+        } finally {
+            restarted.shutdown();
+        }
+    }
+
+    @Test
+    void initMarksAClusterFailedWhenItsContainerCannotBeRestored() {
+        StorageBackend<String, Cluster> rawClusters = new InMemoryStorage<>();
+        var clusterStore = new AccountAwareStorageBackend<>(rawClusters, null, "000000000000");
+        Cluster persisted = new Cluster();
+        persisted.setName("persisted-cluster");
+        persisted.setStatus(ClusterStatus.ACTIVE);
+        clusterStore.putForAccount("000000000000", "persisted-cluster", persisted);
+
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        // The daemon is reachable, so this is a genuine restore failure: the daemonless
+        // degradation path (which marks the cluster metadata-only ACTIVE) must not kick in.
+        when(clusterManager.isDockerReachable()).thenReturn(true);
+        doThrow(new RuntimeException("bad container state")).when(clusterManager).restoreCluster(persisted);
+        EksService restarted = new EksService(fixedStorageFactory(clusterStore), testConfig(false),
+                new RegionResolver("us-east-1", "000000000000"), clusterManager, null,
+                new EksOidcService(fixedStorageFactory(new InMemoryStorage<String, ClusterOidcKey>()),
+                        new ObjectMapper()));
+        try {
+            restarted.init();
+
+            // Better an honest FAILED than an ACTIVE cluster no kubectl can reach.
+            assertEquals(ClusterStatus.FAILED,
+                    restarted.describeCluster("persisted-cluster").getStatus());
+        } finally {
+            restarted.shutdown();
+        }
+    }
+
+    @Test
+    void initRestoresAClusterAsMetadataOnlyWhenNoDockerDaemonIsReachable() {
+        StorageBackend<String, Cluster> rawClusters = new InMemoryStorage<>();
+        var clusterStore = new AccountAwareStorageBackend<>(rawClusters, null, "000000000000");
+        Cluster persisted = new Cluster();
+        persisted.setName("persisted-cluster");
+        persisted.setStatus(ClusterStatus.ACTIVE);
+        clusterStore.putForAccount("000000000000", "persisted-cluster", persisted);
+
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        when(clusterManager.isDockerReachable()).thenReturn(false);
+        doThrow(new RuntimeException("no docker")).when(clusterManager).restoreCluster(persisted);
+        EksService restarted = new EksService(fixedStorageFactory(clusterStore), testConfig(false),
+                new RegionResolver("us-east-1", "000000000000"), clusterManager, null,
+                new EksOidcService(fixedStorageFactory(new InMemoryStorage<String, ClusterOidcKey>()),
+                        new ObjectMapper()));
+        try {
+            restarted.init();
+
+            // Same degradation as create: losing the daemon is not the cluster's fault.
+            assertEquals(ClusterStatus.ACTIVE,
+                    restarted.describeCluster("persisted-cluster").getStatus());
+        } finally {
+            restarted.shutdown();
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -308,6 +482,32 @@ class EksServiceTest {
         eksService.createCluster(req);
 
         assertThrows(AwsException.class, () -> eksService.createCluster(req));
+    }
+
+    @Test
+    void createClusterRejectsNamesOutsideTheAwsCharset() {
+        // Matches real EKS validation. The dot matters most: EksClusterManager account-qualifies
+        // Docker names as <account>.<name>, so a name containing a dot could spell out another
+        // account's qualified name and collide with its container and data volume.
+        for (String invalid : List.of("999999999999.demo", "has space", "-starts-with-dash",
+                "_starts-with-underscore", "a".repeat(101))) {
+            CreateClusterRequest req = new CreateClusterRequest();
+            req.setName(invalid);
+            req.setRoleArn("arn:aws:iam::000000000000:role/eks-role");
+
+            AwsException ex = assertThrows(AwsException.class, () -> eksService.createCluster(req),
+                    "should reject: " + invalid);
+            assertEquals("InvalidParameterException", ex.getErrorCode());
+            assertEquals(400, ex.getHttpStatus());
+        }
+        assertTrue(eksService.listClusters().isEmpty());
+    }
+
+    @Test
+    void createClusterAcceptsTheFullAwsNameCharset() {
+        createTestCluster("Valid-Name_123");
+
+        assertTrue(eksService.listClusters().contains("Valid-Name_123"));
     }
 
     @Test
@@ -351,7 +551,8 @@ class EksServiceTest {
                 new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
-        vpcConfig.setSubnetIds(List.of("subnet-default-a", "subnet-default-b"));
+        vpcConfig.setSubnetIds(List.of(Ec2Service.defaultSubnetId("us-east-1", "a"),
+                Ec2Service.defaultSubnetId("us-east-1", "b")));
 
         CreateClusterRequest req = new CreateClusterRequest();
         req.setName("real-subnet-cluster");
@@ -361,7 +562,8 @@ class EksServiceTest {
         Cluster cluster = service.createCluster(req);
 
         assertEquals("real-subnet-cluster", cluster.getName());
-        assertEquals(List.of("subnet-default-a", "subnet-default-b"),
+        assertEquals(List.of(Ec2Service.defaultSubnetId("us-east-1", "a"),
+                Ec2Service.defaultSubnetId("us-east-1", "b")),
                 cluster.getResourcesVpcConfig().getSubnetIds());
     }
 
@@ -384,7 +586,8 @@ class EksServiceTest {
                 realEc2Service(), new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
-        vpcConfig.setSubnetIds(List.of("subnet-default-a", "subnet-default-b"));
+        vpcConfig.setSubnetIds(List.of(Ec2Service.defaultSubnetId("us-east-1", "a"),
+                Ec2Service.defaultSubnetId("us-east-1", "b")));
 
         CreateClusterRequest req = new CreateClusterRequest();
         req.setName("vpc-id-cluster");
@@ -393,7 +596,7 @@ class EksServiceTest {
 
         Cluster cluster = service.createCluster(req);
 
-        assertEquals("vpc-default", cluster.getResourcesVpcConfig().getVpcId());
+        assertEquals(Ec2Service.defaultVpcId("us-east-1"), cluster.getResourcesVpcConfig().getVpcId());
     }
 
     @Test
@@ -413,7 +616,7 @@ class EksServiceTest {
                 realEc2Service(), new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
-        vpcConfig.setSubnetIds(List.of("subnet-default-a"));
+        vpcConfig.setSubnetIds(List.of(Ec2Service.defaultSubnetId("eu-west-2", "a")));
 
         CreateClusterRequest req = new CreateClusterRequest();
         req.setName("cross-region-cluster");
@@ -431,11 +634,12 @@ class EksServiceTest {
         // A subnet that exists in the DEFAULT region and nowhere else.
         //
         // The distinction matters: requireSubnet() calls ensureDefaultResources()
-        // on whatever region it is handed, which seeds subnet-default-a/b/c
-        // there on the spot. So a default subnet id resolves in EVERY region and
-        // cannot discriminate between "validated against the request region" and
-        // "validated against the configured default" — a test written with one
-        // passes with or without the fix.
+        // on whatever region it is handed, which seeds that region's own default
+        // subnets there on the spot. Before #21's fix, those default subnets shared
+        // the same literal id in every region, so a default subnet id resolved in
+        // EVERY region and could not discriminate between "validated against the
+        // request region" and "validated against the configured default" — a test
+        // written with one passes with or without the fix.
         //
         // An explicitly created subnet is not seeded anywhere else, so asking
         // for it from a different region is the only thing that pins the
@@ -450,7 +654,7 @@ class EksServiceTest {
         Ec2Service ec2Service = realEc2Service();
         ec2Service.ensureDefaultResources("us-east-1");
         String usEastOnlySubnet = ec2Service
-                .createSubnet("us-east-1", "vpc-default", "172.31.200.0/24", "us-east-1a")
+                .createSubnet("us-east-1", Ec2Service.defaultVpcId("us-east-1"), "172.31.200.0/24", "us-east-1a")
                 .getSubnetId();
 
         // The request is for eu-west-2, where that subnet does not exist.
@@ -775,5 +979,92 @@ class EksServiceTest {
         AwsException delete = assertThrows(AwsException.class,
                 () -> eksService.deleteFargateProfile("my-eks-cluster", "missing-profile"));
         assertEquals(404, delete.getHttpStatus());
+    }
+
+    private EksService newService(EksClusterManager clusterManager, boolean mock) {
+        StorageFactory storageFactory = new StorageFactory(null, null) {
+            @Override
+            public <V> AccountAwareStorageBackend<V> create(String serviceName, String fileName,
+                    TypeReference<Map<String, V>> typeReference) {
+                return AccountAwareStorageBackend.inMemory("000000000000");
+            }
+        };
+        return new EksService(storageFactory, testConfig(mock),
+                new RegionResolver("us-east-1", "000000000000"), clusterManager, null,
+                new EksOidcService(storageFactory, new ObjectMapper()));
+    }
+
+    @Test
+    void createClusterStaysCreatingWhileTheK3sContainerBoots() {
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        when(clusterManager.tryStartCluster(any())).thenReturn(true);
+        EksService service = newService(clusterManager, false);
+
+        CreateClusterRequest request = new CreateClusterRequest();
+        request.setName("real-eks");
+        request.setRoleArn("arn:aws:iam::000000000000:role/eks-role");
+
+        assertEquals(ClusterStatus.CREATING, service.createCluster(request).getStatus());
+    }
+
+    @Test
+    void createClusterReachesActiveMetadataWhenNoDockerDaemonIsReachable() {
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        when(clusterManager.tryStartCluster(any())).thenReturn(false);
+        EksService service = newService(clusterManager, false);
+
+        CreateClusterRequest request = new CreateClusterRequest();
+        request.setName("probe-eks");
+        request.setRoleArn("arn:aws:iam::000000000000:role/eks-role");
+        request.setTags(Map.of("tofu-estate", "probe1"));
+
+        Cluster cluster = service.createCluster(request);
+
+        assertEquals(ClusterStatus.ACTIVE, cluster.getStatus());
+        assertEquals("https://localhost:6500", cluster.getEndpoint());
+        assertEquals("probe1", cluster.getTags().get("tofu-estate"));
+        // No k3s API server exists. The empty CA is what says so.
+        assertEquals("", cluster.getCertificateAuthority().getData());
+        assertNull(cluster.getContainerId());
+    }
+
+    @Test
+    void clusterMetadataCrudWorksWhenNoDockerDaemonIsReachable() {
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        when(clusterManager.tryStartCluster(any())).thenReturn(false);
+        EksService service = newService(clusterManager, false);
+
+        CreateClusterRequest request = new CreateClusterRequest();
+        request.setName("probe-eks");
+        request.setRoleArn("arn:aws:iam::000000000000:role/eks-role");
+        request.setTags(Map.of("tofu-estate", "probe1"));
+        String arn = service.createCluster(request).getArn();
+
+        assertEquals(ClusterStatus.ACTIVE, service.describeCluster("probe-eks").getStatus());
+        assertEquals(List.of("probe-eks"), service.listClusters());
+        assertEquals("probe1", service.listTagsForResource(arn).get("tofu-estate"));
+
+        service.tagResource(arn, Map.of("Name", "probe-eks"));
+        assertEquals("probe-eks", service.listTagsForResource(arn).get("Name"));
+
+        assertEquals(NodegroupStatus.ACTIVE,
+                service.createNodeGroup("probe-eks", nodeGroupRequest("ng-1")).getStatus());
+
+        service.deleteCluster("probe-eks");
+        assertThrows(AwsException.class, () -> service.describeCluster("probe-eks"));
+    }
+
+    @Test
+    void createClusterStillFailsOnAGenuineProvisioningErrorWithAReachableDaemon() {
+        EksClusterManager clusterManager = mock(EksClusterManager.class);
+        when(clusterManager.tryStartCluster(any()))
+                .thenThrow(new RuntimeException("no such image: rancher/k3s"));
+        EksService service = newService(clusterManager, false);
+
+        CreateClusterRequest request = new CreateClusterRequest();
+        request.setName("broken-eks");
+        request.setRoleArn("arn:aws:iam::000000000000:role/eks-role");
+
+        assertEquals(ClusterStatus.FAILED, service.createCluster(request).getStatus());
     }
 }

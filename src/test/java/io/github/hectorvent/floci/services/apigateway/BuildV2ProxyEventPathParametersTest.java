@@ -41,7 +41,7 @@ class BuildV2ProxyEventPathParametersTest {
         controller = new ApiGatewayExecuteController(
                 null, null, null,
                 regionResolver, new ObjectMapper(), null,
-                null, null, null, null, new ApiGatewayExecuteRouteContext()
+                null, null, null, null, new ApiGatewayExecuteRouteContext(), null, null, null
         );
     }
 
@@ -66,6 +66,16 @@ class BuildV2ProxyEventPathParametersTest {
         JsonNode event = new ObjectMapper().readTree(json);
         assertTrue(event.has("pathParameters"), "pathParameters must be present");
         assertEquals("42", event.get("pathParameters").get("id").asText());
+    }
+
+    @Test
+    void underscoredParamNameIsPreservedInPathParameters() throws Exception {
+        when(uriInfo.getRequestUri()).thenReturn(new URI("http://localhost:4566/api/stage/key-ids/key-42"));
+        String json = controller.buildV2ProxyEvent(
+                "GET", "/key-ids/key-42", "GET /key-ids/{key_id1}",
+                "abc123", "us-east-2", "$default", headers, uriInfo, null, "req-underscore");
+        JsonNode event = new ObjectMapper().readTree(json);
+        assertEquals("key-42", event.get("pathParameters").get("key_id1").asText());
     }
 
     @Test
