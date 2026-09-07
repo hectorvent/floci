@@ -240,6 +240,10 @@ public class StsQueryHandler {
     private record VerifiedWebIdentity(String issuer, String subject, String audience) {}
 
     private record WebIdentityOutcome(VerifiedWebIdentity verified, Response denial) {
+
+        static WebIdentityOutcome unverifiable() {
+            return new WebIdentityOutcome(null, null);
+        }
         static WebIdentityOutcome allow(VerifiedWebIdentity verified) {
             return new WebIdentityOutcome(verified, null);
         }
@@ -254,13 +258,17 @@ public class StsQueryHandler {
                                                       String roleArn) {
         Optional<String> issuer = tokenVerifier.peekIssuer(token);
         if (issuer.isEmpty()) {
-            return WebIdentityOutcome.deny(AwsQueryResponse.error("InvalidIdentityToken",
-                    "The web identity token does not identify a trusted issuer.", AwsNamespaces.STS, 400));
+            return config.services().iam().enforcementEnabled()
+                    ? WebIdentityOutcome.deny(AwsQueryResponse.error("InvalidIdentityToken",
+                    "The web identity token does not identify a trusted issuer.", AwsNamespaces.STS, 400))
+                    : WebIdentityOutcome.unverifiable();
         }
         Optional<RSAPublicKey> key = oidcIssuerKeys.findVerificationKey(issuer.get());
         if (key.isEmpty()) {
-            return WebIdentityOutcome.deny(AwsQueryResponse.error("InvalidIdentityToken",
-                    "The web identity token issuer is not trusted.", AwsNamespaces.STS, 400));
+            return config.services().iam().enforcementEnabled()
+                    ? WebIdentityOutcome.deny(AwsQueryResponse.error("InvalidIdentityToken",
+                    "The web identity token issuer is not trusted.", AwsNamespaces.STS, 400))
+                    : WebIdentityOutcome.unverifiable();
         }
 
         WebIdentityToken claims;

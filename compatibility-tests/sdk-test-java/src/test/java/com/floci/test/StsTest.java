@@ -93,17 +93,18 @@ class StsTest {
     }
 
     @Test
-    void assumeRoleWithWebIdentityRejectsUnverifiableToken() {
-        assertThatThrownBy(() -> sts.assumeRoleWithWebIdentity(
+    void assumeRoleWithWebIdentity() {
+        AssumeRoleWithWebIdentityResponse response = sts.assumeRoleWithWebIdentity(
                 AssumeRoleWithWebIdentityRequest.builder()
                         .roleArn("arn:aws:iam::000000000000:role/web-identity-role")
                         .roleSessionName("web-session")
                         .webIdentityToken("eyJhbGciOiJSUzI1NiJ9.test-token")
                         .durationSeconds(3600)
-                        .build()))
-                .isInstanceOf(StsException.class)
-                .extracting(e -> ((StsException) e).awsErrorDetails().errorCode())
-                .isEqualTo("InvalidIdentityToken");
+                        .build());
+
+        assertThat(response.credentials()).isNotNull();
+        assertThat(response.credentials().accessKeyId()).startsWith("ASIA");
+        assertThat(response.assumedRoleUser().arn()).contains("assumed-role/web-identity-role/web-session");
     }
 
     @Test
