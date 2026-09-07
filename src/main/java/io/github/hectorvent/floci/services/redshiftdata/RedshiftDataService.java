@@ -61,7 +61,7 @@ public class RedshiftDataService implements Resettable {
         stored.sql = sql;
         stored.sqls = List.of(sql);
         stored.clusterIdentifier = clusterIdentifierOrNull(request);
-        stored.dbUser = textOrNull(request, "DbUser");
+        stored.dbUser = target.user();
         stored.database = target.database();
         stored.resultFormat = request.path("ResultFormat").asText("JSON");
 
@@ -141,8 +141,9 @@ public class RedshiftDataService implements Resettable {
             response.put("Error", stored.error);
         }
         response.put("QueryString", stored.sql);
-        response.put("RedshiftPid", Math.abs(stored.id.hashCode()));
-        response.put("RedshiftQueryId", (long) Math.abs(stored.id.hashCode()));
+        int stableId = stored.id.hashCode() & Integer.MAX_VALUE;
+        response.put("RedshiftPid", stableId);
+        response.put("RedshiftQueryId", (long) stableId);
         response.put("ResultRows", stored.resultRows);
         response.put("ResultSize", stored.resultSize);
         response.put("HasResultSet", stored.hasResultSet);
@@ -226,19 +227,37 @@ public class RedshiftDataService implements Resettable {
             if (field.path("isNull").asBoolean(false)) {
                 continue;
             }
-            if (field.has("stringValue")) {
-                line.append(field.get("stringValue").asText());
-            } else if (field.has("longValue")) {
-                line.append(field.get("longValue").asLong());
-            } else if (field.has("doubleValue")) {
-                line.append(field.get("doubleValue").asDouble());
-            } else if (field.has("booleanValue")) {
-                line.append(field.get("booleanValue").asBoolean());
-            } else if (field.has("blobValue")) {
-                line.append(field.get("blobValue").asText());
-            }
+            line.append(csvCell(fieldText(field)));
         }
         return line.toString();
+    }
+
+    private static String fieldText(JsonNode field) {
+        if (field.has("stringValue")) {
+            return field.get("stringValue").asText();
+        }
+        if (field.has("longValue")) {
+            return Long.toString(field.get("longValue").asLong());
+        }
+        if (field.has("doubleValue")) {
+            return Double.toString(field.get("doubleValue").asDouble());
+        }
+        if (field.has("booleanValue")) {
+            return Boolean.toString(field.get("booleanValue").asBoolean());
+        }
+        if (field.has("blobValue")) {
+            return field.get("blobValue").asText();
+        }
+        return "";
+    }
+
+    // RFC 4180: quote a field that contains a comma, quote, CR, or LF, doubling embedded quotes.
+    private static String csvCell(String value) {
+        if (value.indexOf(',') < 0 && value.indexOf('"') < 0
+                && value.indexOf('\n') < 0 && value.indexOf('\r') < 0) {
+            return value;
+        }
+        return '"' + value.replace("\"", "\"\"") + '"';
     }
 
     // ── BatchExecuteStatement ──────────────────────────────────────────────
@@ -260,7 +279,7 @@ public class RedshiftDataService implements Resettable {
         parent.sql = String.join("; ", sqls);
         parent.sqls = sqls;
         parent.clusterIdentifier = clusterIdentifierOrNull(request);
-        parent.dbUser = textOrNull(request, "DbUser");
+        parent.dbUser = target.user();
         parent.database = target.database();
         parent.resultFormat = request.path("ResultFormat").asText("JSON");
         parent.subStatements = new ArrayList<>();
@@ -375,7 +394,8 @@ public class RedshiftDataService implements Resettable {
 
     public ObjectNode cancelStatement(JsonNode request) {
         RedshiftDataStatementStore.StoredStatement stored = require(request);
-        if (stored.status != RedshiftDataStatementStore.Status.FINISHED) {
+        if (stored.status != RedshiftDataStatementStore.Status.FINISHED
+                && stored.status != RedshiftDataStatementStore.Status.FAILED) {
             stored.status = RedshiftDataStatementStore.Status.ABORTED;
             stored.updatedAt = Instant.now();
         }
@@ -476,6 +496,9 @@ public class RedshiftDataService implements Resettable {
                     col.put("typeName", rs.getString("data_type"));
                     col.put("length", rs.getInt("character_maximum_length"));
                     col.put("nullable", "YES".equalsIgnoreCase(rs.getString("is_nullable")) ? 1 : 0);
+                    // information_schema does not carry these per-column flags. They are
+                    // fixed at emulation-friendly defaults rather than driver-derived as in
+                    // GetStatementResult's ColumnMetadata, which reads a live ResultSetMetaData.
                     col.put("isCaseSensitive", false);
                     col.put("isCurrency", false);
                     col.put("isSigned", true);
@@ -496,10 +519,18 @@ public class RedshiftDataService implements Resettable {
             throw databaseError(e);
         }
 
+        int max = pageSize(request);
+        int offset = decodeToken(textOrNull(request, "NextToken"));
         ObjectNode response = objectMapper.createObjectNode();
         response.put("TableName", table);
         ArrayNode list = response.putArray("ColumnList");
-        columns.forEach(list::add);
+        int end = Math.min(offset + max, columns.size());
+        for (int i = offset; i < end; i++) {
+            list.add(columns.get(i));
+        }
+        if (end < columns.size()) {
+            response.put("NextToken", encodeToken(end));
+        }
         return response;
     }
 
@@ -577,22 +608,9 @@ public class RedshiftDataService implements Resettable {
     }
 
     private static void rejectMultiStatement(String sql) {
-        String trimmed = sql.strip();
-        while (trimmed.endsWith(";")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 1).strip();
-        }
-        boolean inSingle = false;
-        boolean inDouble = false;
-        for (int i = 0; i < trimmed.length(); i++) {
-            char c = trimmed.charAt(i);
-            if (c == '\'' && !inDouble) {
-                inSingle = !inSingle;
-            } else if (c == '"' && !inSingle) {
-                inDouble = !inDouble;
-            } else if (c == ';' && !inSingle && !inDouble) {
-                throw new AwsException("ValidationException",
-                        "A single Sql statement is required; use BatchExecuteStatement for multiple.", 400);
-            }
+        if (RedshiftDataSqlParameters.isMultiStatement(sql)) {
+            throw new AwsException("ValidationException",
+                    "A single Sql statement is required; use BatchExecuteStatement for multiple.", 400);
         }
     }
 
@@ -604,11 +622,16 @@ public class RedshiftDataService implements Resettable {
         if (token == null || token.isBlank()) {
             return 0;
         }
+        int offset;
         try {
-            return Integer.parseInt(new String(Base64.getDecoder().decode(token), StandardCharsets.UTF_8));
+            offset = Integer.parseInt(new String(Base64.getDecoder().decode(token), StandardCharsets.UTF_8));
         } catch (IllegalArgumentException e) {
             throw new AwsException("ValidationException", "NextToken is not valid.", 400);
         }
+        if (offset < 0) {
+            throw new AwsException("ValidationException", "NextToken is not valid.", 400);
+        }
+        return offset;
     }
 
     private static double epochSeconds(Instant instant) {

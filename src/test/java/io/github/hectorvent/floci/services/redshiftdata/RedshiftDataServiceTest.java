@@ -228,4 +228,57 @@ class RedshiftDataServiceTest {
         ObjectNode schemas = service.listSchemas(targetReq(), REGION);
         assertTrue(schemas.get("Schemas").size() >= 1);
     }
+
+    @Test
+    void singleStatementWithATrailingCommentContainingASemicolonIsAllowed() {
+        String id = service.executeStatement(req("select 1 as one -- pick; the; first\n"), REGION)
+                .get("Id").asText();
+        assertEquals("FINISHED", service.describeStatement(idOf(id)).get("Status").asText());
+    }
+
+    @Test
+    void getStatementResultV2ReturnsTypedRecordsByDefault() {
+        service.executeStatement(req("create table v2 (id int, name varchar(20))"), REGION);
+        service.executeStatement(req("insert into v2 values (1, 'a')"), REGION);
+        String id = service.executeStatement(req("select id, name from v2 order by id"), REGION)
+                .get("Id").asText();
+
+        ObjectNode result = service.getStatementResultV2(idOf(id));
+        assertEquals("JSON", result.get("ResultFormat").asText());
+        assertEquals(1, result.get("Records").size());
+        assertEquals(1L, result.get("Records").get(0).get(0).get("longValue").asLong());
+        assertEquals("a", result.get("Records").get(0).get(1).get("stringValue").asText());
+    }
+
+    @Test
+    void getStatementResultV2CsvFormatQuotesEmbeddedDelimiters() {
+        service.executeStatement(req("create table v2csv (v varchar(20))"), REGION);
+        service.executeStatement(req("insert into v2csv values ('a,b')"), REGION);
+        ObjectNode r = req("select v from v2csv");
+        r.put("ResultFormat", "CSV");
+        String id = service.executeStatement(r, REGION).get("Id").asText();
+
+        ObjectNode result = service.getStatementResultV2(idOf(id));
+        assertEquals("CSV", result.get("ResultFormat").asText());
+        assertEquals("\"a,b\"", result.get("Records").get(0).get("CSVRecords").asText());
+    }
+
+    @Test
+    void malformedNextTokenIsRejected() {
+        service.executeStatement(req("create table tok (id int)"), REGION);
+        service.executeStatement(req("insert into tok values (1)"), REGION);
+        String id = service.executeStatement(req("select id from tok"), REGION).get("Id").asText();
+        ObjectNode r = idOf(id);
+        r.put("NextToken", "not-base64!!");
+        AwsException e = assertThrows(AwsException.class, () -> service.getStatementResult(r));
+        assertEquals("ValidationException", e.getErrorCode());
+    }
+
+    @Test
+    void cancelOnFailedStatementLeavesItFailed() {
+        String id = service.executeStatement(req("select * from missing_table"), REGION).get("Id").asText();
+        assertEquals("FAILED", service.describeStatement(idOf(id)).get("Status").asText());
+        assertTrue(service.cancelStatement(idOf(id)).get("Status").asBoolean());
+        assertEquals("FAILED", service.describeStatement(idOf(id)).get("Status").asText());
+    }
 }

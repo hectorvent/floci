@@ -143,16 +143,56 @@ final class RedshiftDataSqlParameters {
         return byName;
     }
 
-    private static int copyQuoted(String sql, int start, char quote, StringBuilder out) {
+    /**
+     * Whether {@code sql} holds more than one statement, applying the same
+     * literal / identifier / comment / dollar-quote skipping as {@link #parse}
+     * so a {@code ;} inside any of those is not counted. Trailing {@code ;}
+     * characters (with only whitespace after) are permitted.
+     */
+    static boolean isMultiStatement(String sql) {
         int len = sql.length();
-        out.append(quote);
+        int i = 0;
+        boolean sawSemicolon = false;
+        while (i < len) {
+            char c = sql.charAt(i);
+            if (c == '-' && i + 1 < len && sql.charAt(i + 1) == '-') {
+                int end = sql.indexOf('\n', i);
+                i = end < 0 ? len : end;
+                continue;
+            }
+            if (c == '/' && i + 1 < len && sql.charAt(i + 1) == '*') {
+                int end = sql.indexOf("*/", i + 2);
+                i = end < 0 ? len : end + 2;
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                i = skipQuoted(sql, i, c);
+                continue;
+            }
+            if (c == '$') {
+                int consumed = skipDollarQuoted(sql, i);
+                if (consumed > i) {
+                    i = consumed;
+                    continue;
+                }
+            }
+            if (c == ';') {
+                sawSemicolon = true;
+            } else if (sawSemicolon && !Character.isWhitespace(c)) {
+                return true;
+            }
+            i++;
+        }
+        return false;
+    }
+
+    private static int skipQuoted(String sql, int start, char quote) {
+        int len = sql.length();
         int i = start + 1;
         while (i < len) {
             char c = sql.charAt(i);
-            out.append(c);
             if (c == quote) {
                 if (i + 1 < len && sql.charAt(i + 1) == quote) {
-                    out.append(quote);
                     i += 2;
                     continue;
                 }
@@ -163,7 +203,7 @@ final class RedshiftDataSqlParameters {
         return i;
     }
 
-    private static int copyDollarQuoted(String sql, int start, StringBuilder out) {
+    private static int skipDollarQuoted(String sql, int start) {
         int len = sql.length();
         int tagEnd = start + 1;
         while (tagEnd < len && isNamePart(sql.charAt(tagEnd))) {
@@ -174,8 +214,20 @@ final class RedshiftDataSqlParameters {
         }
         String tag = sql.substring(start, tagEnd + 1);
         int close = sql.indexOf(tag, tagEnd + 1);
-        int end = close < 0 ? len : close + tag.length();
+        return close < 0 ? len : close + tag.length();
+    }
+
+    private static int copyQuoted(String sql, int start, char quote, StringBuilder out) {
+        int end = skipQuoted(sql, start, quote);
         out.append(sql, start, end);
+        return end;
+    }
+
+    private static int copyDollarQuoted(String sql, int start, StringBuilder out) {
+        int end = skipDollarQuoted(sql, start);
+        if (end > start) {
+            out.append(sql, start, end);
+        }
         return end;
     }
 

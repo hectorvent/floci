@@ -29,7 +29,9 @@ class RedshiftDataStatementStore {
     private final ConcurrentMap<String, StoredStatement> statements = new ConcurrentHashMap<>();
     private final Duration ttl;
     private final Clock clock;
-    private final ScheduledExecutorService sweeper;
+    // Created by the CDI lifecycle in start(); the test constructor never starts it, so unit
+    // tests that build the store directly drive sweep() by hand and spawn no background thread.
+    private ScheduledExecutorService sweeper;
 
     @Inject
     RedshiftDataStatementStore(EmulatorConfig config) {
@@ -39,21 +41,23 @@ class RedshiftDataStatementStore {
     RedshiftDataStatementStore(int resultTtlHours, Clock clock) {
         this.ttl = Duration.ofHours(Math.max(1, resultTtlHours));
         this.clock = clock;
-        this.sweeper = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "redshift-data-statement-sweep");
-            t.setDaemon(true);
-            return t;
-        });
     }
 
     @PostConstruct
     void start() {
+        sweeper = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "redshift-data-statement-sweep");
+            t.setDaemon(true);
+            return t;
+        });
         sweeper.scheduleAtFixedRate(this::sweepSafely, 30, 30, TimeUnit.MINUTES);
     }
 
     @PreDestroy
     void stop() {
-        sweeper.shutdownNow();
+        if (sweeper != null) {
+            sweeper.shutdownNow();
+        }
     }
 
     void put(StoredStatement statement) {

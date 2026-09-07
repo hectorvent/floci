@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.jboss.logging.Logger;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -22,6 +23,8 @@ import java.util.List;
  * {@code booleanValue}, {@code blobValue}, or {@code isNull}.
  */
 final class RedshiftDataFieldMapper {
+
+    private static final Logger LOG = Logger.getLogger(RedshiftDataFieldMapper.class);
 
     private RedshiftDataFieldMapper() {
     }
@@ -113,6 +116,8 @@ final class RedshiftDataFieldMapper {
             try {
                 return blob.getBytes(1, Math.toIntExact(blob.length()));
             } catch (SQLException e) {
+                LOG.warnv("Could not read blob value for a Redshift Data API field, returning empty bytes: {0}",
+                        e.getMessage());
                 return new byte[0];
             }
         }

@@ -139,6 +139,27 @@ class RedshiftDataApiIntegrationTest {
     }
 
     @Test
+    void batchRollsBackEveryStatementWhenOneFails() {
+        clusterId = "it-rsdata-batch-rollback";
+        redshift.createCluster(clusterId, "dc2.large", "admin", "Secret123");
+        executeAndWait("CREATE TABLE br (id int)");
+
+        String id = RestAssuredJsonUtils.awsAction("RedshiftData", "BatchExecuteStatement", """
+                {"Sqls": ["INSERT INTO br VALUES (1)", "INSERT INTO br (nope) VALUES (2)"],
+                 "ClusterIdentifier": "%s", "DbUser": "admin", "Database": "dev"}
+                """.formatted(clusterId)).then().statusCode(200).extract().path("Id");
+        Awaitility.await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(250)).until(() ->
+                "FAILED".equals(RestAssuredJsonUtils.awsAction("RedshiftData", "DescribeStatement",
+                        "{\"Id\":\"" + id + "\"}").then().statusCode(200).extract().path("Status")));
+
+        // The first INSERT must have been rolled back with the batch: br is empty.
+        String countId = executeAndWait("SELECT count(*) AS c FROM br");
+        Object count = RestAssuredJsonUtils.awsAction("RedshiftData", "GetStatementResult",
+                "{\"Id\":\"" + countId + "\"}").then().statusCode(200).extract().path("Records[0][0].longValue");
+        assertEquals(0, asInt(count));
+    }
+
+    @Test
     void schemaIntrospection() {
         clusterId = "it-rsdata-schema";
         redshift.createCluster(clusterId, "dc2.large", "admin", "Secret123");

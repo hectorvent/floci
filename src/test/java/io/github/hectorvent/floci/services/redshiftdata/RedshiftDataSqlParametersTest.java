@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -76,5 +77,21 @@ class RedshiftDataSqlParametersTest {
         AwsException e = assertThrows(AwsException.class,
                 () -> RedshiftDataSqlParameters.parseParameters(request, "Parameters"));
         assertEquals("ValidationException", e.getErrorCode());
+    }
+
+    @Test
+    void isMultiStatementIgnoresSemicolonsInsideCommentsLiteralsAndDollarQuotes() {
+        assertFalse(RedshiftDataSqlParameters.isMultiStatement("select 1 -- a; b\n"));
+        assertFalse(RedshiftDataSqlParameters.isMultiStatement("select * from t /* x; y */ where a = 1"));
+        assertFalse(RedshiftDataSqlParameters.isMultiStatement("select ';' as sep"));
+        assertFalse(RedshiftDataSqlParameters.isMultiStatement("select $tag$a;b$tag$"));
+        assertFalse(RedshiftDataSqlParameters.isMultiStatement("select 1;"));
+        assertFalse(RedshiftDataSqlParameters.isMultiStatement("select 1 ;  \n "));
+    }
+
+    @Test
+    void isMultiStatementDetectsARealSecondStatement() {
+        assertTrue(RedshiftDataSqlParameters.isMultiStatement("select 1; select 2"));
+        assertTrue(RedshiftDataSqlParameters.isMultiStatement("insert into t values (1); delete from t"));
     }
 }
