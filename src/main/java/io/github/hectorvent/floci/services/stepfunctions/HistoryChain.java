@@ -87,8 +87,7 @@ final class HistoryChain {
         if (isAbandoned()) {
             return 0L;
         }
-        AslExecutor.countTowardsHistoryEventLimit(producedEventCount);
-        long id = append(type, lastEventId, details);
+        long id = append(type, lastEventId, details, true);
         if (id > 0) {
             lastEventId = id;
             tailEventId = id;
@@ -104,8 +103,7 @@ final class HistoryChain {
         if (isAbandoned()) {
             return;
         }
-        AslExecutor.countTowardsHistoryEventLimit(producedEventCount);
-        long id = append(type, tailEventId, details);
+        long id = append(type, tailEventId, details, true);
         if (id > 0) {
             tailEventId = id;
         }
@@ -119,23 +117,33 @@ final class HistoryChain {
     /** ExecutionTimedOut points at 0. */
     void end(String type, long previousEventId, Map<String, Object> details) {
         synchronized (history) {
-            append(type, previousEventId, details);
+            append(type, previousEventId, details, false);
             ended.set(true);
         }
     }
 
-    /** Synchronized on the history because StopExecution appends the terminal event from another thread. */
-    private long append(String type, long previousEventId, Map<String, Object> details) {
+    /**
+     * Synchronized on the history because StopExecution appends the terminal event from another
+     * thread. An event counts towards the limit only once the history is known to take it.
+     */
+    private long append(String type, long previousEventId, Map<String, Object> details, boolean counted) {
         synchronized (history) {
             if (ended.get()) {
                 return 0L;
+            }
+            if (counted) {
+                AslExecutor.countTowardsHistoryEventLimit(producedEventCount);
             }
             var event = new HistoryEvent();
             event.setId(history.size() + 1L);
             event.setPreviousEventId(previousEventId);
             event.setType(type);
             event.setDetails(details);
-            return history.add(event) ? event.getId() : 0L;
+            if (!history.add(event)) {
+                ended.set(true);
+                return 0L;
+            }
+            return event.getId();
         }
     }
 
