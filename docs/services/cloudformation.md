@@ -29,6 +29,8 @@
 | `SetStackPolicy` | Accepted; no-op (stub — stack policies are not enforced) |
 | `GetStackPolicy` | Accepted; returns an empty policy (stub) |
 | `DescribeStackResource` | Get a specific stack resource |
+| `DescribeOrganizationsAccess` | - |
+| `ActivateOrganizationsAccess` | - |
 | `CreateStackSet` | Create a stack set from a template |
 | `DescribeStackSet` | Get stack set details |
 | `ListStackSets` | List stack sets |
@@ -40,7 +42,16 @@
 | `DeleteStackInstances` | Remove instances and their resources |
 | `ListStackSetOperations` | List operations performed on a stack set |
 | `DescribeStackSetOperation` | - |
+| `ListStackSetAutoDeploymentTargets` | - |
 <!-- floci:actions:end -->
+
+## StackSets compatibility
+
+StackSets support both `SELF_MANAGED` and the Cloud Launchpad `SERVICE_MANAGED` workflow. `ActivateOrganizationsAccess` requires an Organizations management account with all features enabled and enables trusted access for `stacksets.cloudformation.amazonaws.com`. Service-managed organizational-unit deployment targets are resolved from the caller's actual Organizations state rather than converted into synthetic account IDs. Targeting an OU includes eligible accounts directly in that OU and in all descendant OUs, while excluding the organization management account, matching AWS StackSets targeting semantics.
+
+`CreateStackInstances` and `UpdateStackSet` execute the backing CloudFormation stacks in each target account. A failed resource can therefore drive the backing stack through rollback and leave the stack instance `INOPERABLE` with detailed status `FAILED`; the StackSet operation is reported as `FAILED` instead of being forced to success.
+
+Operation IDs are recorded and validated. Duplicate IDs return `OperationIdAlreadyExistsException`, missing stack sets return `StackSetNotFoundException`, and missing operation IDs return `OperationNotFoundException`. Invalid targets and request shapes use the CloudFormation query-protocol validation errors. Operations complete locally, so `OperationInProgressException` is only reachable when local operation state actually overlaps; Floci does not inject concurrency failures solely to exercise an error code.
 
 ## Supported Resource Types
 
@@ -48,7 +59,7 @@ Resource types provisioned during `CreateStack` / `UpdateStack` / `DeleteStack`.
 the backing service and sets a real physical ID plus the `Ref` / `Fn::GetAtt` attributes used by
 cross-resource references.
 
-> Adding a type? See [Adding a CloudFormation Resource Type](../../CONTRIBUTING.md#adding-a-cloudformation-resource-type).
+> Adding a type? See [Adding a CloudFormation Resource Type](https://github.com/floci-io/floci/blob/main/CONTRIBUTING.md#adding-a-cloudformation-resource-type).
 > Types live in per-service provisioners under `services/cloudformation/provisioners/`. This table
 > is generated from the provisioner inventory by `make docs-sync`; edit that, not the table.
 
@@ -57,7 +68,7 @@ cross-resource references.
 |---|---|
 | S3 | `Bucket`, `BucketPolicy` (accepted; policy not enforced) |
 | SQS | `Queue`, `QueuePolicy` (accepted; policy not enforced) |
-| SNS | `Topic`, `Subscription` |
+| SNS | `Topic`, `Subscription`, `TopicPolicy` |
 | DynamoDB | `Table`, `GlobalTable` |
 | Lambda | `Function` (Zip via S3/inline `ZipFile`, and Image), `LayerVersion`, `EventSourceMapping` (SQS, Kinesis, DynamoDB Streams), `Version`, `Alias` (also what SAM's `AutoPublishAlias` expands into), `Permission`, `MicrovmImage`, `NetworkConnector`. Inline `ZipFile` packages include the `cfn-response` (Node.js) / `cfnresponse` (Python) module AWS injects for that code path, so Solutions-style custom-resource handlers work. |
 | IAM | `Role`, `User`, `AccessKey`, `Policy`, `ManagedPolicy`, `InstanceProfile` |
@@ -71,19 +82,23 @@ cross-resource references.
 | RDS | `DBInstance` (starts a real container), `DBCluster` (starts a real container), `DBSubnetGroup`, `DBParameterGroup`, `DBClusterParameterGroup`, `DBProxy`, `DBProxyTargetGroup` |
 | EC2 | `VPC`, `Subnet`, `SecurityGroup` (inline `SecurityGroupIngress`/`SecurityGroupEgress` supported), `SecurityGroupIngress`, `SecurityGroupEgress`, `InternetGateway`, `RouteTable`, `SubnetRouteTableAssociation`, `Route`, `NatGateway`, `EIP`, `Instance`, `LaunchTemplate`, `VPCGatewayAttachment`, `VPCEndpoint`, `NetworkAcl`, `NetworkAclEntry`, `SubnetNetworkAclAssociation`, `FlowLog` |
 | Elastic Load Balancing v2 | `LoadBalancer`, `TargetGroup`, `Listener`, `ListenerRule` |
-| Auto Scaling | `LaunchConfiguration`, `AutoScalingGroup`, `LifecycleHook` |
+| Auto Scaling | `LaunchConfiguration`, `AutoScalingGroup`, `LifecycleHook`, `ScalingPolicy` |
 | Route 53 | `HostedZone`, `RecordSet` |
-| API Gateway (v1) | `RestApi`, `Resource`, `Authorizer`, `Method`, `Deployment`, `Stage`, `Account` |
+| API Gateway (v1) | `RestApi`, `Resource`, `Authorizer`, `Method`, `Deployment`, `Stage`, `Account`, `DomainName`, `BasePathMapping`, `ApiKey`, `UsagePlan`, `UsagePlanKey` |
 | API Gateway v2 | `Api`, `Authorizer`, `Route`, `Integration`, `Stage`, `Deployment` |
 | Step Functions | `StateMachine` |
 | CodePipeline | `Pipeline`, `CustomActionType`, `Webhook` |
 | CodeBuild | `Project` |
 | Batch | `ComputeEnvironment`, `JobQueue`, `JobDefinition` |
-| Cognito | `UserPool`, `UserPoolClient` |
+| Cognito | `UserPool` (`ProviderURL` is the local issuer of the tokens Floci mints, `<base-url>/<pool id>`), `UserPoolClient`, `UserPoolDomain` |
+| ACM | `Certificate` |
 | EventBridge | `Rule`, `EventBus`, `EventBusPolicy` |
+| EventBridge Scheduler | `ScheduleGroup` |
+| Backup | `BackupVault` |
 | Pipes | `Pipe` |
 | Kinesis | `Stream` |
 | Kinesis Data Firehose | `DeliveryStream` |
+| IoT Core | `DomainConfiguration` (`ServerCertificates` resolves to a JSON string), `Policy` (deleted after detaching it from its principals; on AWS the delete fails with `DeleteConflictException` while the policy is attached), `Thing`, `TopicRule` |
 | CloudFront | `Distribution` |
 | CloudWatch | `Alarm` |
 | CloudWatch Logs | `LogGroup` |
@@ -95,7 +110,18 @@ cross-resource references.
 
 All other resource types are accepted without error and assigned a synthetic physical ID (with an
 `arn:aws:stub:::<logicalId>` ARN attribute), so templates with unsupported types still reach
-`CREATE_COMPLETE` rather than failing.
+`CREATE_COMPLETE` rather than failing. Nothing is created for such a resource, so each one is
+logged at `WARN` and carries a resource status reason saying so, which `DescribeStackEvents`
+returns:
+
+```
+Resource type AWS::Fake::Thing is not supported by Floci. It was stubbed and nothing was created for it.
+```
+
+Set `floci.services.cloudformation.allow-stub-unsupported-resource-types` to `false`
+(`FLOCI_SERVICES_CLOUDFORMATION_ALLOW_STUB_UNSUPPORTED_RESOURCE_TYPES=false`) to fail such a
+resource instead: it reaches `CREATE_FAILED` and the stack rolls back. Use it in a pipeline that
+must not pass over a resource it never got.
 
 ## EventBridge Event Buses
 
@@ -219,8 +245,59 @@ before provisioning:
 - `AWS::SSM::Parameter::Value<List<String>>` and `AWS::SSM::Parameter::Name` typed parameters are
   **not yet** resolved — they are passed through as their literal input.
 
-The `AWS::SSM::Parameter` **resource** type exposes `Value`, `Type`, and `Name` attributes through
+The `AWS::SSM::Parameter` **resource** type exposes `Value`, `Type`, `Name`, and `Arn` attributes through
 `Ref` / `Fn::GetAtt` so downstream resources can consume a parameter the same stack creates.
+
+## AWS::Include (`Fn::Transform`)
+
+`Fn::Transform` with `Name: AWS::Include` splices the YAML/JSON snippet at `Parameters.Location`
+into its enclosing mapping before any other intrinsic resolves, on both `CreateStack`/`UpdateStack`
+and the `CreateChangeSet` preview. `Location` must be an `s3://bucket/key` URI: the template
+CloudFormation itself receives always carries one, because `aws cloudformation package` rewrites
+every local path before a stack ever sees it. A `Location` that is not `s3://` fails the stack with
+a `ValidationError` naming it, rather than silently dropping the include. A `Location` that is a
+well-formed `s3://` URI but cannot be read (the bucket or key does not exist) fails the stack with
+the underlying S3 error naming it, for example `NoSuchKey` at HTTP 404, instead of a
+`ValidationError`, since that error is what S3 itself already reports and floci has no more specific
+answer to give.
+
+A snippet may not itself use `AWS::Include`; nesting is rejected rather than expanded or looped.
+`Location` must be a plain string; a `Ref` or another intrinsic in its place is rejected, naming
+the rejected node, rather than resolved.
+
+Two known deviations from AWS:
+
+- The snippet is parsed with floci's CloudFormation-aware YAML parser, so it accepts CloudFormation
+  YAML short tags (`!Ref`, `!Sub`, ...) where AWS's own `AWS::Include` documentation says a snippet
+  does not.
+- AWS's own `Fn::Transform` documentation shows a `Location` written as an intrinsic function (its
+  example uses `Ref`) and describes it as accepted; floci does not resolve one and rejects the
+  template instead. This deviation comes from reading AWS's documentation, not from a request
+  measured against a real account.
+
+`CAPABILITY_AUTO_EXPAND` is not one of them. floci requires no capability for a template that
+declares `AWS::Include`, and neither does AWS on the change-set path: a `CreateChangeSet` carrying
+an embedded `Fn::Transform`/`AWS::Include` was accepted against a real account with
+`CAPABILITY_IAM` alone. The `CreateStack` path was not measured.
+
+`GetTemplateSummary` does not expand the include: it reports `AWS::Include` in the template's
+`Transform`/`DeclaredTransforms` and neither fetches nor validates the snippet, matching AWS.
+`GetTemplate` accepts `TemplateStage` (`Original`, the default, or `Processed`) and validates it
+against that enum, rejecting anything else with a `ValidationError` naming the value, matching AWS.
+`Original` returns the template exactly as submitted, `Fn::Transform` node and all. `Processed`
+returns the merged and SAM-expanded tree, the same one a `CreateChangeSet` preview diffs against.
+
+floci expands neither `AWS::LanguageExtensions`, nor a third-party macro, nor the top-level
+`Transform: {Name: AWS::Include, Parameters: {Location: ...}}` form. A template carrying only one of
+those three keeps `Processed` equal to `Original`, byte for byte.
+
+Two triggers break that equality, because `executeTemplate` re-serializes the persisted body when
+either one fires: an embedded `Fn::Transform` that merges, and a SAM transform. A SAM transform goes
+further, because `SamTransformProcessor` removes the whole `Transform` section unconditionally, so a
+macro co-declared beside SAM is absent from `Processed` as well.
+
+Real AWS's answer for these shapes is unmeasured, co-declared with SAM or not. `StagesAvailable`
+always lists both stages, matching AWS.
 
 ## Conditions
 

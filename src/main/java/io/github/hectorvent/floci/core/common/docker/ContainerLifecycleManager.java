@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.core.common.docker;
 
+import io.github.hectorvent.floci.config.ContainerCaBundle;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.services.lambda.launcher.ImageCacheService;
 import com.github.dockerjava.api.DockerClient;
@@ -21,9 +22,15 @@ import com.github.dockerjava.api.model.Ports;
 import com.github.dockerjava.core.command.WaitContainerResultCallback;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.jboss.logging.Logger;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +39,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 /**
  * Manages Docker container lifecycle operations including create, start, stop, and remove.
@@ -41,6 +49,13 @@ import java.util.concurrent.TimeUnit;
 public class ContainerLifecycleManager {
 
     private static final Logger LOG = Logger.getLogger(ContainerLifecycleManager.class);
+
+    // Matches crun/runc's "join keyctl '<id>': Disk quota exceeded" error, which the OCI runtime
+    // reports for the kernel session-keyring quota (kernel.keys.maxkeys), not actual disk space.
+    // Under high concurrent container counts (podman machine's Fedora CoreOS default is 200 keys
+    // per uid) this reads as a disk-space problem and sends operators looking in the wrong place.
+    private static final Pattern KEYRING_QUOTA_PATTERN =
+            Pattern.compile("join keyctl.*disk quota exceeded", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private final DockerClient dockerClient;
     private final ImageCacheService imageCacheService;
@@ -94,14 +109,50 @@ public class ContainerLifecycleManager {
      * @return the container ID
      */
     public String create(ContainerSpec spec) {
+        String resolvedImage = imageCacheService.ensureImageExists(spec.image());
+        return create(spec, resolvedImage, null);
+    }
+
+    /**
+     * Creates a container for a specific Docker platform.
+     *
+     * @param spec the container specification
+     * @param platform Docker platform, such as {@code linux/arm64}
+     * @return the container ID
+     */
+    public String create(ContainerSpec spec, String platform) {
+        String resolvedImage = imageCacheService.ensureImageExists(spec.image(), platform);
+        return create(spec, resolvedImage, platform);
+    }
+
+    private String create(ContainerSpec spec, String resolvedImage, String platform) {
         LOG.debugv("Creating container from spec: image={0}, name={1}", spec.image(), spec.name());
 
-        imageCacheService.ensureImageExists(spec.image());
-
+        // Built once: a dynamic port binding allocates its host port here.
         HostConfig hostConfig = buildHostConfig(spec);
+        Optional<Path> caBundle = ContainerCaBundle.hostPath(config);
+        if (caBundle.isEmpty()) {
+            return createContainer(spec, resolvedImage, platform, hostConfig, spec.env());
+        }
+        String containerId = createContainer(spec, resolvedImage, platform, hostConfig,
+                ContainerCaBundle.appendEnv(spec.env()));
+        if (copyCaBundle(containerId, caBundle.get())) {
+            return containerId;
+        }
+        // SSL_CERT_FILE and friends replace the image's trust store, so they must never name a
+        // file that is not there. Start over without them: the container keeps its own trust.
+        dockerClient.removeContainerCmd(containerId).withForce(true).exec();
+        return createContainer(spec, resolvedImage, platform, hostConfig, spec.env());
+    }
 
-        CreateContainerCmd createCmd = dockerClient.createContainerCmd(spec.image())
+    private String createContainer(ContainerSpec spec, String resolvedImage, String platform,
+                                   HostConfig hostConfig, List<String> env) {
+        CreateContainerCmd createCmd = dockerClient.createContainerCmd(resolvedImage)
                 .withHostConfig(hostConfig);
+
+        if (platform != null && !platform.isBlank()) {
+            createCmd.withPlatform(platform);
+        }
 
         if (spec.name() != null) {
             createCmd.withName(spec.name());
@@ -109,8 +160,8 @@ public class ContainerLifecycleManager {
         if (spec.user() != null && !spec.user().isBlank()) {
             createCmd.withUser(spec.user());
         }
-        if (spec.env() != null && !spec.env().isEmpty()) {
-            createCmd.withEnv(spec.env());
+        if (env != null && !env.isEmpty()) {
+            createCmd.withEnv(env);
         }
         if (spec.cmd() != null && !spec.cmd().isEmpty()) {
             createCmd.withCmd(spec.cmd());
@@ -136,6 +187,38 @@ public class ContainerLifecycleManager {
     }
 
     /**
+     * Copies the CA bundle into the created, not yet started, container so runtimes that read
+     * {@code SSL_CERT_FILE} and friends at init find it. A copy rather than a bind mount because
+     * when Floci itself runs in Docker its persistent path is not a host path the daemon can mount.
+     * Returns false, after logging why, when the copy failed; an image without {@code /etc} is the
+     * expected reason, and the caller then recreates the container without the trust variables.
+     */
+    private boolean copyCaBundle(String containerId, Path bundle) {
+        try {
+            byte[] content = Files.readAllBytes(bundle);
+            ByteArrayOutputStream archive = new ByteArrayOutputStream(content.length + 1024);
+            try (TarArchiveOutputStream tar = new TarArchiveOutputStream(archive)) {
+                TarArchiveEntry entry = new TarArchiveEntry(ContainerCaBundle.FILE_NAME);
+                entry.setSize(content.length);
+                tar.putArchiveEntry(entry);
+                tar.write(content);
+                tar.closeArchiveEntry();
+            }
+            dockerClient.copyArchiveToContainerCmd(containerId)
+                    .withRemotePath(ContainerCaBundle.CONTAINER_DIR)
+                    .withTarInputStream(new ByteArrayInputStream(archive.toByteArray()))
+                    .exec();
+            LOG.debugv("Copied the CA bundle into container {0} at {1}", containerId, ContainerCaBundle.CONTAINER_PATH);
+            return true;
+        } catch (Exception e) {
+            LOG.warnv(e, "Could not copy the CA bundle into container {0}; creating it again without the trust "
+                    + "variables, so it keeps its own trust store and will not trust Floci HTTPS: {1}",
+                    containerId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Starts a previously created container and resolves its endpoints.
      *
      * @param containerId the container ID returned by {@link #create}
@@ -143,7 +226,7 @@ public class ContainerLifecycleManager {
      * @return information about the running container including resolved endpoints
      */
     public ContainerInfo startCreated(String containerId, ContainerSpec spec) {
-        dockerClient.startContainerCmd(containerId).exec();
+        startContainer(containerId);
         LOG.infov("Started container {0}", containerId);
 
         if (spec.networkMode() != null && !spec.networkMode().isBlank() && spec.hasPortBindings()) {
@@ -161,6 +244,30 @@ public class ContainerLifecycleManager {
 
         Map<Integer, EndpointInfo> endpoints = resolveEndpoints(containerId, spec);
         return new ContainerInfo(containerId, endpoints);
+    }
+
+    /**
+     * Starts a container, translating crun/runc's kernel-keyring-quota error into a message that
+     * names the actual cause and a fix, instead of the misleading "Disk quota exceeded" the OCI
+     * runtime reports. Package-private so tests can verify a given call site routes through this
+     * translation rather than a raw {@code dockerClient.startContainerCmd(...)} call.
+     */
+    void startContainer(String containerId) {
+        try {
+            dockerClient.startContainerCmd(containerId).exec();
+        } catch (DockerException e) {
+            String message = e.getMessage();
+            if (message != null && KEYRING_QUOTA_PATTERN.matcher(message).find()) {
+                throw new IllegalStateException(
+                        "Container start failed: the container runtime's kernel session-keyring is "
+                                + "out of quota (kernel.keys.maxkeys), not disk space. This is common "
+                                + "under many concurrent containers on podman machine's default Fedora "
+                                + "CoreOS sysctls (200 keys per uid). Raise the limit in the VM, e.g.: "
+                                + "podman machine ssh \"sudo sysctl -w kernel.keys.maxkeys=20000 "
+                                + "kernel.keys.maxbytes=2000000\". Original error: " + message, e);
+            }
+            throw e;
+        }
     }
 
     /**
@@ -381,7 +488,7 @@ public class ContainerLifecycleManager {
                 .exec();
         String helperId = created.getId();
         try {
-            dockerClient.startContainerCmd(helperId).exec();
+            startContainer(helperId);
             Integer status = dockerClient.waitContainerCmd(helperId)
                     .exec(new WaitContainerResultCallback())
                     .awaitStatusCode(60, TimeUnit.SECONDS);
@@ -540,7 +647,7 @@ public class ContainerLifecycleManager {
         boolean running = Boolean.TRUE.equals(inspect.getState().getRunning());
 
         if (!running) {
-            dockerClient.startContainerCmd(containerId).exec();
+            startContainer(containerId);
             LOG.infov("Started adopted container {0}", containerId);
             inspect = dockerClient.inspectContainerCmd(containerId).exec();
         }

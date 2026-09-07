@@ -49,12 +49,12 @@ If you prefer to use your own Maven installation (3.9+), you can use `mvn` inste
 
 ## Branching Model
 
-Floci uses a **tag-driven release model**. Docker images are never published on PR merge, only when a maintainer pushes a version tag.
+Floci uses a **tag-driven release model**. Merging a PR never publishes a release image. `main` is published once a day as the `nightly` channel, and a stable release is published only when a maintainer runs the "Release Cut" workflow (`.github/workflows/release-cut.yml`, `workflow_dispatch`). That workflow runs semantic-release, which bumps `pom.xml`, writes `CHANGELOG.md`, commits, and pushes the `X.Y.Z` tag. The tag then triggers `.github/workflows/release.yml`, which builds and publishes the release images to Docker Hub and public ECR.
 
-| Branch | Purpose | Docker published? |
+| Branch / tag | Purpose | Docker published? |
 |---|---|---|
-| `main` | Integration branch: all PRs merge here. Treated as unstable/nightly. | No (CI tests only) |
-| `X.Y.Z` tag | Signals a production release. Triggers the full Docker publish pipeline. | Yes (`x.y.z`, `latest`, `x.y.z-jvm`, `latest-jvm`) |
+| `main` | Integration branch: all PRs merge here. Treated as unstable. | Nightly only (`nightly`, `nightly-<date>`, `nightly-compat`, `nightly-<date>-compat`) via `nightly.yml` |
+| `X.Y.Z` tag | Signals a production release. Pushed by the Release Cut workflow. | Yes (`x.y.z`, `latest`, `x.y.z-compat`, `latest-compat`) via `release.yml` |
 
 ## Commit Message Format
 
@@ -139,12 +139,17 @@ ln -s AGENTS.md COPILOT.md
 1. Create a package under `src/main/java/.../services/<service>/`
 2. Add a Controller (follow the correct protocol: Query, JSON 1.1, REST JSON, or REST XML)
 3. Add a Service (`@ApplicationScoped`) and model POJOs
-4. Add config entries in `EmulatorConfig.java` and `application.yml`
-5. Register a `ServiceDescriptor` in `ResolvedServiceCatalog`
-6. Wire controller/handler dispatch for the service
-7. Add integration tests in `*IntegrationTest.java`
+4. Add a `<Svc>ServiceConfig` interface and its accessor on `ServicesConfig` in `EmulatorConfig.java`
+5. Register a `ServiceDescriptor` in `ResolvedServiceCatalog`. This is the only registration point: `ServiceRegistry` reads the catalog and has no registration API
+6. Add `floci.services.<key>.enabled` to both `src/main/resources/application.yml` and `src/test/resources/application.yml`
+7. Wire controller/handler dispatch for the service (JSON 1.1 handlers are injected into `AwsJson11Controller`)
+8. Obtain storage through `StorageFactory` and implement `Resettable`; list any static `Random` or `SecureRandom` field under `--initialize-at-run-time` in `application.yml`
+9. Add `*ServiceTest.java` and `*IntegrationTest.java` tests
+10. Document it: `docs/services/<service>.md`, a `mkdocs.yml` nav entry, a Service Matrix row in `docs/services/index.md`, and a row in the README category table
+11. Register the handler in `tools/docs/services.yaml`, then run `make docs-sync` and `make docs-check`
+12. Add a client factory in the compat suite's `TestFixtures` and a `<Svc>Test` under `compatibility-tests/sdk-test-java`
 
-`ServiceRegistry`, `ServiceEnabledFilter`, and `StorageFactory` now resolve service metadata from the descriptor catalog. Adding a service should not require new service-keyed switch statements in those consumers.
+`ServiceRegistry`, `ServiceEnabledFilter`, and `StorageFactory` resolve service metadata from the descriptor catalog. Adding a service should not require new service-keyed switch statements in those consumers. `make docs-check` gates steps 10 and 11: a registered service with no matrix row, a `docs/services` page with no matrix row, and a stale action table all fail CI.
 
 Always implement the **real AWS wire protocol**. Never invent custom endpoints. The AWS SDK must work against Floci without modification.
 
@@ -168,19 +173,44 @@ otherwise create one.
      `"LogicalId.Attr"`. Take the attribute names from the resource's registry schema under
      `local/aws/cfn-resource-schemas/us-east-1/` (`readOnlyProperties`).
 4. **`provision` is also the update path.** On `UpdateStack` it is called again with the previous
-   physical id and attributes already set on the resource. Check for an existing physical id and
-   update in place rather than creating unconditionally, which would otherwise throw
-   `AlreadyExists` or orphan the old resource.
+   physical id and attributes already set on the resource. Use `ctx.isUpdate()` and
+   `ctx.priorPhysicalId()` rather than reading the id back off the resource: `provision` assigns the
+   new id as it works, so a resource-derived check changes meaning mid-method. Update in place
+   rather than creating unconditionally, which would otherwise throw `AlreadyExists` or orphan the
+   old resource.
 5. Override `delete(...)` if the type has a backing delete. Deleting a resource that is already gone
-   should be tolerated.
-6. Add a focused unit test (mock only your service, see `SqsCfnProvisionerTest`) and an integration
-   test. Assert the **specific `Fn::GetAtt` attribute keys**, not just `CREATE_COMPLETE`: an
-   unmapped type is stubbed out as a successful no-op, so a status-only assertion passes even when
-   nothing was provisioned.
-7. Add the type to the table in `docs/services/cloudformation.md`.
+   should be tolerated: `CfnDeletes.safeDelete` does this, taking the specific error codes that
+   mean "already gone" (never a catch-all: a real failure such as `BucketNotEmpty` must propagate so
+   the stack reports `DELETE_FAILED`).
+   If the delete needs more than the physical id (a create-time attribute such as a rule's event
+   bus), override `delete(StackResource, String)` instead, which receives the whole resource.
+6. **Register the type in `src/test/resources/cloudformation/supported-resource-types.tsv`**
+   (`type<TAB>YourCfnProvisioner`). `CfnResourceInventoryTest` compares that file against the
+   CDI-resolved registry, so it fails if you forget, which is also what catches a missing
+   `@ApplicationScoped`.
+7. **Make your provisioner reachable from `CfnProvisionerFixture`** if it takes a single service.
+   That is three edits, not one: a `private <Svc>Service` field on `Builder`, a
+   `public Builder <svc>(<Svc>Service v)` setter for it, and a construction arm in
+   `inferredProvisioners()`. Tests name a service and the fixture wires the matching provisioner;
+   without all three, a test exercising your type silently falls through to the stub arm instead.
+   The setter is the step that gets missed: a field nothing can assign stays null, so its
+   construction arm never runs. `CfnProvisionerFixtureTest` fails if the provisioner cannot be
+   reached through the public builder.
+8. Add a focused unit test (mock only your service, see `SqsCfnProvisioner`'s test) and an
+   integration test. Assert the **specific `Fn::GetAtt` attribute keys**, not just
+   `CREATE_COMPLETE`: an unmapped type is stubbed out as a successful no-op, so a status-only
+   assertion passes even when nothing was provisioned.
+9. Run `make docs-sync` to regenerate the resource-type table in `docs/services/cloudformation.md`,
+   and commit the result. **Do not hand-edit that table**: it is generated from the inventory in
+   step 6. Presentation (service label, ordering, notes) lives in `tools/docs/cfn_resource_types.yaml`.
+10. If your type has a schema `readOnlyProperties` entry you cannot set, add a row to
+    `src/test/resources/cloudformation/getatt-attribute-gaps.tsv` with the reason.
+    `CfnSchemaCoverageTest` requires every unset attribute to be either fixed or recorded, so
+    "not emulated" stays distinguishable from "forgotten".
 
 `SqsCfnProvisioner` is the smallest reference implementation; `Ec2LaunchTemplateCfnProvisioner`
-shows update-in-place and replacement handling.
+shows update-in-place and replacement handling; `LogsCfnProvisioner` shows a full reconcile-vs-replace
+update path.
 
 ## Pull Request Guidelines
 
@@ -191,7 +221,7 @@ shows update-in-place and replacement handling.
 5. Reference any related issues in the PR description.
 6. Keep at most **5 open PRs** at a time. A bot leaves an advisory note and an `over-pr-limit` label on PRs opened beyond that. Nothing gets closed or blocked, but please land or close your existing PRs before opening more.
 
-Docker images are never built on contributor PRs, so merging to `main` is always cheap.
+Docker images are built on contributor PRs only for the compatibility suite (`.github/workflows/compatibility.yml`, on changes under `src/**` and the compat test trees) and are never published, so merging to `main` is always cheap.
 
 ## Release Process (maintainers)
 
@@ -249,7 +279,7 @@ hand-written and preserved across regeneration, keyed by action name.
   listed under `deferred_handlers`.
 - `make docs-test` runs the tooling's unit tests.
 
-Registering a new service is one entry in `tools/docs/services.yaml`.
+Registering a new service's action table is one entry in `tools/docs/services.yaml`.
 
 ## Reporting Security Issues
 

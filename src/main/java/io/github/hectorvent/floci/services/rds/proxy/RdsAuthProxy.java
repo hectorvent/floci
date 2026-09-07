@@ -100,9 +100,15 @@ public class RdsAuthProxy {
             backend.setTcpNoDelay(true);
 
             switch (engine) {
-                case POSTGRES -> PostgresProtocolHandler.handleAuth(
-                        client, backend, masterUsername, masterPassword, dbName,
-                        iamEnabled, sigV4, tlsCertificates, passwordValidator::validate);
+                case POSTGRES -> {
+                    PostgresProtocolHandler.AuthenticatedSession session =
+                            PostgresProtocolHandler.authenticate(
+                                    client, backend, masterUsername, masterPassword, dbName,
+                                    iamEnabled, sigV4, tlsCertificates, passwordValidator::validate);
+                    if (session != null) {
+                        PostgresProtocolHandler.bridge(session, backend);
+                    }
+                }
                 case MYSQL, MARIADB -> MySqlProtocolHandler.handleAuth(
                         client, backend, masterUsername, masterPassword,
                         iamEnabled, sigV4, tlsCertificates, passwordValidator::validate);

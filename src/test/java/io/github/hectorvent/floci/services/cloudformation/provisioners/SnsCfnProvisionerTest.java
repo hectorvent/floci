@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.cloudformation.provisioners;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cloudformation.CloudFormationTemplateEngine;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
 import io.github.hectorvent.floci.services.sns.SnsService;
@@ -11,21 +12,27 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
-/** {@code AWS::SNS::Topic} and {@code AWS::SNS::Subscription}. */
+/** {@code AWS::SNS::Topic}, {@code AWS::SNS::Subscription} and {@code AWS::SNS::TopicPolicy}. */
 class SnsCfnProvisionerTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -34,13 +41,14 @@ class SnsCfnProvisionerTest {
 
     private SnsService sns;
     private SnsCfnProvisioner provisioner;
+    private CloudFormationTemplateEngine engine;
     private ProvisionContext ctx;
 
     @BeforeEach
     void setUp() {
         sns = mock(SnsService.class);
         provisioner = new SnsCfnProvisioner(sns);
-        CloudFormationTemplateEngine engine = mock(CloudFormationTemplateEngine.class);
+        engine = mock(CloudFormationTemplateEngine.class);
         // The two resolvers are stubbed with the semantics that distinguish them, so a body that
         // reaches for the wrong one is visible: resolve() is scalar (an object node flattens to
         // ""), resolveJsonAttribute() serializes the document.
@@ -51,6 +59,14 @@ class SnsCfnProvisionerTest {
         when(engine.resolveJsonAttribute(any())).thenAnswer(i -> {
             JsonNode node = i.getArgument(0);
             return node == null ? null : MAPPER.writeValueAsString(node);
+        });
+        when(engine.resolveStringList(any())).thenAnswer(i -> {
+            JsonNode node = i.getArgument(0);
+            List<String> values = new ArrayList<>();
+            if (node != null && node.isArray()) {
+                node.forEach(element -> values.add(element.asText()));
+            }
+            return values;
         });
         ctx = new ProvisionContext(engine, REGION, "000000000000", "my-stack");
     }
@@ -94,7 +110,10 @@ class SnsCfnProvisionerTest {
 
         // Ref on an SNS topic returns the ARN, unlike most types where it is the name.
         assertEquals(TOPIC_ARN, r.getPhysicalId());
-        assertEquals(Map.of("Arn", TOPIC_ARN, "TopicName", "events"), r.getAttributes());
+        // TopicArn is the attribute aws-sns-topic.json declares; Arn is kept for templates written
+        // against earlier releases.
+        assertEquals(Map.of("TopicArn", TOPIC_ARN, "Arn", TOPIC_ARN, "TopicName", "events"),
+                r.getAttributes());
     }
 
     @Test
@@ -105,6 +124,28 @@ class SnsCfnProvisionerTest {
         provision("AWS::SNS::Topic", "{}");
 
         assertTrue(name.getValue().startsWith("my-stack-Topic-"), name.getValue());
+    }
+
+    /**
+     * The topic's physical id is its ARN, so the prior name is read back from the TopicName
+     * attribute. Without that an unnamed topic would be recreated under a new name on every update,
+     * orphaning the old topic and every subscription attached to it.
+     */
+    @Test
+    void anUnnamedTopicKeepsItsNameAcrossUpdates() {
+        ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
+        when(sns.createTopic(name.capture(), anyMap(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));
+
+        StackResource r = new StackResource();
+        r.setLogicalId("Topic");
+        r.setResourceType("AWS::SNS::Topic");
+        r.setAttributes(new HashMap<>(Map.of("TopicName", "my-stack-Topic-abc123def456")));
+        r.setPhysicalId(TOPIC_ARN);
+        provisioner.provision(r, props("{}"),
+                new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack", TOPIC_ARN));
+
+        assertEquals("my-stack-Topic-abc123def456", name.getValue(),
+                "the prior name must come from the attribute, not from the ARN physical id");
     }
 
     @Test
@@ -206,11 +247,70 @@ class SnsCfnProvisionerTest {
     }
 
     @Test
+    void topicPolicyWritesTheDocumentToEveryListedTopic() {
+        StackResource r = provision("AWS::SNS::TopicPolicy", """
+                {"Topics": ["arn:aws:sns:us-east-1:000000000000:a", "arn:aws:sns:us-east-1:000000000000:b"],
+                 "PolicyDocument": {"Version": "2012-10-17", "Statement": [
+                   {"Sid": "AllowPublish", "Effect": "Allow", "Principal": "*", "Action": "sns:Publish", "Resource": "*"}]}}
+                """);
+
+        // The document reaches SNS as serialized JSON, one SetTopicAttributes per topic.
+        verify(sns).setTopicAttributes(eq("arn:aws:sns:us-east-1:000000000000:a"), eq("Policy"),
+                contains("\"Sid\":\"AllowPublish\""), eq(REGION));
+        verify(sns).setTopicAttributes(eq("arn:aws:sns:us-east-1:000000000000:b"), eq("Policy"),
+                contains("\"Sid\":\"AllowPublish\""), eq(REGION));
+        assertTrue(r.getPhysicalId().startsWith("topic-policy-"), r.getPhysicalId());
+        assertEquals(Map.of("Id", r.getPhysicalId()), r.getAttributes());
+    }
+
+    @Test
+    void topicPolicyKeepsItsPhysicalIdAcrossUpdates() {
+        StackResource r = new StackResource();
+        r.setLogicalId("Policy");
+        r.setResourceType("AWS::SNS::TopicPolicy");
+        r.setPhysicalId("topic-policy-abc12345");
+        r.setAttributes(new HashMap<>(Map.of("Id", "topic-policy-abc12345")));
+        ProvisionContext update = new ProvisionContext(engine, REGION, "000000000000", "my-stack", "topic-policy-abc12345");
+
+        provisioner.provision(r, props("""
+                {"Topics": ["arn:aws:sns:us-east-1:000000000000:a"], "PolicyDocument": {"Version": "2012-10-17", "Statement": []}}
+                """), update);
+
+        verify(sns).setTopicAttributes(eq("arn:aws:sns:us-east-1:000000000000:a"), eq("Policy"), anyString(), eq(REGION));
+        assertEquals("topic-policy-abc12345", r.getPhysicalId());
+        assertEquals("topic-policy-abc12345", r.getAttributes().get("Id"));
+    }
+
+    @Test
+    void topicPolicyWithoutTopicsIsRejected() {
+        AwsException e = assertThrows(AwsException.class, () -> provision("AWS::SNS::TopicPolicy", """
+                {"Topics": [], "PolicyDocument": {"Version": "2012-10-17", "Statement": []}}
+                """));
+
+        assertEquals("ValidationError", e.getErrorCode());
+        verify(sns, never()).setTopicAttributes(any(), any(), any(), any());
+    }
+
+    @Test
+    void topicPolicyWithoutADocumentIsRejected() {
+        AwsException e = assertThrows(AwsException.class, () -> provision("AWS::SNS::TopicPolicy", """
+                {"Topics": ["arn:aws:sns:us-east-1:000000000000:a"]}
+                """));
+
+        assertEquals("ValidationError", e.getErrorCode());
+        verify(sns, never()).setTopicAttributes(any(), any(), any(), any());
+    }
+
+    @Test
     void deleteRoutesEachTypeToItsOwnCall() {
         provisioner.delete("AWS::SNS::Topic", TOPIC_ARN, REGION);
         verify(sns).deleteTopic(TOPIC_ARN, REGION);
 
         provisioner.delete("AWS::SNS::Subscription", "arn:sub", REGION);
         verify(sns).unsubscribe("arn:sub", REGION);
+
+        // A topic policy has no entity of its own, so its delete touches nothing.
+        provisioner.delete("AWS::SNS::TopicPolicy", "topic-policy-abc12345", REGION);
+        verifyNoMoreInteractions(sns);
     }
 }

@@ -59,6 +59,7 @@ public class Ec2QueryHandler {
             return switch (action) {
                 // Instances
                 case "RunInstances" -> handleRunInstances(params, region);
+                case "CreateFleet" -> handleCreateFleet(params, region);
                 case "DescribeInstances" -> handleDescribeInstances(params, region);
                 case "DescribeIamInstanceProfileAssociations" ->
                         handleDescribeIamInstanceProfileAssociations(params, region);
@@ -209,6 +210,11 @@ public class Ec2QueryHandler {
                 case "CreateNatGateway" -> handleCreateNatGateway(params, region);
                 case "DescribeNatGateways" -> handleDescribeNatGateways(params, region);
                 case "DeleteNatGateway" -> handleDeleteNatGateway(params, region);
+                // Capacity Reservations
+                case "CreateCapacityReservation" -> handleCreateCapacityReservation(params, region);
+                case "DescribeCapacityReservations" -> handleDescribeCapacityReservations(params, region);
+                case "ModifyCapacityReservation" -> handleModifyCapacityReservation(params, region);
+                case "CancelCapacityReservation" -> handleCancelCapacityReservation(params, region);
                 // Elastic IPs
                 case "AllocateAddress" -> handleAllocateAddress(params, region);
                 case "AssociateAddress" -> handleAssociateAddress(params, region);
@@ -232,6 +238,10 @@ public class Ec2QueryHandler {
                 case "DeleteLaunchTemplate" -> handleDeleteLaunchTemplate(params, region);
                 // Network Interfaces
                 case "DescribeNetworkInterfaces" -> handleDescribeNetworkInterfaces(params, region);
+                case "CreateNetworkInterface" -> handleCreateNetworkInterface(params, region);
+                case "DeleteNetworkInterface" -> handleDeleteNetworkInterface(params, region);
+                case "AttachNetworkInterface" -> handleAttachNetworkInterface(params, region);
+                case "DetachNetworkInterface" -> handleDetachNetworkInterface(params, region);
                 // Volumes
                 case "CreateVolume" -> handleCreateVolume(params, region);
                 case "DescribeVolumes" -> handleDescribeVolumes(params, region);
@@ -609,6 +619,10 @@ public class Ec2QueryHandler {
         if (subnetId == null) {
             subnetId = p.getFirst("NetworkInterface.1.SubnetId");
         }
+        // floci-kt9: override-default-eni hands RunInstances a pre-existing standalone ENI as
+        // the instance's primary interface (network_interface { network_interface_id = ... }).
+        String networkInterfaceId = p.getFirst("NetworkInterface.1.NetworkInterfaceId");
+        int networkInterfaceDeviceIndex = parseIntParam(p, "NetworkInterface.1.DeviceIndex", 0);
         String clientToken = p.getFirst("ClientToken");
         List<String> sgIds = getList(p, "SecurityGroupId");
 
@@ -665,7 +679,7 @@ public class Ec2QueryHandler {
 
         Reservation res = service.runInstances(region, imageId, instanceType, minCount, maxCount,
                 keyName, sgIds, subnetId, clientToken, instanceTags, userData, iamInstanceProfileArn,
-                associatePublicIp);
+                associatePublicIp, networkInterfaceId, networkInterfaceDeviceIndex);
 
         if (!networkInterfaceTags.isEmpty()) {
             List<String> eniIds = new ArrayList<>();
@@ -701,6 +715,291 @@ public class Ec2QueryHandler {
         }
         return service.resolveLaunchTemplateData(region, id, name, version);
     }
+
+    /**
+     * Handles the synchronous EC2 Fleet form used by Karpenter for node launches and
+     * authorization dry-runs. Floci does not model fleet requests as a separate long-lived
+     * resource: an instant fleet is represented by the instances it launches, which keeps
+     * DescribeInstances and termination behavior consistent with RunInstances.
+     *
+     * <p>The EC2 Query model calls this member {@code LaunchTemplateConfigs}, while the wire
+     * location name emitted by SDK serializers is {@code LaunchTemplateConfig.N}. Accept both
+     * spellings because callers in the ecosystem use both forms.</p>
+     */
+    private Response handleCreateFleet(MultivaluedMap<String, String> p, String region) {
+        String fleetType = firstNonBlank(p.getFirst("Type"), "instant");
+        if (!"instant".equals(fleetType)) {
+            throw new AwsException("InvalidParameterValue",
+                    "Only instant fleets are supported for local EC2 launches.", 400);
+        }
+        String capacityType = firstNonBlank(
+                p.getFirst("TargetCapacitySpecification.DefaultTargetCapacityType"), "on-demand");
+        if (!Set.of("on-demand", "spot").contains(capacityType)) {
+            throw new AwsException("InvalidParameterValue",
+                    "DefaultTargetCapacityType must be on-demand or spot.", 400);
+        }
+
+        int targetCapacity = parseIntParam(p, "TargetCapacitySpecification.TotalTargetCapacity", 0);
+        if (targetCapacity <= 0) {
+            throw new AwsException("MissingParameter",
+                    "The request must contain the parameter TargetCapacitySpecification.TotalTargetCapacity.", 400);
+        }
+
+        List<FleetLaunch> launches = parseFleetLaunches(p, region);
+        if (launches.isEmpty()) {
+            throw new AwsException("MissingParameter",
+                    "The request must contain the parameter LaunchTemplateConfigs.", 400);
+        }
+
+        // Resolve and validate every launch template before honoring DryRun. AWS returns
+        // DryRunOperation only after it has established that the request could succeed.
+        for (FleetLaunch launch : launches) {
+            if (launch.imageId() == null || launch.imageId().isBlank()) {
+                throw new AwsException("MissingParameter",
+                        "Each fleet launch must specify an ImageId in the launch template or override.", 400);
+            }
+            if (launch.instanceType() == null || launch.instanceType().isBlank()) {
+                throw new AwsException("MissingParameter",
+                        "Each fleet launch must specify an InstanceType in the launch template or override.", 400);
+            }
+        }
+        checkDryRun(p);
+
+        List<FleetLaunchResult> results = new ArrayList<>(targetCapacity);
+        List<String> launchedInstanceIds = new ArrayList<>(targetCapacity);
+        try {
+            for (int i = 0; i < targetCapacity; i++) {
+                FleetLaunch launch = launches.get(i % launches.size());
+                Reservation reservation = service.runInstances(
+                        region,
+                        launch.imageId(),
+                        launch.instanceType(),
+                        1,
+                        1,
+                        launch.keyName(),
+                        launch.securityGroupIds(),
+                        launch.subnetId(),
+                        p.getFirst("ClientToken"),
+                        launch.instanceTags(),
+                        launch.userData(),
+                        launch.iamInstanceProfileArn(),
+                        null,
+                        null,
+                        0,
+                        launch.availabilityZone());
+                Instance instance = reservation.getInstances().get(0);
+                launchedInstanceIds.add(instance.getInstanceId());
+                results.add(new FleetLaunchResult(instance, launch));
+            }
+        } catch (RuntimeException e) {
+            if (!launchedInstanceIds.isEmpty()) {
+                LOG.warnv("CreateFleet failed after launching instances {0}; rolling them back: {1}",
+                        launchedInstanceIds, e.getMessage());
+                List<String> rollbackFailureInstanceIds = new ArrayList<>();
+                List<RuntimeException> rollbackFailures = new ArrayList<>();
+                for (String instanceId : launchedInstanceIds) {
+                    try {
+                        service.terminateInstances(region, List.of(instanceId));
+                    } catch (RuntimeException cleanupFailure) {
+                        rollbackFailureInstanceIds.add(instanceId);
+                        rollbackFailures.add(cleanupFailure);
+                        LOG.errorv(cleanupFailure, "CreateFleet rollback failed for instance {0}: {1}",
+                                instanceId, cleanupFailure.getMessage());
+                    }
+                }
+                if (!rollbackFailures.isEmpty()) {
+                    String rollbackMessage = "CreateFleet rollback incomplete for instance(s): "
+                            + String.join(", ", rollbackFailureInstanceIds);
+                    if (e instanceof AwsException awsFailure) {
+                        AwsException enrichedFailure = new AwsException(
+                                awsFailure.getErrorCode(),
+                                awsFailure.getMessage() + " " + rollbackMessage,
+                                awsFailure.getHttpStatus());
+                        enrichedFailure.addSuppressed(e);
+                        rollbackFailures.forEach(enrichedFailure::addSuppressed);
+                        throw enrichedFailure;
+                    }
+                    rollbackFailures.forEach(e::addSuppressed);
+                }
+            }
+            throw e;
+        }
+
+        XmlBuilder xml = new XmlBuilder()
+                .start("CreateFleetResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("fleetId", "fleet-" + UUID.randomUUID().toString().replace("-", ""))
+                .start("fleetInstanceSet");
+        // AWS groups instances that share a launch template and overrides into one fleet
+        // instance entry. Keep the first-seen order stable while collecting all instance IDs.
+        Map<FleetLaunchKey, List<FleetLaunchResult>> groupedResults = new LinkedHashMap<>();
+        for (FleetLaunchResult result : results) {
+            groupedResults.computeIfAbsent(FleetLaunchKey.from(result.launch()), ignored -> new ArrayList<>())
+                    .add(result);
+        }
+        for (List<FleetLaunchResult> group : groupedResults.values()) {
+            FleetLaunchResult first = group.getFirst();
+            Instance instance = first.instance();
+            FleetLaunch launch = first.launch();
+            xml.start("item")
+                    .start("instanceIds");
+            for (FleetLaunchResult result : group) {
+                xml.elem("item", result.instance().getInstanceId());
+            }
+            xml.end("instanceIds")
+                    .elem("instanceType", instance.getInstanceType())
+                    .elem("availabilityZone", instance.getPlacement() != null
+                            ? instance.getPlacement().getAvailabilityZone() : null)
+                    .elem("subnetId", instance.getSubnetId())
+                    .elem("lifecycle", capacityType)
+                    .start("launchTemplateAndOverrides")
+                    .start("launchTemplateSpecification")
+                    .elem("launchTemplateId", launch.launchTemplateId())
+                    .elem("launchTemplateName", launch.launchTemplateName())
+                    .elem("version", launch.launchTemplateVersion())
+                    .end("launchTemplateSpecification")
+                    .start("overrides")
+                    .elem("instanceType", launch.instanceType())
+                    .elem("imageId", launch.imageId())
+                    .elem("subnetId", launch.subnetId())
+                    .elem("availabilityZone", launch.availabilityZone())
+                    .end("overrides")
+                    .end("launchTemplateAndOverrides")
+                    .end("item");
+        }
+        xml.end("fleetInstanceSet")
+                .end("CreateFleetResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private List<FleetLaunch> parseFleetLaunches(MultivaluedMap<String, String> p, String region) {
+        List<FleetLaunch> launches = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String base = fleetConfigBase(p, i);
+            if (base == null) {
+                break;
+            }
+            String launchTemplateId = p.getFirst(base + ".LaunchTemplateSpecification.LaunchTemplateId");
+            String launchTemplateName = p.getFirst(base + ".LaunchTemplateSpecification.LaunchTemplateName");
+            String version = p.getFirst(base + ".LaunchTemplateSpecification.Version");
+            LaunchTemplateData template = service.resolveLaunchTemplateData(
+                    region, launchTemplateId, launchTemplateName, version);
+            List<Tag> fleetInstanceTags = parseTagsForResource(p, "instance");
+
+            boolean hasOverride = false;
+            for (int j = 1; ; j++) {
+                String overrideBase = base + ".Overrides." + j;
+                String instanceType = p.getFirst(overrideBase + ".InstanceType");
+                String imageId = p.getFirst(overrideBase + ".ImageId");
+                String subnetId = p.getFirst(overrideBase + ".SubnetId");
+                String availabilityZone = p.getFirst(overrideBase + ".AvailabilityZone");
+                if (instanceType == null && imageId == null && subnetId == null && availabilityZone == null) {
+                    break;
+                }
+                hasOverride = true;
+                launches.add(fleetLaunch(region, template, launchTemplateId, launchTemplateName, version,
+                        instanceType, imageId, subnetId, availabilityZone, fleetInstanceTags));
+            }
+            if (!hasOverride) {
+                launches.add(fleetLaunch(region, template, launchTemplateId, launchTemplateName, version,
+                        null, null, null, null, fleetInstanceTags));
+            }
+        }
+        return launches;
+    }
+
+    private FleetLaunch fleetLaunch(String region, LaunchTemplateData template, String launchTemplateId,
+                                    String launchTemplateName, String version,
+                                    String overrideInstanceType, String overrideImageId,
+                                    String overrideSubnetId, String overrideAvailabilityZone,
+                                    List<Tag> fleetInstanceTags) {
+        Map<String, Tag> tags = new LinkedHashMap<>();
+        for (Tag tag : template.getInstanceTags()) {
+            tags.put(tag.getKey(), tag);
+        }
+        for (Tag tag : fleetInstanceTags) {
+            tags.put(tag.getKey(), tag);
+        }
+        String templateSubnetId = template.getNetworkInterfaces().stream()
+                .map(networkInterface -> networkInterface.getSubnetId())
+                .filter(Objects::nonNull)
+                .filter(value -> !value.isBlank())
+                .findFirst()
+                .orElse(null);
+        String subnetId = firstNonBlank(overrideSubnetId, templateSubnetId);
+        String templateAvailabilityZone = template.getPlacement() != null
+                ? template.getPlacement().getAvailabilityZone() : null;
+        String availabilityZone = resolveFleetAvailabilityZone(
+                region, templateSubnetId, templateAvailabilityZone, overrideSubnetId, overrideAvailabilityZone);
+        return new FleetLaunch(
+                launchTemplateId,
+                launchTemplateName,
+                version,
+                firstNonBlank(overrideInstanceType, template.getInstanceType()),
+                firstNonBlank(overrideImageId, template.getImageId()),
+                subnetId,
+                availabilityZone,
+                template.getKeyName(),
+                template.getUserData(),
+                service.iamInstanceProfileArn(template),
+                template.effectiveSecurityGroupIds(),
+                new ArrayList<>(tags.values()));
+    }
+
+    /**
+     * Resolves the placement represented by one CreateFleet launch override.
+     *
+     * <p>A subnet supplied by an override replaces the subnet inherited from the launch template.
+     * Its availability zone therefore also replaces a template placement zone when the override
+     * does not carry an explicit zone. Passing the template zone through in that case creates a
+     * valid subnet-only AWS override that is incorrectly rejected as a subnet/AZ mismatch. Resolve
+     * the subnet here so both the launch request and the response describe the same placement.</p>
+     */
+    private String resolveFleetAvailabilityZone(String region, String templateSubnetId,
+                                                String templateAvailabilityZone, String overrideSubnetId,
+                                                String overrideAvailabilityZone) {
+        if (isSet(overrideAvailabilityZone)) {
+            return overrideAvailabilityZone;
+        }
+        if (isSet(overrideSubnetId)) {
+            return service.requireSubnet(region, overrideSubnetId).getAvailabilityZone();
+        }
+        if (isSet(templateAvailabilityZone)) {
+            return templateAvailabilityZone;
+        }
+        if (isSet(templateSubnetId)) {
+            return service.requireSubnet(region, templateSubnetId).getAvailabilityZone();
+        }
+        return null;
+    }
+
+    private String fleetConfigBase(MultivaluedMap<String, String> p, int index) {
+        String singular = "LaunchTemplateConfig." + index;
+        String plural = "LaunchTemplateConfigs." + index;
+        if (anyParamStartsWith(p, singular + ".")) {
+            return singular;
+        }
+        if (anyParamStartsWith(p, plural + ".")) {
+            return plural;
+        }
+        return null;
+    }
+
+    private record FleetLaunch(String launchTemplateId, String launchTemplateName, String launchTemplateVersion,
+                               String instanceType, String imageId, String subnetId, String availabilityZone,
+                               String keyName, String userData, String iamInstanceProfileArn,
+                               List<String> securityGroupIds, List<Tag> instanceTags) {}
+
+    private record FleetLaunchKey(String launchTemplateId, String launchTemplateName, String launchTemplateVersion,
+                                  String instanceType, String imageId, String subnetId, String availabilityZone) {
+        private static FleetLaunchKey from(FleetLaunch launch) {
+            return new FleetLaunchKey(launch.launchTemplateId(), launch.launchTemplateName(),
+                    launch.launchTemplateVersion(), launch.instanceType(), launch.imageId(), launch.subnetId(),
+                    launch.availabilityZone());
+        }
+    }
+
+    private record FleetLaunchResult(Instance instance, FleetLaunch launch) {}
 
     private static String firstNonBlank(String first, String fallback) {
         return first != null && !first.isBlank() ? first : fallback;
@@ -969,7 +1268,8 @@ public class Ec2QueryHandler {
 
     private Response handleCreateVpc(MultivaluedMap<String, String> p, String region) {
         String cidrBlock = p.getFirst("CidrBlock");
-        Vpc vpc = service.createVpc(region, cidrBlock, false);
+        boolean amazonProvidedIpv6 = "true".equalsIgnoreCase(p.getFirst("AmazonProvidedIpv6CidrBlock"));
+        Vpc vpc = service.createVpc(region, cidrBlock, false, amazonProvidedIpv6);
         List<Tag> vpcTags = new ArrayList<>();
         for (int i = 1; ; i++) {
             String resType = p.getFirst("TagSpecification." + i + ".ResourceType");
@@ -2265,6 +2565,18 @@ public class Ec2QueryHandler {
     private Response handleAssociateVpcCidrBlock(MultivaluedMap<String, String> p, String region) {
         String vpcId = p.getFirst("VpcId");
         String cidrBlock = p.getFirst("CidrBlock");
+        if ("true".equalsIgnoreCase(p.getFirst("AmazonProvidedIpv6CidrBlock"))) {
+            VpcIpv6CidrBlockAssociation ipv6 = service.associateAmazonProvidedIpv6CidrBlock(region, vpcId);
+            XmlBuilder ipv6Xml = new XmlBuilder()
+                    .start("AssociateVpcCidrBlockResponse", AwsNamespaces.EC2)
+                    .elem("requestId", UUID.randomUUID().toString())
+                    .elem("vpcId", vpcId)
+                    .start("ipv6CidrBlockAssociation")
+                    .raw(vpcIpv6AssociationXml(ipv6))
+                    .end("ipv6CidrBlockAssociation")
+                    .end("AssociateVpcCidrBlockResponse");
+            return xmlResponse(ipv6Xml.build());
+        }
         VpcCidrBlockAssociation assoc = service.associateVpcCidrBlock(region, vpcId, cidrBlock);
         XmlBuilder xml = new XmlBuilder()
                 .start("AssociateVpcCidrBlockResponse", AwsNamespaces.EC2)
@@ -2277,6 +2589,16 @@ public class Ec2QueryHandler {
                 .end("cidrBlockAssociation")
                 .end("AssociateVpcCidrBlockResponse");
         return xmlResponse(xml.build());
+    }
+
+    private String vpcIpv6AssociationXml(VpcIpv6CidrBlockAssociation assoc) {
+        return new XmlBuilder()
+                .elem("associationId", assoc.getAssociationId())
+                .elem("ipv6CidrBlock", assoc.getIpv6CidrBlock())
+                .start("ipv6CidrBlockState").elem("state", assoc.getIpv6CidrBlockState()).end("ipv6CidrBlockState")
+                .elem("ipv6Pool", assoc.getIpv6Pool())
+                .elem("networkBorderGroup", assoc.getNetworkBorderGroup())
+                .build();
     }
 
     private Response handleDisassociateVpcCidrBlock(MultivaluedMap<String, String> p, String region) {
@@ -3182,6 +3504,105 @@ public class Ec2QueryHandler {
         return xmlResponse(xml.build());
     }
 
+    // ─── Capacity Reservation handlers ────────────────────────────────────────
+
+    private Response handleCreateCapacityReservation(MultivaluedMap<String, String> p, String region) {
+        CapacityReservation reservation = service.createCapacityReservation(
+                region,
+                p.getFirst("InstanceType"),
+                p.getFirst("InstancePlatform"),
+                p.getFirst("AvailabilityZone"),
+                p.getFirst("AvailabilityZoneId"),
+                intOrNull(p, "InstanceCount"),
+                p.getFirst("Tenancy"),
+                p.getFirst("EbsOptimized") != null ? Boolean.valueOf(p.getFirst("EbsOptimized")) : null,
+                p.getFirst("EphemeralStorage") != null ? Boolean.valueOf(p.getFirst("EphemeralStorage")) : null,
+                p.getFirst("EndDateType"),
+                instantOrNull(p, "EndDate"),
+                p.getFirst("InstanceMatchCriteria"),
+                p.getFirst("OutpostArn"),
+                p.getFirst("PlacementGroupArn"));
+        applyResourceTags(p, region, "capacity-reservation", reservation.getCapacityReservationId());
+        XmlBuilder xml = new XmlBuilder()
+                .start("CreateCapacityReservationResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("capacityReservation").raw(capacityReservationXml(reservation)).end("capacityReservation")
+                .end("CreateCapacityReservationResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDescribeCapacityReservations(MultivaluedMap<String, String> p, String region) {
+        List<String> ids = getList(p, "CapacityReservationId");
+        Map<String, List<String>> filters = getFilters(p);
+        List<CapacityReservation> reservations = service.describeCapacityReservations(region, ids, filters);
+        XmlBuilder xml = new XmlBuilder()
+                .start("DescribeCapacityReservationsResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("capacityReservationSet");
+        for (CapacityReservation reservation : reservations) {
+            xml.start("item").raw(capacityReservationXml(reservation)).end("item");
+        }
+        xml.end("capacityReservationSet").end("DescribeCapacityReservationsResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleModifyCapacityReservation(MultivaluedMap<String, String> p, String region) {
+        service.modifyCapacityReservation(
+                region,
+                p.getFirst("CapacityReservationId"),
+                intOrNull(p, "InstanceCount"),
+                instantOrNull(p, "EndDate"),
+                p.getFirst("EndDateType"),
+                p.getFirst("InstanceMatchCriteria"));
+        return booleanResponse("ModifyCapacityReservation");
+    }
+
+    private Response handleCancelCapacityReservation(MultivaluedMap<String, String> p, String region) {
+        service.cancelCapacityReservation(region, p.getFirst("CapacityReservationId"));
+        return booleanResponse("CancelCapacityReservation");
+    }
+
+    private String capacityReservationXml(CapacityReservation reservation) {
+        XmlBuilder xml = new XmlBuilder()
+                .elem("capacityReservationId", reservation.getCapacityReservationId())
+                .elem("ownerId", reservation.getOwnerId())
+                .elem("capacityReservationArn", reservation.getCapacityReservationArn())
+                .elem("availabilityZoneId", reservation.getAvailabilityZoneId())
+                .elem("availabilityZone", reservation.getAvailabilityZone())
+                .elem("instanceType", reservation.getInstanceType())
+                .elem("instancePlatform", reservation.getInstancePlatform())
+                .elem("tenancy", reservation.getTenancy())
+                .elem("totalInstanceCount", reservation.getTotalInstanceCount())
+                .elem("availableInstanceCount", reservation.getAvailableInstanceCount())
+                .elem("ebsOptimized", reservation.isEbsOptimized())
+                .elem("ephemeralStorage", reservation.isEphemeralStorage())
+                .elem("state", reservation.getState())
+                .elem("startDate", reservation.getStartDate() != null ? ISO_FMT.format(reservation.getStartDate()) : null)
+                .elem("endDate", reservation.getEndDate() != null ? ISO_FMT.format(reservation.getEndDate()) : null)
+                .elem("endDateType", reservation.getEndDateType())
+                .elem("instanceMatchCriteria", reservation.getInstanceMatchCriteria())
+                .elem("createDate", reservation.getCreateDate() != null ? ISO_FMT.format(reservation.getCreateDate()) : null)
+                .elem("outpostArn", reservation.getOutpostArn())
+                .elem("placementGroupArn", reservation.getPlacementGroupArn())
+                .raw(tagSetXml(reservation.getTags()));
+        return xml.build();
+    }
+
+    // Unlike intOrNull's silent skip of absent values, a present but unparseable timestamp is a
+    // caller mistake and is rejected rather than coerced to null.
+    private java.time.Instant instantOrNull(MultivaluedMap<String, String> p, String name) {
+        String value = p.getFirst(name);
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return java.time.Instant.parse(value);
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new AwsException("InvalidParameterValue",
+                    "The specified value for " + name + " is not valid.", 400);
+        }
+    }
+
     // ─── Elastic IP handlers ──────────────────────────────────────────────────
 
     private Response handleAllocateAddress(MultivaluedMap<String, String> p, String region) {
@@ -3339,7 +3760,13 @@ public class Ec2QueryHandler {
             for (String arch : (List<String>) t.get("supportedArchitectures")) {
                 xml.elem("item", arch);
             }
-            xml.end("supportedArchitectures").end("processorInfo").end("item");
+            xml.end("supportedArchitectures").end("processorInfo");
+            Map<String, Object> networkInfo = (Map<String, Object>) t.get("networkInfo");
+            xml.start("networkInfo")
+                    .elem("encryptionInTransitSupported",
+                            String.valueOf(networkInfo.get("encryptionInTransitSupported")))
+                    .end("networkInfo")
+                    .end("item");
         }
         xml.end("instanceTypeSet").end("DescribeInstanceTypesResponse");
         return xmlResponse(xml.build());
@@ -3476,61 +3903,7 @@ public class Ec2QueryHandler {
                 .elem("requestId", UUID.randomUUID().toString())
                 .start("networkInterfaceSet");
         for (NetworkInterface ni : nis) {
-            xml.start("item")
-                    .elem("networkInterfaceId", ni.getNetworkInterfaceId())
-                    .elem("subnetId", ni.getSubnetId())
-                    .elem("vpcId", ni.getVpcId())
-                    .elem("availabilityZone", ni.getAvailabilityZone())
-                    .elem("description", ni.getDescription())
-                    .elem("ownerId", ni.getOwnerId())
-                    .elem("status", ni.getStatus())
-                    .elem("interfaceType", ni.getInterfaceType())
-                    .elem("macAddress", ni.getMacAddress())
-                    .elem("privateIpAddress", ni.getPrivateIpAddress())
-                    .elem("privateDnsName", ni.getPrivateDnsName())
-                    .elem("sourceDestCheck", String.valueOf(ni.isSourceDestCheck()))
-                    .start("groupSet");
-            for (GroupIdentifier gi : ni.getGroups()) {
-                xml.start("item")
-                        .elem("groupId", gi.getGroupId())
-                        .elem("groupName", gi.getGroupName())
-                        .end("item");
-            }
-            xml.end("groupSet");
-            // Phase 3: tagSet from instance tags
-            xml.raw(tagSetXml(ni.getTagSet()));
-            if (ni.getAttachment() != null) {
-                xml.start("attachment")
-                        .elem("attachmentId", ni.getAttachment().getAttachmentId())
-                        .elem("deviceIndex", String.valueOf(ni.getAttachment().getDeviceIndex()))
-                        .elem("status", ni.getAttachment().getStatus())
-                        .elem("attachTime", ni.getAttachment().getAttachTime())
-                        .elem("deleteOnTermination", String.valueOf(ni.getAttachment().isDeleteOnTermination()))
-                        .elem("instanceId", ni.getAttachment().getInstanceId())
-                        .elem("instanceOwnerId", ni.getAttachment().getInstanceOwnerId())
-                        .end("attachment");
-            }
-            // Phase 3: privateIpAddressesSet with association
-            if (!ni.getPrivateIpAddresses().isEmpty()) {
-                xml.start("privateIpAddressesSet");
-                for (NetworkInterfacePrivateIpAddress ip : ni.getPrivateIpAddresses()) {
-                    xml.start("item")
-                            .elem("privateIpAddress", ip.getPrivateIpAddress())
-                            .elem("privateDnsName", ip.getPrivateDnsName())
-                            .elem("primary", String.valueOf(ip.isPrimary()));
-                    if (ip.getAssociation() != null) {
-                        xml.start("association")
-                                .elem("publicIp", ip.getAssociation().getPublicIp())
-                                .elem("allocationId", ip.getAssociation().getAllocationId())
-                                .elem("associationId", ip.getAssociation().getAssociationId())
-                                .elem("ipOwnerId", ip.getAssociation().getIpOwnerId())
-                                .end("association");
-                    }
-                    xml.end("item");
-                }
-                xml.end("privateIpAddressesSet");
-            }
-            xml.end("item");
+            xml.start("item").raw(networkInterfaceXml(ni)).end("item");
         }
         xml.end("networkInterfaceSet");
         if (result.nextToken() != null) {
@@ -3538,6 +3911,118 @@ public class Ec2QueryHandler {
         }
         xml.end("DescribeNetworkInterfacesResponse");
         return xmlResponse(xml.build());
+    }
+
+    /** Shared field emission for a {@code networkInterface} item, used by Describe and Create. */
+    private String networkInterfaceXml(NetworkInterface ni) {
+        XmlBuilder xml = new XmlBuilder()
+                .elem("networkInterfaceId", ni.getNetworkInterfaceId())
+                .elem("subnetId", ni.getSubnetId())
+                .elem("vpcId", ni.getVpcId())
+                .elem("availabilityZone", ni.getAvailabilityZone())
+                .elem("description", ni.getDescription())
+                .elem("ownerId", ni.getOwnerId())
+                .elem("status", ni.getStatus())
+                .elem("interfaceType", ni.getInterfaceType())
+                .elem("macAddress", ni.getMacAddress())
+                .elem("privateIpAddress", ni.getPrivateIpAddress())
+                .elem("privateDnsName", ni.getPrivateDnsName())
+                .elem("sourceDestCheck", String.valueOf(ni.isSourceDestCheck()))
+                .start("groupSet");
+        for (GroupIdentifier gi : ni.getGroups()) {
+            xml.start("item")
+                    .elem("groupId", gi.getGroupId())
+                    .elem("groupName", gi.getGroupName())
+                    .end("item");
+        }
+        xml.end("groupSet");
+        xml.raw(tagSetXml(ni.getTagSet()));
+        if (ni.getAttachment() != null) {
+            xml.start("attachment")
+                    .elem("attachmentId", ni.getAttachment().getAttachmentId())
+                    .elem("deviceIndex", String.valueOf(ni.getAttachment().getDeviceIndex()))
+                    .elem("status", ni.getAttachment().getStatus())
+                    .elem("attachTime", ni.getAttachment().getAttachTime())
+                    .elem("deleteOnTermination", String.valueOf(ni.getAttachment().isDeleteOnTermination()))
+                    .elem("instanceId", ni.getAttachment().getInstanceId())
+                    .elem("instanceOwnerId", ni.getAttachment().getInstanceOwnerId())
+                    .end("attachment");
+        }
+        if (!ni.getPrivateIpAddresses().isEmpty()) {
+            xml.start("privateIpAddressesSet");
+            for (NetworkInterfacePrivateIpAddress ip : ni.getPrivateIpAddresses()) {
+                xml.start("item")
+                        .elem("privateIpAddress", ip.getPrivateIpAddress())
+                        .elem("privateDnsName", ip.getPrivateDnsName())
+                        .elem("primary", String.valueOf(ip.isPrimary()));
+                if (ip.getAssociation() != null) {
+                    xml.start("association")
+                            .elem("publicIp", ip.getAssociation().getPublicIp())
+                            .elem("allocationId", ip.getAssociation().getAllocationId())
+                            .elem("associationId", ip.getAssociation().getAssociationId())
+                            .elem("ipOwnerId", ip.getAssociation().getIpOwnerId())
+                            .end("association");
+                }
+                xml.end("item");
+            }
+            xml.end("privateIpAddressesSet");
+        }
+        return xml.build();
+    }
+
+    private Response handleCreateNetworkInterface(MultivaluedMap<String, String> p, String region) {
+        String subnetId = p.getFirst("SubnetId");
+        String description = p.getFirst("Description");
+        String privateIpAddress = p.getFirst("PrivateIpAddress");
+        List<String> privateIpAddresses = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String addr = p.getFirst("PrivateIpAddresses." + i + ".PrivateIpAddress");
+            if (addr == null) {
+                break;
+            }
+            privateIpAddresses.add(addr);
+        }
+        List<String> securityGroupIds = getList(p, "SecurityGroupId");
+        if (securityGroupIds.isEmpty()) {
+            securityGroupIds = getList(p, "Groups.SecurityGroupId");
+        }
+        List<Tag> tagList = parseTagsForResource(p, "network-interface");
+
+        NetworkInterface ni = service.createNetworkInterface(region, subnetId, description,
+                privateIpAddress, privateIpAddresses, securityGroupIds, tagList);
+
+        XmlBuilder xml = new XmlBuilder()
+                .start("CreateNetworkInterfaceResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .start("networkInterface").raw(networkInterfaceXml(ni)).end("networkInterface")
+                .end("CreateNetworkInterfaceResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDeleteNetworkInterface(MultivaluedMap<String, String> p, String region) {
+        service.deleteNetworkInterface(region, p.getFirst("NetworkInterfaceId"));
+        return booleanResponse("DeleteNetworkInterface");
+    }
+
+    private Response handleAttachNetworkInterface(MultivaluedMap<String, String> p, String region) {
+        String networkInterfaceId = p.getFirst("NetworkInterfaceId");
+        String instanceId = p.getFirst("InstanceId");
+        int deviceIndex = parseIntParam(p, "DeviceIndex", 0);
+        NetworkInterfaceAttachment attachment =
+                service.attachNetworkInterface(region, networkInterfaceId, instanceId, deviceIndex);
+        XmlBuilder xml = new XmlBuilder()
+                .start("AttachNetworkInterfaceResponse", AwsNamespaces.EC2)
+                .elem("requestId", UUID.randomUUID().toString())
+                .elem("attachmentId", attachment.getAttachmentId())
+                .end("AttachNetworkInterfaceResponse");
+        return xmlResponse(xml.build());
+    }
+
+    private Response handleDetachNetworkInterface(MultivaluedMap<String, String> p, String region) {
+        String attachmentId = p.getFirst("AttachmentId");
+        boolean force = "true".equalsIgnoreCase(p.getFirst("Force"));
+        service.detachNetworkInterface(region, attachmentId, force);
+        return booleanResponse("DetachNetworkInterface");
     }
 
     // ─── XML fragment builders ────────────────────────────────────────────────
@@ -3718,7 +4203,12 @@ public class Ec2QueryHandler {
                     .start("cidrBlockState").elem("state", assoc.getCidrBlockState()).end("cidrBlockState")
                     .end("item");
         }
-        xml.end("cidrBlockAssociationSet")
+        xml.end("cidrBlockAssociationSet");
+        xml.start("ipv6CidrBlockAssociationSet");
+        for (VpcIpv6CidrBlockAssociation assoc : vpc.getIpv6CidrBlockAssociationSet()) {
+            xml.start("item").raw(vpcIpv6AssociationXml(assoc)).end("item");
+        }
+        xml.end("ipv6CidrBlockAssociationSet")
                 .raw(tagSetXml(vpc.getTags()));
         return xml.build();
     }
@@ -3881,15 +4371,32 @@ public class Ec2QueryHandler {
         if (natGateway.getCreateTime() != null) {
             xml.elem("createTime", ISO_FMT.format(natGateway.getCreateTime()));
         }
-        if (natGateway.getAllocationId() != null) {
-            xml.start("natGatewayAddressSet")
-                    .start("item")
-                    .elem("allocationId", natGateway.getAllocationId())
-                    .end("item")
-                    .end("natGatewayAddressSet");
-        } else {
-            xml.start("natGatewayAddressSet").end("natGatewayAddressSet");
+        xml.start("natGatewayAddressSet");
+        for (NatGatewayAddress address : natGateway.getNatGatewayAddresses()) {
+            xml.start("item");
+            if (address.getAllocationId() != null) {
+                xml.elem("allocationId", address.getAllocationId());
+            }
+            if (address.getAssociationId() != null) {
+                xml.elem("associationId", address.getAssociationId());
+            }
+            xml.elem("networkInterfaceId", address.getNetworkInterfaceId())
+                    .elem("privateIp", address.getPrivateIp());
+            if (address.getPublicIp() != null) {
+                xml.elem("publicIp", address.getPublicIp());
+            }
+            xml.elem("isPrimary", String.valueOf(address.isPrimary()))
+                    .elem("status", address.getStatus())
+                    .end("item");
         }
+        // A gateway restored from a store written before addresses were modelled has none, but
+        // still knows its allocation id, report what it does know rather than an empty set.
+        if (natGateway.getNatGatewayAddresses().isEmpty() && natGateway.getAllocationId() != null) {
+            xml.start("item")
+                    .elem("allocationId", natGateway.getAllocationId())
+                    .end("item");
+        }
+        xml.end("natGatewayAddressSet");
         xml.raw(tagSetXml(natGateway.getTags()));
         return xml.build();
     }
