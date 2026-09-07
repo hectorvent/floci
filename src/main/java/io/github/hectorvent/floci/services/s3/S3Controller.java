@@ -2763,7 +2763,7 @@ public class S3Controller {
         }
 
         if (s3Service.isAuthEnforced()) {
-            validatePresignedPostAuth(lcFields, bucket, fileData.length);
+            validatePresignedPostAuth(lcFields, bucket, key, fileData.length);
         } else {
             // Validate policy conditions if present
             String policy = lcFields.get("policy");
@@ -2819,7 +2819,7 @@ public class S3Controller {
      * SigV4-signed by a known secret key referenced through {@code x-amz-credential}, matching
      * real S3's behavior of rejecting fabricated or absent credentials with 403 AccessDenied.
      */
-    private void validatePresignedPostAuth(Map<String, String> fields, String bucket, int contentLength) {
+    private void validatePresignedPostAuth(Map<String, String> fields, String bucket, String key, int contentLength) {
         String policy = fields.get("policy");
         String credential = fields.get("x-amz-credential");
         String signature = fields.get("x-amz-signature");
@@ -2850,6 +2850,14 @@ public class S3Controller {
                     "The request signature we calculated does not match the signature you provided. "
                             + "Check your key and signing method.", 403);
         }
+
+        // Route through the same authorization check every other S3 write path uses, so this
+        // path automatically inherits any future strengthening (e.g. per-principal IAM policy
+        // evaluation) instead of silently staying behind. Today it only confirms accessKeyId is
+        // known - strictly weaker than the signature check just performed above - but that will
+        // change if authorizeObjectWrite grows real policy evaluation.
+        s3Service.authorizeObjectWrite(bucket, key, "s3:PutObject",
+                new S3Service.RequestAuthorization(true, accessKeyId));
 
         validatePolicyExpiration(policy);
         validatePolicyConditions(policy, bucket, fields, contentLength);
