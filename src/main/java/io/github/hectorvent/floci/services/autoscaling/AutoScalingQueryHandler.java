@@ -1405,7 +1405,7 @@ public class AutoScalingQueryHandler {
     private Boolean nullableBoolParam(MultivaluedMap<String, String> p, String key) {
         String val = p.getFirst(key);
         if (val == null || val.isBlank()) { return null; }
-        return Boolean.parseBoolean(val);
+        return parseOptionalBoolean(val, key);
     }
 
     private List<LaunchConfigurationBlockDeviceMapping> parseLaunchConfigurationBlockDeviceMappings(
@@ -1516,7 +1516,7 @@ public class AutoScalingQueryHandler {
                     "1 validation error detected: Value '" + val + "' at '" + key
                             + "' failed to satisfy constraint: Member must be a valid boolean", 400);
         }
-        return Boolean.parseBoolean(val);
+        return parseOptionalBoolean(val, key);
     }
 
     private String intString(Integer value) {

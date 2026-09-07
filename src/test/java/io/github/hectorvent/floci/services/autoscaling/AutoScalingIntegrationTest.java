@@ -134,6 +134,23 @@ class AutoScalingIntegrationTest {
 
     @Test
     @Order(44)
+    void launchConfigurationRejectsInvalidInstanceMonitoringBoolean() {
+        given()
+                .formParam("Action", "CreateLaunchConfiguration")
+                .formParam("LaunchConfigurationName", "my-lc-invalid-monitoring")
+                .formParam("ImageId", "ami-12345678")
+                .formParam("InstanceType", "t3.micro")
+                .formParam("InstanceMonitoring.Enabled", "not-a-boolean")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body(containsString("ValidationError"));
+    }
+
+    @Test
+    @Order(45)
     void launchConfigurationRejectsAMappingWithoutADeviceName() {
         given()
                 .formParam("Action", "CreateLaunchConfiguration")
