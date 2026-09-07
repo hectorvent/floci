@@ -3294,7 +3294,6 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
         }
         ensureDefaultResources(region);
         getRequiredVpc(region, vpcId);
-        rejectConflictingSubnetCidr(region, vpcId, cidrBlock);
 
         String zoneName = resolveSubnetZoneName(region, availabilityZone, availabilityZoneId);
 
@@ -3310,7 +3309,12 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
         subnet.setOwnerId(accountId);
         subnet.setRegion(region);
         subnet.setSubnetArn(AwsArnUtils.Arn.of("ec2", region, accountId, "subnet/" + subnetId).toString());
-        subnets.put(key(region, subnetId), subnet);
+        // The conflict scan and the store must be one step under the VPC's lock, or two
+        // overlapping creates in flight together both pass the scan before either is stored.
+        synchronized (lockFor(key(region, vpcId))) {
+            rejectConflictingSubnetCidr(region, vpcId, cidrBlock);
+            subnets.put(key(region, subnetId), subnet);
+        }
 
         // Every subnet starts associated with its VPC's default NACL. ReplaceNetworkAclAssociation
         // later moves it onto a custom NACL, so this association must exist for that lookup to work.
