@@ -357,3 +357,9 @@ setup() {
     assert_success
     assert_output "ALL"
 }
+
+@test "OpenTofu: Transfer Family server created and ONLINE" {
+    run aws_cmd transfer list-servers --query "Servers[0].State" --output text
+    assert_success
+    assert_output "ONLINE"
+}

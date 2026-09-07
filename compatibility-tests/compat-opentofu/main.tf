@@ -603,3 +603,17 @@ resource "aws_guardduty_organization_configuration" "compat" {
 output "guardduty_detector_id" {
   value = aws_guardduty_detector.compat.id
 }
+
+# -- Transfer Family Server (issue #2802) --------------------------------------
+# Never stopped, so destroy exercises DeleteServer against an ONLINE server.
+resource "aws_transfer_server" "compat" {
+  protocols = ["SFTP"]
+
+  tags = {
+    Environment = "compat-test"
+  }
+}
+
+output "transfer_server_id" {
+  value = aws_transfer_server.compat.id
+}

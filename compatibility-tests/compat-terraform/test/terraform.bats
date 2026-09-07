@@ -522,3 +522,9 @@ setup() {
     fi
     [ "$status" -eq 0 ]
 }
+
+@test "Terraform: Transfer Family server created and ONLINE" {
+    run aws_cmd transfer list-servers --query "Servers[0].State" --output text
+    assert_success
+    assert_output "ONLINE"
+}
