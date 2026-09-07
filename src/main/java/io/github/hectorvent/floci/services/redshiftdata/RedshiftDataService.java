@@ -351,7 +351,12 @@ public class RedshiftDataService implements Resettable {
     public ObjectNode listStatements(JsonNode request) {
         String nameFilter = textOrNull(request, "StatementName");
         String statusFilter = textOrNull(request, "Status");
+        // AWS caps MaxResults at 100 and treats 0 or absent as the default. An unclamped
+        // value of 0 would emit the same NextToken forever, so a follower would loop.
         int maxResults = request.path("MaxResults").asInt(100);
+        if (maxResults <= 0 || maxResults > 100) {
+            maxResults = 100;
+        }
         int offset = decodeToken(textOrNull(request, "NextToken"));
 
         List<RedshiftDataStatementStore.StoredStatement> all = store.values().stream()
@@ -474,10 +479,12 @@ public class RedshiftDataService implements Resettable {
         String schema = textOrNull(request, "Schema");
         String table = requiredText(request, "Table");
         boolean withSchema = schema != null && !schema.isBlank();
+        // Table and Schema name a specific table, not a pattern: match exactly so a name
+        // containing '_' or '%' cannot pull columns from other tables into ColumnList.
         String sql = "SELECT column_name, data_type, character_maximum_length, is_nullable, "
                 + "numeric_precision, numeric_scale, column_default, table_schema, table_name "
-                + "FROM information_schema.columns WHERE table_name LIKE ? "
-                + (withSchema ? "AND table_schema LIKE ? " : "")
+                + "FROM information_schema.columns WHERE table_name = ? "
+                + (withSchema ? "AND table_schema = ? " : "")
                 + "ORDER BY ordinal_position";
 
         List<ObjectNode> columns = new ArrayList<>();

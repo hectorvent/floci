@@ -281,4 +281,25 @@ class RedshiftDataServiceTest {
         assertTrue(service.cancelStatement(idOf(id)).get("Status").asBoolean());
         assertEquals("FAILED", service.describeStatement(idOf(id)).get("Status").asText());
     }
+
+    @Test
+    void listStatementsWithZeroMaxResultsDoesNotEmitANonTerminatingToken() {
+        service.executeStatement(req("select 1"), REGION);
+        service.executeStatement(req("select 2"), REGION);
+        ObjectNode result = service.listStatements(om.createObjectNode().put("MaxResults", 0));
+        assertEquals(2, result.get("Statements").size());
+        assertFalse(result.has("NextToken"));
+    }
+
+    @Test
+    void describeTableMatchesTheExactNameNotAPattern() {
+        service.executeStatement(req("create table a_b (x int)"), REGION);
+        service.executeStatement(req("create table axb (y int, z int)"), REGION);
+
+        ObjectNode descReq = targetReq();
+        descReq.put("Table", "a_b");
+        ObjectNode described = service.describeTable(descReq, REGION);
+        assertEquals(1, described.get("ColumnList").size());
+        assertEquals("x", described.get("ColumnList").get(0).get("name").asText().toLowerCase());
+    }
 }

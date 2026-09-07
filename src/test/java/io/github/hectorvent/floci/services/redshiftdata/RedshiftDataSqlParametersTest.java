@@ -94,4 +94,27 @@ class RedshiftDataSqlParametersTest {
         assertTrue(RedshiftDataSqlParameters.isMultiStatement("select 1; select 2"));
         assertTrue(RedshiftDataSqlParameters.isMultiStatement("insert into t values (1); delete from t"));
     }
+
+    @Test
+    void backslashEscapedQuoteInsideAnEscapeStringDoesNotEndTheLiteral() {
+        // E'it\'s :value' is one string literal; :value is literal text, not a bind marker.
+        RedshiftDataSqlParameters.ParsedSql parsed =
+                RedshiftDataSqlParameters.parse("select E'it\\'s :value' as v where id = :id");
+        assertEquals("select E'it\\'s :value' as v where id = ?", parsed.sql());
+        assertEquals(List.of("id"), parsed.parameterOrder());
+    }
+
+    @Test
+    void escapeStringWithAnEscapedQuoteIsNotSeenAsMultiStatement() {
+        assertFalse(RedshiftDataSqlParameters.isMultiStatement("select E'a\\';b' as v"));
+    }
+
+    @Test
+    void plainLiteralStillTreatsBackslashLiterally() {
+        // Not an E'' string: backslash is an ordinary character, '' still ends the literal.
+        RedshiftDataSqlParameters.ParsedSql parsed =
+                RedshiftDataSqlParameters.parse("select 'a\\' , :x");
+        assertEquals("select 'a\\' , ?", parsed.sql());
+        assertEquals(List.of("x"), parsed.parameterOrder());
+    }
 }

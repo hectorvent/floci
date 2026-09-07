@@ -166,7 +166,7 @@ final class RedshiftDataSqlParameters {
                 continue;
             }
             if (c == '\'' || c == '"') {
-                i = skipQuoted(sql, i, c);
+                i = skipQuoted(sql, i, c, isEscapeStringStart(sql, i, c));
                 continue;
             }
             if (c == '$') {
@@ -186,11 +186,32 @@ final class RedshiftDataSqlParameters {
         return false;
     }
 
-    private static int skipQuoted(String sql, int start, char quote) {
+    /**
+     * Whether the quote at {@code quotePos} opens a PostgreSQL escape string
+     * ({@code E'...'} / {@code e'...'}), inside which a backslash escapes the
+     * next character. Plain {@code '...'} literals do not process backslashes
+     * under {@code standard_conforming_strings}.
+     */
+    private static boolean isEscapeStringStart(String sql, int quotePos, char quote) {
+        if (quote != '\'' || quotePos == 0) {
+            return false;
+        }
+        char prefix = sql.charAt(quotePos - 1);
+        if (prefix != 'e' && prefix != 'E') {
+            return false;
+        }
+        return quotePos - 1 == 0 || !isNamePart(sql.charAt(quotePos - 2));
+    }
+
+    private static int skipQuoted(String sql, int start, char quote, boolean backslashEscapes) {
         int len = sql.length();
         int i = start + 1;
         while (i < len) {
             char c = sql.charAt(i);
+            if (backslashEscapes && c == '\\' && i + 1 < len) {
+                i += 2;
+                continue;
+            }
             if (c == quote) {
                 if (i + 1 < len && sql.charAt(i + 1) == quote) {
                     i += 2;
@@ -218,7 +239,7 @@ final class RedshiftDataSqlParameters {
     }
 
     private static int copyQuoted(String sql, int start, char quote, StringBuilder out) {
-        int end = skipQuoted(sql, start, quote);
+        int end = skipQuoted(sql, start, quote, isEscapeStringStart(sql, start, quote));
         out.append(sql, start, end);
         return end;
     }
