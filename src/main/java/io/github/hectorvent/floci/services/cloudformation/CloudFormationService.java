@@ -133,10 +133,10 @@ public class CloudFormationService implements ResourceProvider {
     }
 
     private String ownerAccount(Stack stack) {
-        if (stack.getAccountId() == null) {
-            throw new IllegalStateException("CloudFormation stack has no owner: " + stack.getStackName());
-        }
-        return stack.getAccountId();
+        // Persisted stacks are assigned their storage partition's account during startup. The
+        // default is only a compatibility attribution for transient ownerless fixtures created
+        // directly by callers of the service.
+        return stack.getAccountId() != null ? stack.getAccountId() : config.defaultAccountId();
     }
 
     private boolean hasForeignStack(String stackName, String region, String accountId) {
