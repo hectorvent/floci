@@ -12,7 +12,7 @@ Floci implements the REST JSON Detective organization and behavior-graph operati
 | `ListGraphs` | Lists behavior graphs for the current account and Region. |
 | `DescribeOrganizationConfiguration` | Returns the organization auto-enable setting for a behavior graph. |
 | `UpdateOrganizationConfiguration` | Updates the organization auto-enable setting for a behavior graph. |
-| `ListMembers` | Lists enabled organization member accounts in a behavior graph. |
+| `ListMembers` | Lists organization member accounts in a behavior graph. |
 | `CreateMembers` | Enables organization accounts as behavior-graph members. |
 | `StartMonitoringMember` | Starts data contribution for an accepted but disabled member account. |
 <!-- floci:actions:end -->
