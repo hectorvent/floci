@@ -44,6 +44,7 @@ public class TransferService {
     // ── Servers ───────────────────────────────────────────────────────────────
 
     public Server createServer(String region,
+                               String domain,
                                List<String> protocols,
                                String endpointType,
                                Map<String, Object> endpointDetails,
@@ -59,6 +60,7 @@ public class TransferService {
         server.setServerId(serverId);
         server.setArn(arn);
         server.setState("ONLINE");
+        server.setDomain(domain != null ? domain : "S3");
         server.setProtocols(protocols != null && !protocols.isEmpty() ? protocols : List.of("SFTP"));
         server.setEndpointType(endpointType != null ? endpointType : "PUBLIC");
         server.setEndpointDetails(endpointDetails);

@@ -54,6 +54,44 @@ class TransferServerLifecycleIntegrationTest {
             .body("Server.State", equalTo("ONLINE"));
     }
 
+    // terraform-provider-aws reads Domain back from DescribeServer into a
+    // ForceNew attribute defaulting to S3; a missing field re-plans as a
+    // replacement on every run.
+    @Test
+    void describeServerReportsDomain() {
+        String defaulted = createServer();
+
+        given()
+            .header("X-Amz-Target", "TransferService.DescribeServer")
+            .contentType(CONTENT_TYPE)
+            .body("{\"ServerId\": \"" + defaulted + "\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Server.Domain", equalTo("S3"));
+
+        String efs = given()
+            .header("X-Amz-Target", "TransferService.CreateServer")
+            .contentType(CONTENT_TYPE)
+            .body("{\"Domain\": \"EFS\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().jsonPath().getString("ServerId");
+
+        given()
+            .header("X-Amz-Target", "TransferService.DescribeServer")
+            .contentType(CONTENT_TYPE)
+            .body("{\"ServerId\": \"" + efs + "\"}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Server.Domain", equalTo("EFS"));
+    }
+
     @Test
     void deleteServerWhileOnline() {
         String serverId = createServer();
