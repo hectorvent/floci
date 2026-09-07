@@ -47,7 +47,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -224,8 +223,7 @@ public class IotService {
             throw new AwsException("InvalidRequestException", "Unsupported endpoint type: " + effectiveType, 400);
         }
         startMqttIfEnabled();
-        URI baseUri = URI.create(config.effectiveBaseUrl());
-        return baseUri.getAuthority();
+        return config.iotEndpointAddress();
     }
 
     public Thing createThing(String thingName, Map<String, String> attributes, String region) {

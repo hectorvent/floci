@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.config;
 
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
+import java.net.URI;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -40,6 +41,18 @@ public interface EmulatorConfig {
             url = "https://" + url.substring(7);
         }
         return url;
+    }
+
+    /**
+     * The address IoT Core's DescribeEndpoint returns for every endpoint type, also the domain
+     * name of the AWS-managed domain configurations: {@code floci.services.iot.endpoint-address}
+     * when set, otherwise the host and port of {@link #effectiveBaseUrl()}.
+     */
+    default String iotEndpointAddress() {
+        return services().iot().endpointAddress()
+                .map(String::strip)
+                .filter(address -> !address.isEmpty())
+                .orElseGet(() -> URI.create(effectiveBaseUrl()).getAuthority());
     }
 
     @WithDefault("us-east-1")
@@ -789,6 +802,15 @@ public interface EmulatorConfig {
          */
         @WithDefault("false")
         boolean ruleSqlStrict();
+
+        /**
+         * Returned as is by DescribeEndpoint for every endpoint type when set. AWS returns a bare
+         * hostname and clients add their own port: 8883 for MQTT, 443 for HTTPS and MQTT over
+         * WebSocket, 8443 for HTTPS with a client certificate. Set it when those ports reach Floci
+         * (8883 to the MQTT TLS listener, 443 and 8443 to the HTTPS listener). Unset, DescribeEndpoint
+         * returns the host and port of the base URL. Env: FLOCI_SERVICES_IOT_ENDPOINT_ADDRESS
+         */
+        Optional<String> endpointAddress();
 
         MqttConfig mqtt();
     }

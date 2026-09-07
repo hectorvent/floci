@@ -298,7 +298,8 @@ public class TlsConfigSource implements ConfigSource {
     }
 
     /**
-     * Extracts custom hostnames from FLOCI_HOSTNAME and FLOCI_BASE_URL configuration.
+     * Extracts custom hostnames from FLOCI_HOSTNAME, FLOCI_BASE_URL and
+     * FLOCI_SERVICES_IOT_ENDPOINT_ADDRESS configuration.
      * Filters out default values like "localhost" and "127.0.0.1".
      * Returns a deduplicated list of custom hostnames.
      *
@@ -325,6 +326,26 @@ public class TlsConfigSource implements ConfigSource {
             }
         } catch (URISyntaxException e) {
             LOG.warnv("TLS: failed to parse base URL for hostname extraction: {0}", baseUrl);
+        }
+
+        // Extract from FLOCI_SERVICES_IOT_ENDPOINT_ADDRESS: devices verify that name on 8883 and 443
+        String iotEndpoint = resolveProperty("floci.services.iot.endpoint-address", "").strip();
+        if (!iotEndpoint.isEmpty()) {
+            try {
+                // A URL or a path here is a typo: java.net.URI would read "https" as the host.
+                URI uri = new URI("//" + iotEndpoint);
+                String host = uri.getHost();
+                if (host == null || !uri.getPath().isEmpty() || uri.getUserInfo() != null) {
+                    LOG.warnv("TLS: floci.services.iot.endpoint-address is not a host or host:port, not added to the certificate: {0}",
+                            iotEndpoint);
+                } else if (!isDefaultHostname(host)) {
+                    hostnames.add(host);
+                    LOG.debugv("TLS: extracted hostname from floci.services.iot.endpoint-address: {0}", host);
+                }
+            } catch (URISyntaxException e) {
+                LOG.warnv("TLS: failed to parse floci.services.iot.endpoint-address for hostname extraction: {0}",
+                        iotEndpoint);
+            }
         }
 
         List<String> result = new ArrayList<>(hostnames);

@@ -19,7 +19,6 @@ import io.github.hectorvent.floci.services.iot.model.IotDomainConfiguration.TlsC
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.net.URI;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -278,24 +277,31 @@ public class IotDomainConfigurationService {
     /**
      * The default-endpoint configurations AWS creates for every account: AWS_MANAGED, ENABLED, no
      * server certificate, and the address DescribeEndpoint returns as their domain name. They can
-     * be updated and tagged like any other, but not deleted.
+     * be updated and tagged like any other, but not deleted. A stored one whose domain name no
+     * longer matches that address (the emulator restarted with another base URL or
+     * {@code floci.services.iot.endpoint-address}) takes the current one and keeps everything else.
      */
     private void seedAwsManaged(String region) {
+        String domainName = config.iotEndpointAddress();
         synchronized (lock) {
             AWS_MANAGED.forEach((name, serviceType) -> {
                 String key = key(region, name);
-                if (store.get(key).isEmpty()) {
-                    store.put(key, awsManaged(name, serviceType, region));
+                IotDomainConfiguration existing = store.get(key).orElse(null);
+                if (existing == null) {
+                    store.put(key, awsManaged(name, serviceType, domainName, region));
+                } else if (!domainName.equals(existing.getDomainName())) {
+                    existing.setDomainName(domainName);
+                    store.put(key, existing);
                 }
             });
         }
     }
 
-    private IotDomainConfiguration awsManaged(String name, String serviceType, String region) {
+    private IotDomainConfiguration awsManaged(String name, String serviceType, String domainName, String region) {
         IotDomainConfiguration configuration = new IotDomainConfiguration();
         configuration.setDomainConfigurationName(name);
         configuration.setDomainConfigurationArn(arn(name, region));
-        configuration.setDomainName(URI.create(config.effectiveBaseUrl()).getAuthority());
+        configuration.setDomainName(domainName);
         configuration.setServiceType(serviceType);
         configuration.setDomainConfigurationStatus("ENABLED");
         configuration.setDomainType("AWS_MANAGED");

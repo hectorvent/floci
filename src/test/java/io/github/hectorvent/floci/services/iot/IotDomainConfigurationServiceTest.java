@@ -13,13 +13,16 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,13 +42,15 @@ class IotDomainConfigurationServiceTest {
             "arn:aws:acm:us-east-1:000000000000:certificate/22222222-2222-2222-2222-222222222222";
 
     private final ObjectMapper mapper = new ObjectMapper();
+    /** What DescribeEndpoint answers; tests change it to model a restart with another address. */
+    private final AtomicReference<String> endpointAddress = new AtomicReference<>("localhost:4566");
     private final IotDomainConfigurationService service = new IotDomainConfigurationService(
-            new InMemoryStorage<>(), new RegionResolver(REGION, "000000000000"), endpointConfig(),
+            new InMemoryStorage<>(), new RegionResolver(REGION, "000000000000"), endpointConfig(endpointAddress),
             mock(TlsCertificateManager.class));
 
-    private static EmulatorConfig endpointConfig() {
+    private static EmulatorConfig endpointConfig(AtomicReference<String> endpointAddress) {
         EmulatorConfig config = mock(EmulatorConfig.class);
-        when(config.effectiveBaseUrl()).thenReturn("http://localhost:4566");
+        when(config.iotEndpointAddress()).thenAnswer(invocation -> endpointAddress.get());
         return config;
     }
 
@@ -204,6 +209,45 @@ class IotDomainConfigurationServiceTest {
     }
 
     @Test
+    void awsManagedConfigurationsCarryTheDescribeEndpointAddress() {
+        endpointAddress.set("iot.example.localhost.floci.io");
+
+        for (String name : List.of("iot:Data-ATS", "iot:Data", "iot:CredentialProvider", "iot:Jobs")) {
+            assertEquals("iot.example.localhost.floci.io",
+                    service.describeDomainConfiguration(name, REGION).getDomainName(), name);
+        }
+    }
+
+    @Test
+    void awsManagedDomainNameFollowsTheAddressAfterSeeding() {
+        IotDomainConfiguration seeded = service.describeDomainConfiguration("iot:Data-ATS", REGION);
+        String seededArn = seeded.getDomainConfigurationArn();
+        assertEquals("localhost:4566", seeded.getDomainName());
+        service.updateDomainConfiguration("iot:Data-ATS",
+                mapper.createObjectNode().put("domainConfigurationStatus", "DISABLED"), REGION);
+        Instant statusChanged = service.describeDomainConfiguration("iot:Data-ATS", REGION).getLastStatusChangeDate();
+        service.tagResource(seededArn, Map.of("team", "devices"));
+        service.createDomainConfiguration("iot-domain", customDomainRequest(), REGION);
+
+        endpointAddress.set("iot.example.localhost.floci.io");
+
+        IotDomainConfiguration refreshed = service.describeDomainConfiguration("iot:Data-ATS", REGION);
+        assertEquals("iot.example.localhost.floci.io", refreshed.getDomainName());
+        assertEquals(seededArn, refreshed.getDomainConfigurationArn(), "refreshed in place, not seeded again");
+        assertEquals("DISABLED", refreshed.getDomainConfigurationStatus(), "an earlier update is kept");
+        assertEquals(statusChanged, refreshed.getLastStatusChangeDate(), "a new address is not a status change");
+        assertEquals(Map.of("team", "devices"), service.listTagsForResource(seededArn), "tags survive the refresh");
+        assertEquals("DATA", refreshed.getServiceType());
+        List<IotDomainConfiguration> listed = service.listDomainConfigurations(REGION, null, null, null).items();
+        assertEquals(List.of("iot.example.localhost.floci.io", "iot.example.localhost.floci.io",
+                        "iot.example.localhost.floci.io", "iot.example.localhost.floci.io"),
+                listed.stream().filter(item -> "AWS_MANAGED".equals(item.getDomainType()))
+                        .map(IotDomainConfiguration::getDomainName).toList(),
+                "every AWS-managed configuration follows");
+        assertEquals("iot.example.com", service.describeDomainConfiguration("iot-domain", REGION).getDomainName(),
+                "a customer-managed domain keeps its own name");
+    }
+    @Test
     void awsManagedConfigurationsCanBeUpdatedAndTaggedButNotDeleted() {
         IotDomainConfiguration legacy = service.updateDomainConfiguration("iot:Data",
                 mapper.createObjectNode().put("domainConfigurationStatus", "DISABLED"), REGION);
@@ -271,6 +315,35 @@ class IotDomainConfigurationServiceTest {
                 write.get();
             }
             assertEquals(writers, service.listTagsForResource(arn).size(), "a concurrent tag write must not drop another writer's key");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentFirstDescribesSeedOneManagedConfigurationPerRegion() throws Exception {
+        int callers = 16;
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(callers);
+        try {
+            List<Future<IotDomainConfiguration>> results = new ArrayList<>();
+            for (int i = 0; i < callers; i++) {
+                String address = i % 2 == 0 ? "localhost:4566" : "iot.example.localhost.floci.io";
+                results.add(pool.submit(() -> {
+                    start.await();
+                    endpointAddress.set(address);
+                    return service.describeDomainConfiguration("iot:Jobs", "eu-north-1");
+                }));
+            }
+            start.countDown();
+            Set<String> arns = new HashSet<>();
+            for (Future<IotDomainConfiguration> result : results) {
+                IotDomainConfiguration seen = result.get();
+                assertNotNull(seen.getDomainName());
+                arns.add(seen.getDomainConfigurationArn());
+            }
+            assertEquals(1, arns.size(), "seeded once, whichever address the callers raced with: " + arns);
+            assertEquals(endpointAddress.get(), service.describeDomainConfiguration("iot:Jobs", "eu-north-1").getDomainName());
         } finally {
             pool.shutdownNow();
         }

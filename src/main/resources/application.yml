@@ -586,6 +586,7 @@ floci:
     iot:
       enabled: true
       rule-sql-strict: false
+      # endpoint-address: ""  # DescribeEndpoint value when the AWS IoT ports (8883, 443, 8443) reach Floci; default: host and port of base-url
       mqtt:
         enabled: true
         auto-start: false

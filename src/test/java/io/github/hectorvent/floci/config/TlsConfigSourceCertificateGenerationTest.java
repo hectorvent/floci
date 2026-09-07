@@ -45,6 +45,7 @@ class TlsConfigSourceCertificateGenerationTest {
         System.clearProperty("floci.storage.persistent-path");
         System.clearProperty("floci.hostname");
         System.clearProperty("floci.base-url");
+        System.clearProperty("floci.services.iot.endpoint-address");
     }
 
     /**
@@ -215,6 +216,36 @@ class TlsConfigSourceCertificateGenerationTest {
             "Metadata should include 'myhost' hostname");
         assertTrue(json.contains("localhost"), 
             "Metadata should include default 'localhost' hostname");
+    }
+
+    /**
+     * The IoT endpoint address is what devices verify on 8883 and 443, so the boot certificate
+     * covers it even when it has more labels than the wildcard SAN matches.
+     */
+    @Test
+    void testCertificateIncludesIotEndpointAddress() throws Exception {
+        System.setProperty("floci.services.iot.endpoint-address", "iot.example.localhost.floci.io:8883");
+
+        new TlsConfigSource();
+
+        List<String> sans = extractSansFromCertificate(tempDir.resolve("tls/floci-server.crt"));
+        assertTrue(sans.contains("iot.example.localhost.floci.io"), sans.toString());
+        assertFalse(sans.contains("iot.example.localhost.floci.io:8883"), "the port is not part of the name");
+        assertTrue(Files.readString(tempDir.resolve("tls/floci-server.metadata.json")).contains("iot.example.localhost.floci.io"),
+            "the metadata records it as a configured name, so a later change is detected");
+    }
+
+    @Test
+    void testIotEndpointAddressAddedAfterBootRegeneratesTheCertificate() throws Exception {
+        new TlsConfigSource();
+        Path certFile = tempDir.resolve("tls/floci-server.crt");
+        assertFalse(extractSansFromCertificate(certFile).contains("iot.example.localhost.floci.io"));
+
+        System.setProperty("floci.services.iot.endpoint-address", "iot.example.localhost.floci.io");
+        new TlsConfigSource();
+
+        assertTrue(extractSansFromCertificate(certFile).contains("iot.example.localhost.floci.io"),
+            "a changed endpoint address is a hostname configuration change");
     }
 
     // ==================== Helper Methods ====================

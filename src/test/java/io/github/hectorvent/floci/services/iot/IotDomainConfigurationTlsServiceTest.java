@@ -42,7 +42,7 @@ class IotDomainConfigurationTlsServiceTest {
 
     private static EmulatorConfig endpointConfig() {
         EmulatorConfig config = mock(EmulatorConfig.class);
-        when(config.effectiveBaseUrl()).thenReturn("http://localhost:4566");
+        when(config.iotEndpointAddress()).thenReturn("localhost:4566");
         return config;
     }
 
