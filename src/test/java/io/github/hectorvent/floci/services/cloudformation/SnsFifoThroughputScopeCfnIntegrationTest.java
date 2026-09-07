@@ -13,10 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * Provisions a FIFO topic fanning out to a FIFO queue, the shape a template takes when it publishes
- * one event per message group. Asserts that {@code FifoThroughputScope} reaches the topic from the
- * template, that {@code MessageGroup} scopes deduplication per group end to end, and that an
- * UpdateStack widening it back to {@code Topic} takes effect on the topic that already exists.
+ * A FIFO topic fanning out to a FIFO queue, the shape a template takes to publish one event per
+ * message group: the scope reaches the topic, per-group dedup holds end to end, and an UpdateStack
+ * back to {@code Topic} takes effect on the topic that already exists.
  */
 @QuarkusTest
 class SnsFifoThroughputScopeCfnIntegrationTest {
@@ -29,11 +28,7 @@ class SnsFifoThroughputScopeCfnIntegrationTest {
             "AWS4-HMAC-SHA256 Credential=test/20260905/us-east-1/sqs/aws4_request";
     private static final String STACK = "sns-fifo-scope-cfn-it";
 
-    /**
-     * The queue deduplicates per group as well, so a message the topic forwards is never dropped a
-     * second time on the way in. Without that the queue's own topic-wide window would mask the
-     * topic's scope and the test would pass for the wrong reason.
-     */
+    /** Per-group dedup on the queue too, so its own topic-wide window cannot mask the topic's. */
     private static final String TEMPLATE = """
         {
           "Parameters": {"Scope": {"Type": "String"}},
@@ -91,8 +86,7 @@ class SnsFifoThroughputScopeCfnIntegrationTest {
         assertTrue(perGroup.contains("per-group-two"),
                 "the second group's message was deduplicated against the first: " + perGroup);
 
-        // A received message stays in flight and holds its group, so clear the queue before the
-        // next pair rather than letting group-1 block on the message just read.
+        // A received message stays in flight and holds its group, so clear the queue first.
         purgeQueue(queueUrl);
 
         cloudFormation("UpdateStack", "Topic");
@@ -188,10 +182,7 @@ class SnsFifoThroughputScopeCfnIntegrationTest {
         .when().post("/").then().statusCode(200);
     }
 
-    /**
-     * A FIFO receive hands back one message group at a time, so read repeatedly and match against
-     * everything that came back instead of a single response.
-     */
+    /** A FIFO receive can return one group at a time, so read repeatedly. */
     private static String drain(String queueUrl) {
         StringBuilder received = new StringBuilder();
         for (int i = 0; i < 6; i++) {

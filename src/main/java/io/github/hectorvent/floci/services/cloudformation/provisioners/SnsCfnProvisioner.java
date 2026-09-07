@@ -48,20 +48,27 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
         String topicName = ctx.resolveOptional(props, "TopicName");
         String contentBasedDedupFlag = ctx.resolveOptional(props, "ContentBasedDeduplication");
         String throughputScope = ctx.resolveOptional(props, "FifoThroughputScope");
-        // SnsService reads FifoTopic off the .fifo suffix, so the flag only has to steer the
-        // generated name. It is createOnly, which is why a prior name whose suffix no longer
-        // matches belongs to a replacing update and gives way to a fresh name.
-        boolean fifo = "true".equalsIgnoreCase(ctx.resolveOptional(props, "FifoTopic"));
+        // The .fifo suffix is what makes SnsService treat a topic as FIFO, so an explicitly named
+        // one is FIFO with or without the flag, which only has to steer a generated name.
+        boolean fifo = "true".equalsIgnoreCase(ctx.resolveOptional(props, "FifoTopic"))
+                || (topicName != null && topicName.endsWith(FIFO_SUFFIX));
+        String priorName = r.getAttributes().get("TopicName");
+        // FifoTopic is createOnly and carried by the name, so a flip needs a replacement. Nothing
+        // cleans up the displaced topic or its subscriptions, so refuse it, as SqsCfnProvisioner
+        // does for FifoQueue.
+        if (ctx.isUpdate() && priorName != null && !priorName.isBlank()
+                && priorName.endsWith(FIFO_SUFFIX) != fifo) {
+            throw new AwsException("ValidationError",
+                    "Updating FifoTopic requires resource replacement, which is not supported.", 400);
+        }
         if (topicName == null || topicName.isBlank()) {
             // ctx.stablePhysicalName does not fit here: the physical id is the topic ARN, so the
             // prior name comes from the attribute recorded at create time. Reusing it keeps an
             // unnamed topic (and its subscriptions) across updates instead of orphaning it.
-            String priorName = r.getAttributes().get("TopicName");
-            if (priorName != null && !priorName.isBlank() && priorName.endsWith(FIFO_SUFFIX) == fifo) {
+            if (priorName != null && !priorName.isBlank()) {
                 topicName = priorName;
             } else if (fifo) {
-                // Like real CloudFormation, a generated FIFO topic name ends in .fifo, which is
-                // also what makes SnsService treat the topic as FIFO at all.
+                // Like real CloudFormation, a generated FIFO name ends in .fifo.
                 topicName = ctx.generatePhysicalName(r.getLogicalId(),
                         TOPIC_NAME_MAX_LENGTH - FIFO_SUFFIX.length(), false) + FIFO_SUFFIX;
             } else {
@@ -78,11 +85,15 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
         }
 
         var topic = snsService.createTopic(topicName, attributes, Map.of(), ctx.region());
-        // createTopic hands an existing topic back untouched, so on UpdateStack the mutable
-        // attributes have to be written explicitly. The createOnly ones, TopicName and FifoTopic,
-        // are settled by the naming above.
+        // createTopic leaves an existing topic untouched, so an update writes the mutable
+        // attributes itself. A property the template dropped is reset, not left standing.
         if (ctx.isUpdate()) {
-            attributes.forEach((name, value) ->
+            Map<String, String> desired = new HashMap<>(attributes);
+            if (fifo) {
+                desired.putIfAbsent("ContentBasedDeduplication", "false");
+                desired.putIfAbsent("FifoThroughputScope", "Topic");
+            }
+            desired.forEach((name, value) ->
                     snsService.setTopicAttributes(topic.getTopicArn(), name, value, ctx.region()));
         }
         // Ref returns the topic ARN, which is why the physical id is the ARN and not the name.

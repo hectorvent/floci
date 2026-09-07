@@ -210,26 +210,77 @@ class SnsCfnProvisionerTest {
     }
 
     /**
-     * FifoTopic is createOnly and, in Floci as in CloudFormation, encoded in the name. A prior
-     * generated name that no longer matches the flag therefore belongs to the resource being
-     * replaced, so reusing it would leave the new topic standard.
+     * Replacing would displace a topic nothing cleans up, subscriptions included, so it is refused.
      */
     @Test
-    void aTopicTurningFifoDropsItsPriorStandardName() {
-        ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
-        when(sns.createTopic(name.capture(), anyMap(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));
-
+    void aTopicTurningFifoIsRejectedRatherThanReplaced() {
         StackResource r = new StackResource();
         r.setLogicalId("Topic");
         r.setResourceType("AWS::SNS::Topic");
         r.setAttributes(new HashMap<>(Map.of("TopicName", "my-stack-Topic-abc123def456")));
         r.setPhysicalId(TOPIC_ARN);
-        provisioner.provision(r, props("""
+        ProvisionContext update =
+                new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack", TOPIC_ARN);
+        JsonNode turningFifo = props("""
                 {"FifoTopic": true}
-                """), new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack", TOPIC_ARN));
+                """);
 
-        assertTrue(name.getValue().endsWith(".fifo"));
-        assertFalse(name.getValue().startsWith("my-stack-Topic-abc123def456"));
+        AwsException e = assertThrows(AwsException.class,
+                () -> provisioner.provision(r, turningFifo, update));
+
+        assertEquals("ValidationError", e.getErrorCode());
+        assertTrue(e.getMessage().contains("requires resource replacement"), e.getMessage());
+        verify(sns, never()).createTopic(anyString(), anyMap(), anyMap(), anyString());
+    }
+
+    /** The suffix carries FifoTopic on its own, so this is the same topic, not a mode change. */
+    @Test
+    void anExplicitlyNamedFifoTopicUpdatesWithoutTheFlag() {
+        when(sns.createTopic(eq("events.fifo"), anyMap(), anyMap(), eq(REGION))).thenReturn(topic(TOPIC_ARN));
+
+        provisionUpdate("""
+                {"TopicName": "events.fifo"}
+                """);
+
+        verify(sns).createTopic(eq("events.fifo"), anyMap(), anyMap(), eq(REGION));
+    }
+
+    @Test
+    void anUpdateThatDropsAPropertyResetsItToItsDefault() {
+        when(sns.createTopic(eq("events.fifo"), anyMap(), anyMap(), eq(REGION))).thenReturn(topic(TOPIC_ARN));
+
+        // The template dropped both properties, so both go back to their create-time values.
+        provisionUpdate("""
+                {"TopicName": "events.fifo", "FifoTopic": true}
+                """);
+
+        verify(sns).setTopicAttributes(TOPIC_ARN, "FifoThroughputScope", "Topic", REGION);
+        verify(sns).setTopicAttributes(TOPIC_ARN, "ContentBasedDeduplication", "false", REGION);
+    }
+
+    /** Real SNS rejects both attributes on a standard topic, so an update must not invent them. */
+    @Test
+    void aStandardTopicUpdateWritesNoFifoDefaults() {
+        when(sns.createTopic(eq("events"), anyMap(), anyMap(), eq(REGION))).thenReturn(topic(TOPIC_ARN));
+
+        provisionUpdate("""
+                {"TopicName": "events"}
+                """);
+
+        verify(sns, never()).setTopicAttributes(anyString(), anyString(), anyString(), anyString());
+    }
+
+    /** Provisions an existing topic again, the way UpdateStack re-invokes the provisioner. */
+    private void provisionUpdate(String json) {
+        StackResource r = new StackResource();
+        r.setLogicalId("Topic");
+        r.setResourceType("AWS::SNS::Topic");
+        JsonNode resolved = props(json);
+        String priorName = resolved.path("TopicName").asText(null);
+        r.setAttributes(new HashMap<>(Map.of("TopicName", priorName)));
+        r.setPhysicalId(TOPIC_ARN);
+        provisioner.provision(r, resolved,
+                new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack", TOPIC_ARN));
     }
 
     @Test
@@ -246,8 +297,7 @@ class SnsCfnProvisionerTest {
                  "ContentBasedDeduplication": "true"}
                 """), new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack", TOPIC_ARN));
 
-        // createTopic hands back the existing topic untouched, so without this an UpdateStack that
-        // changes the scope would be silently dropped.
+        // createTopic returns the existing topic, so without this a changed scope would be lost.
         verify(sns).setTopicAttributes(TOPIC_ARN, "FifoThroughputScope", "MessageGroup", REGION);
         verify(sns).setTopicAttributes(TOPIC_ARN, "ContentBasedDeduplication", "true", REGION);
     }
