@@ -2,6 +2,9 @@ package io.github.hectorvent.floci.services.ses;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.lambda.LambdaService;
+import io.github.hectorvent.floci.services.s3.S3Service;
+import io.github.hectorvent.floci.services.sns.SnsService;
 import io.github.hectorvent.floci.services.ses.model.AccountDetails;
 import io.github.hectorvent.floci.services.ses.model.AccountSuppressionAttributes;
 import io.github.hectorvent.floci.services.ses.model.AccountVdmAttributes;
@@ -119,16 +122,16 @@ final class SesServiceTestBuilder {
                 new SesIdentityService(identityStore, route53Service, clock),
                 new SesSentEmailService(emailStore),
                 new SesAccountService(accountSettingsStore, accountVdmStore, accountDetailsStore),
-                new SesTemplateService(templateStore),
+                new SesTemplateService(templateStore, objectMapper, new SecureRandom()),
                 new SesConfigurationSetService(configSetStore),
                 new SesSuppressionService(suppressionStore, accountSuppressionStore, new InMemoryStorage<>()),
                 new SesDedicatedIpService(dedicatedIpPoolStore),
                 new SesContactService(contactListStore, contactStore, clock),
                 new SesPolicyService(policyStore, objectMapper),
-                new SesReceiptRuleService(receiptRuleStore, clock),
+                new SesReceiptRuleService(receiptRuleStore, new InMemoryStorage<>(), mock(S3Service.class),
+                        mock(SnsService.class), mock(LambdaService.class), clock),
                 new SesCvetService(cvetStore),
                 new SesTenantService(tenantStore, tenantAssociationStore, clock, new SecureRandom()),
-                smtpRelay,
-                objectMapper);
+                smtpRelay);
     }
 }

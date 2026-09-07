@@ -23,6 +23,8 @@ import io.github.hectorvent.floci.services.ses.model.Identity;
 import io.github.hectorvent.floci.services.ses.model.ListManagementOptions;
 import io.github.hectorvent.floci.services.ses.model.MessageHeader;
 import io.github.hectorvent.floci.services.ses.model.MessageTag;
+import io.github.hectorvent.floci.services.ses.model.ReceiptFilter;
+import io.github.hectorvent.floci.services.ses.model.ReceiptRule;
 import io.github.hectorvent.floci.services.ses.model.ReceiptRuleSet;
 import io.github.hectorvent.floci.services.ses.model.Topic;
 import io.github.hectorvent.floci.services.ses.model.TopicPreference;
@@ -35,7 +37,6 @@ import io.github.hectorvent.floci.services.ses.model.SuppressedDestination;
 import io.github.hectorvent.floci.services.ses.model.SuppressionOptions;
 import io.github.hectorvent.floci.services.ses.model.Tag;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -43,16 +44,11 @@ import org.jboss.logging.Logger;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -61,20 +57,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @ApplicationScoped
 public class SesService {
 
     private static final Logger LOG = Logger.getLogger(SesService.class);
 
-    private static final Pattern TEMPLATE_VARIABLE = Pattern.compile("\\{\\{\\s*([\\w-]+)\\s*\\}\\}");
-
     private static final int MAX_BULK_DESTINATIONS = 50;
     private static final int MAX_RECIPIENTS_PER_DESTINATION = 50;
-    private static final SecureRandom BOUNDARY_RANDOM = new SecureRandom();
-
     // Identities extracted to SesIdentityService (CRUD, verification, MAIL FROM, notifications,
     // tags, and the DKIM state machine with its Route53 lookup). The facade keeps the cross-domain
     // flows and send-path reads, reaching the store through its find/save.
@@ -110,7 +100,6 @@ public class SesService {
     // Tenants (multi-tenancy) live in SesTenantService. The facade delegates.
     private final SesTenantService tenantService;
     private final SmtpRelay smtpRelay;
-    private final ObjectMapper objectMapper;
     private final SesEventPublisher eventPublisher;
     private final String defaultAccountId;
     // Base URL used to build functional list-management unsubscribe links (the {{amazonSESUnsubscribeUrl}}
@@ -127,7 +116,7 @@ public class SesService {
                        SesSuppressionService suppressionService, SesDedicatedIpService dedicatedIpService,
                        SesTemplateService templateService, SesSentEmailService sentEmailService,
                        SesTenantService tenantService, SesConfigurationSetService configSetService,
-                       SmtpRelay smtpRelay, ObjectMapper objectMapper,
+                       SmtpRelay smtpRelay,
                        SesEventPublisher eventPublisher, EmulatorConfig config,
                        RegionResolver regionResolver) {
         this.identityService = identityService;
@@ -143,7 +132,6 @@ public class SesService {
         this.cvetService = cvetService;
         this.tenantService = tenantService;
         this.smtpRelay = smtpRelay;
-        this.objectMapper = objectMapper;
         this.eventPublisher = eventPublisher;
         this.defaultAccountId = config.defaultAccountId();
         this.baseUrl = config.effectiveBaseUrl();
@@ -162,8 +150,7 @@ public class SesService {
                SesReceiptRuleService receiptRuleService,
                SesCvetService cvetService,
                SesTenantService tenantService,
-               SmtpRelay smtpRelay,
-               ObjectMapper objectMapper) {
+               SmtpRelay smtpRelay) {
         this.identityService = identityService;
         this.sentEmailService = sentEmailService;
         this.accountService = accountService;
@@ -177,7 +164,6 @@ public class SesService {
         this.cvetService = cvetService;
         this.tenantService = tenantService;
         this.smtpRelay = smtpRelay;
-        this.objectMapper = objectMapper;
         this.eventPublisher = null;
         this.defaultAccountId = "000000000000";
         this.baseUrl = "http://localhost:4566";
@@ -186,6 +172,19 @@ public class SesService {
 
     public Identity verifyEmailIdentity(String emailAddress, String region) {
         return identityService.verifyEmailIdentity(emailAddress, region);
+    }
+
+    /**
+     * v2 CreateEmailIdentity. The identity domain builds and persists the complete record in one
+     * write; only the configuration-set existence check is cross-domain, so it is passed in as the
+     * in-lock callback (a missing set fails the whole call and nothing is created, matching AWS).
+     */
+    public Identity createEmailIdentity(String emailIdentity, String configurationSetName,
+                                        List<Tag> tags, String region) {
+        Runnable configurationSetExistsCheck = configurationSetName == null ? null
+                : () -> getConfigurationSet(configurationSetName, region);
+        return identityService.createEmailIdentity(emailIdentity, configurationSetName, tags, region,
+                configurationSetExistsCheck);
     }
 
     public Identity verifyDomainIdentity(String domain, String region) {
@@ -234,7 +233,7 @@ public class SesService {
             throw new AwsException("InvalidParameterValue", "At least one destination address is required.", 400);
         }
         String effectiveConfigSet = resolveDefaultConfigurationSet(configurationSetName, source, region);
-        validateConfigurationSet(effectiveConfigSet, region);
+        configSetService.validateForSending(effectiveConfigSet, region);
 
         // Resolve suppression before recording the message so a bad ListManagementOptions (e.g. an
         // unknown contact list) fails the whole send without leaving an orphaned SentEmail record.
@@ -297,7 +296,7 @@ public class SesService {
             throw new AwsException("InvalidParameterValue", "RawMessage.Data is required.", 400);
         }
         String effectiveConfigSet = resolveDefaultConfigurationSet(configurationSetName, source, region);
-        validateConfigurationSet(effectiveConfigSet, region);
+        configSetService.validateForSending(effectiveConfigSet, region);
         boolean hasExplicitDestinations = destinations != null && !destinations.isEmpty();
         boolean sourceOmitted = source == null || source.isBlank();
         boolean willPublishEvents = (effectiveConfigSet != null && !effectiveConfigSet.isBlank())
@@ -321,7 +320,7 @@ public class SesService {
         // explicit FromEmailAddress.
         if (sourceOmitted && (configurationSetName == null || configurationSetName.isBlank())) {
             effectiveConfigSet = resolveDefaultConfigurationSet(configurationSetName, effectiveSource, region);
-            validateConfigurationSet(effectiveConfigSet, region);
+            configSetService.validateForSending(effectiveConfigSet, region);
         }
         List<String> effectiveDestinations = hasExplicitDestinations
                 ? destinations
@@ -374,32 +373,6 @@ public class SesService {
             all.addAll(bcc);
         }
         return all;
-    }
-
-    /**
-     * Validate that a non-blank {@code ConfigurationSetName} is usable for a send. Performs
-     * two gates:
-     *   1. Existence — raises {@code ConfigurationSetDoesNotExist} (400) when the set is
-     *      missing in the given region. The V2 REST controller's {@code remapV1Exception}
-     *      translates that into {@code NotFoundException 404}; V1 Query keeps the original.
-     *   2. Sending-enabled — raises {@code ConfigurationSetSendingPausedException} (400)
-     *      when the set's {@code SendingEnabled} flag has been turned off via
-     *      {@code UpdateConfigurationSetSendingEnabled} (v1) /
-     *      {@code PutConfigurationSetSendingOptions} (v2). The V2 controller narrows that
-     *      code to {@code SendingPausedException}; V1 keeps the longer form, matching the
-     *      exact wire shape AWS returns on each surface.
-     * Mirrors AWS SES behaviour: invalid or paused set fails fast instead of silently
-     * storing/relaying the message and skipping event publishing later.
-     */
-    private void validateConfigurationSet(String configurationSetName, String region) {
-        if (configurationSetName == null || configurationSetName.isBlank()) {
-            return;
-        }
-        ConfigurationSet cs = configSetService.get(configurationSetName, region);
-        if (cs.getSendingEnabled() != null && !cs.getSendingEnabled()) {
-            throw new AwsException("ConfigurationSetSendingPausedException",
-                    "Sending is paused for configuration set " + configurationSetName, 400);
-        }
     }
 
     private void publishSendEvents(String configurationSetName, String messageId, String source,
@@ -1311,6 +1284,43 @@ public class SesService {
         return receiptRuleService.describeActiveReceiptRuleSet(region);
     }
 
+    // The bounce-sender check needs identity state; the rule domain receives it as a predicate
+    // bound here, keeping SesIdentityService out of its constructor surface.
+
+    public void createReceiptRule(String ruleSetName, ReceiptRule rule, String after, String region) {
+        receiptRuleService.createReceiptRule(ruleSetName, rule, after, region,
+                sender -> identityService.isVerifiedSender(sender, region));
+    }
+
+    public ReceiptRule describeReceiptRule(String ruleSetName, String ruleName, String region) {
+        return receiptRuleService.describeReceiptRule(ruleSetName, ruleName, region);
+    }
+
+    public void updateReceiptRule(String ruleSetName, ReceiptRule rule, String region) {
+        receiptRuleService.updateReceiptRule(ruleSetName, rule, region,
+                sender -> identityService.isVerifiedSender(sender, region));
+    }
+
+    public void deleteReceiptRule(String ruleSetName, String ruleName, String region) {
+        receiptRuleService.deleteReceiptRule(ruleSetName, ruleName, region);
+    }
+
+    public void setReceiptRulePosition(String ruleSetName, String ruleName, String after, String region) {
+        receiptRuleService.setReceiptRulePosition(ruleSetName, ruleName, after, region);
+    }
+
+    public void createReceiptFilter(ReceiptFilter filter, String region) {
+        receiptRuleService.createReceiptFilter(filter, region);
+    }
+
+    public List<ReceiptFilter> listReceiptFilters(String region) {
+        return receiptRuleService.listReceiptFilters(region);
+    }
+
+    public void deleteReceiptFilter(String filterName, String region) {
+        receiptRuleService.deleteReceiptFilter(filterName, region);
+    }
+
     // ──────────────────────── Dedicated IP Pools ────────────────────────
 
     // Storage lives in SesDedicatedIpService; the facade forwards.
@@ -1499,13 +1509,13 @@ public class SesService {
         ResourceRef ref = parseSesArn(arn);
         requireCallerAccount(ref);
         List<Tag> tags = switch (ref.type()) {
-            case "configuration-set" -> listConfigurationSetTags(ref.name(), region);
-            case "template" -> listEmailTemplateTags(ref.name(), region);
+            case "configuration-set" -> configSetService.listTags(ref.name(), region);
+            case "template" -> templateService.listTags(ref.name(), region);
             case "identity" -> identityService.listTags(ref.name(), region);
             case "contact-list" -> contactService.listTags(ref.name(), region);
             case "custom-verification-email-template" -> cvetService.listTags(ref.name(), region);
             case "dedicated-ip-pool" -> dedicatedIpService.listTags(ref.name(), region);
-            case "tenant" -> listTenantTags(ref.name(), region);
+            case "tenant" -> tenantService.listTags(ref.name(), region);
             default -> throw new AwsException("NotFoundException",
                     "Resource " + arn + " was not found.", 404);
         };
@@ -1530,13 +1540,13 @@ public class SesService {
         List<Tag> tags = newTags == null ? List.of() : newTags;
         SesTags.validate(tags);
         switch (ref.type()) {
-            case "configuration-set" -> tagConfigurationSet(ref.name(), region, tags);
-            case "template" -> tagEmailTemplate(ref.name(), region, tags);
+            case "configuration-set" -> configSetService.tag(ref.name(), region, tags);
+            case "template" -> templateService.tag(ref.name(), region, tags);
             case "identity" -> identityService.tag(ref.name(), region, tags);
             case "contact-list" -> contactService.tag(ref.name(), region, tags);
             case "custom-verification-email-template" -> cvetService.tag(ref.name(), region, tags);
             case "dedicated-ip-pool" -> dedicatedIpService.tag(ref.name(), region, tags);
-            case "tenant" -> tagTenant(ref.name(), region, tags);
+            case "tenant" -> tenantService.tag(ref.name(), region, tags);
             default -> throw new AwsException("NotFoundException",
                     "Resource " + arn + " was not found.", 404);
         }
@@ -1557,109 +1567,20 @@ public class SesService {
             throw new AwsException("BadRequestException", "Failed to untag resource", 400);
         }
         switch (ref.type()) {
-            case "configuration-set" -> untagConfigurationSet(ref.name(), region, tagKeys);
-            case "template" -> untagEmailTemplate(ref.name(), region, tagKeys);
+            case "configuration-set" -> configSetService.untag(ref.name(), region, tagKeys);
+            case "template" -> templateService.untag(ref.name(), region, tagKeys);
             case "identity" -> identityService.untag(ref.name(), region, tagKeys);
             case "contact-list" -> contactService.untag(ref.name(), region, tagKeys);
             case "custom-verification-email-template" -> cvetService.untag(ref.name(), region, tagKeys);
             case "dedicated-ip-pool" -> dedicatedIpService.untag(ref.name(), region, tagKeys);
-            case "tenant" -> untagTenant(ref.name(), region, tagKeys);
+            case "tenant" -> tenantService.untag(ref.name(), region, tagKeys);
             default -> throw new AwsException("NotFoundException",
                     "Resource " + arn + " was not found.", 404);
         }
     }
 
-    // A tenant tag ARN carries two path segments (tenant/<name>/<tenantId>), so parseSesArn's
-    // first-slash split leaves "<name>/<tenantId>" as the resource name; the tenant domain owns
-    // that remainder's decomposition and the id-only resolution (see SesTenantService.TenantTagArn).
-
-    private List<Tag> listTenantTags(String resourceName, String region) {
-        Tenant tenant = tenantService.tenantForTagArn(resourceName, region);
-        // AWS returns a tenant's tags ordered by key (probe-confirmed).
-        return (tenant.tags() == null ? List.<Tag>of() : tenant.tags()).stream()
-                .sorted(Comparator.comparing(Tag::key, Comparator.nullsLast(Comparator.naturalOrder())))
-                .toList();
-    }
-
-    private void tagTenant(String resourceName, String region, List<Tag> newTags) {
-        tenantService.mutateTags(resourceName, region, tags -> SesTags.merge(tags, newTags));
-        LOG.infov("Tagged SES tenant <{0}> (region {1}, +{2} tags)",
-                resourceName, region, newTags.size());
-    }
-
-    private void untagTenant(String resourceName, String region, List<String> tagKeys) {
-        Set<String> toRemove = new HashSet<>(tagKeys);
-        tenantService.mutateTags(resourceName, region, tags -> {
-            List<Tag> remaining = new ArrayList<>(tags);
-            remaining.removeIf(t -> toRemove.contains(t.key()));
-            return remaining;
-        });
-        LOG.infov("Untagged SES tenant <{0}> (region {1}, -{2} keys)",
-                resourceName, region, tagKeys.size());
-    }
-
-    private List<Tag> listConfigurationSetTags(String name, String region) {
-        ConfigurationSet cs = configSetService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No ConfigurationSet present with name: " + name, 404));
-        return new ArrayList<>(cs.getTags());
-    }
-
-    private void tagConfigurationSet(String name, String region, List<Tag> newTags) {
-        ConfigurationSet cs = configSetService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No ConfigurationSet present with name: " + name, 404));
-        cs.setTags(SesTags.merge(cs.getTags(), newTags));
-        configSetService.save(cs, region);
-        LOG.infov("Tagged SES configuration set: {0} (region {1}, +{2} tags)", name, region, newTags.size());
-    }
-
-    private void untagConfigurationSet(String name, String region, List<String> tagKeys) {
-        ConfigurationSet cs = configSetService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No ConfigurationSet present with name: " + name, 404));
-        Set<String> toRemove = new HashSet<>(tagKeys);
-        // Copy-on-write: the stored list may be immutable, and unlocked readers iterate it.
-        List<Tag> remaining = new ArrayList<>(cs.getTags());
-        remaining.removeIf(t -> toRemove.contains(t.key()));
-        cs.setTags(remaining);
-        configSetService.save(cs, region);
-        LOG.infov("Untagged SES configuration set: {0} (region {1}, -{2} keys)", name, region, tagKeys.size());
-    }
-
-    private List<Tag> listEmailTemplateTags(String name, String region) {
-        EmailTemplate template = templateService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No Template present with name: " + name, 404));
-        return new ArrayList<>(template.getTags());
-    }
-
-    private void tagEmailTemplate(String name, String region, List<Tag> newTags) {
-        EmailTemplate template = templateService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No Template present with name: " + name, 404));
-        template.setTags(SesTags.merge(template.getTags(), newTags));
-        templateService.save(template, region);
-        LOG.infov("Tagged SES template: {0} (region {1}, +{2} tags)", name, region, newTags.size());
-    }
-
-    public void setIdentityTags(String identityValue, String region, List<Tag> tags) {
-        identityService.setTags(identityValue, region, tags);
-    }
-
-    private void untagEmailTemplate(String name, String region, List<String> tagKeys) {
-        EmailTemplate template = templateService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No Template present with name: " + name, 404));
-        Set<String> toRemove = new HashSet<>(tagKeys);
-        // Copy-on-write: the stored list may be immutable, and unlocked readers iterate it.
-        List<Tag> remaining = new ArrayList<>(template.getTags());
-        remaining.removeIf(t -> toRemove.contains(t.key()));
-        template.setTags(remaining);
-        templateService.save(template, region);
-        LOG.infov("Untagged SES template: {0} (region {1}, -{2} keys)", name, region, tagKeys.size());
-    }
-
+    // name is everything after the type's first slash and may itself contain one: a tenant ARN's
+    // <name>/<tenantId> remainder passes through whole, decomposed by the tenant domain.
     private record ResourceRef(String account, String region, String type, String name) {}
 
     /**
@@ -2008,116 +1929,7 @@ public class SesService {
     }
 
     public String renderTestTemplate(String templateName, String templateDataRaw, String region) {
-        EmailTemplate template = getTemplate(templateName, region);
-        JsonNode templateData = parseRenderingData(objectMapper, templateDataRaw);
-        String subject = applyTemplateData(template.getSubject(), templateData);
-        String text = applyTemplateData(template.getTextPart(), templateData);
-        String html = applyTemplateData(template.getHtmlPart(), templateData);
-        return buildTestRenderMime(subject, text, html, ZonedDateTime.now(ZoneOffset.UTC), nextBoundary());
-    }
-
-    static JsonNode parseRenderingData(ObjectMapper mapper, String raw) {
-        if (raw == null || raw.isBlank()) {
-            throw new AwsException("InvalidRenderingParameter",
-                    "Template rendering data is required.", 400);
-        }
-        JsonNode node;
-        try {
-            node = mapper.readTree(raw);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new AwsException("InvalidRenderingParameter",
-                    "Template rendering data is invalid: " + e.getOriginalMessage(), 400);
-        }
-        if (!node.isObject()) {
-            throw new AwsException("InvalidRenderingParameter",
-                    "Template rendering data must be a JSON object.", 400);
-        }
-        return node;
-    }
-
-    static String buildTestRenderMime(String subject, String text, String html,
-                                       ZonedDateTime date, String boundary) {
-        String safeSubject = sanitizeSubject(subject);
-        String safeText = text == null ? "" : text;
-        String safeHtml = html == null ? "" : html;
-        String dateHeader = DateTimeFormatter.RFC_1123_DATE_TIME.format(date);
-        StringBuilder out = new StringBuilder();
-        out.append("Date: ").append(dateHeader).append("\r\n");
-        out.append("Subject: ").append(safeSubject).append("\r\n");
-        out.append("MIME-Version: 1.0\r\n");
-        out.append("Content-Type: multipart/alternative; boundary=\"").append(boundary).append("\"\r\n");
-        out.append("\r\n");
-        appendMimePart(out, boundary, "text/plain", safeText);
-        appendMimePart(out, boundary, "text/html", safeHtml);
-        out.append("--").append(boundary).append("--\r\n");
-        return out.toString();
-    }
-
-    private static void appendMimePart(StringBuilder out, String boundary, String mimeType, String body) {
-        out.append("--").append(boundary).append("\r\n");
-        out.append("Content-Type: ").append(mimeType).append("; charset=UTF-8\r\n");
-        out.append("Content-Transfer-Encoding: ").append(pickTransferEncoding(body)).append("\r\n");
-        out.append("\r\n");
-        String normalized = normalizeToCrlf(body);
-        out.append(normalized);
-        if (!normalized.endsWith("\r\n")) {
-            out.append("\r\n");
-        }
-    }
-
-    static String normalizeToCrlf(String body) {
-        return body.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n");
-    }
-
-    static String pickTransferEncoding(String body) {
-        return body.codePoints().allMatch(c -> c < 128) ? "7bit" : "8bit";
-    }
-
-    static String sanitizeSubject(String subject) {
-        if (subject == null) {
-            return "";
-        }
-        // Strip C0 control characters (U+0000-U+001F) and DEL (U+007F): RFC 5322
-        // forbids them in unstructured header field bodies. Replace with spaces so
-        // visible content is preserved when template data accidentally injects them.
-        StringBuilder out = new StringBuilder(subject.length());
-        for (int i = 0; i < subject.length(); i++) {
-            char c = subject.charAt(i);
-            out.append((c < 0x20 || c == 0x7F) ? ' ' : c);
-        }
-        return out.toString();
-    }
-
-    static String stripXml10InvalidChars(String s) {
-        if (s == null || s.isEmpty()) {
-            return s;
-        }
-        // XML 1.0 char production: \t \n \r, U+0020-U+D7FF, U+E000-U+FFFD,
-        // U+10000-U+10FFFF. Anything else (C0 controls, U+FFFE/U+FFFF, lone
-        // surrogates) makes the response unparseable by SDK XML parsers.
-        StringBuilder out = new StringBuilder(s.length());
-        int i = 0;
-        while (i < s.length()) {
-            int cp = s.codePointAt(i);
-            if (isXml10Char(cp)) {
-                out.appendCodePoint(cp);
-            }
-            i += Character.charCount(cp);
-        }
-        return out.toString();
-    }
-
-    private static boolean isXml10Char(int cp) {
-        return cp == 0x09 || cp == 0x0A || cp == 0x0D
-                || (cp >= 0x20 && cp <= 0xD7FF)
-                || (cp >= 0xE000 && cp <= 0xFFFD)
-                || (cp >= 0x10000 && cp <= 0x10FFFF);
-    }
-
-    private static String nextBoundary() {
-        byte[] bytes = new byte[6];
-        BOUNDARY_RANDOM.nextBytes(bytes);
-        return "===_floci_" + HexFormat.of().formatHex(bytes) + "_===";
+        return templateService.renderTestTemplate(templateName, templateDataRaw, region);
     }
 
     /**
@@ -2144,9 +1956,9 @@ public class SesService {
                                             ListManagementOptions listManagement, String region) {
         requireInlineTemplateContent(subject, textPart, htmlPart);
         return sendEmail(source, toAddresses, ccAddresses, bccAddresses, replyToAddresses,
-                applyTemplateData(subject, templateData),
-                applyTemplateData(textPart, templateData),
-                applyTemplateData(htmlPart, templateData),
+                SesTemplateService.applyTemplateData(subject, templateData),
+                SesTemplateService.applyTemplateData(textPart, templateData),
+                SesTemplateService.applyTemplateData(htmlPart, templateData),
                 configurationSetName, emailTags, additionalHeaders, listManagement, region);
     }
 
@@ -2167,7 +1979,7 @@ public class SesService {
             throw new AwsException("InvalidParameterValue",
                     "At least one destination entry is required.", 400);
         }
-        validateConfigurationSet(configurationSetName, region);
+        configSetService.validateForSending(configurationSetName, region);
         if (entries.size() > MAX_BULK_DESTINATIONS) {
             throw new AwsException("MessageRejected",
                     "Number of destinations (" + entries.size() + ") exceeds the maximum of "
@@ -2195,9 +2007,9 @@ public class SesService {
                 String messageId = sendEmail(source,
                         entry.toAddresses(), entry.ccAddresses(), entry.bccAddresses(),
                         replyToAddresses,
-                        applyTemplateData(subject, merged),
-                        applyTemplateData(textPart, merged),
-                        applyTemplateData(htmlPart, merged),
+                        SesTemplateService.applyTemplateData(subject, merged),
+                        SesTemplateService.applyTemplateData(textPart, merged),
+                        SesTemplateService.applyTemplateData(htmlPart, merged),
                         configurationSetName, mergedTags, mergedHeaders, null, region);
                 results.add(BulkEmailEntryResult.success(messageId));
             } catch (AwsException e) {
@@ -2296,55 +2108,4 @@ public class SesService {
         replacement.fields().forEachRemaining(e -> merged.set(e.getKey(), e.getValue()));
         return merged;
     }
-
-    static String applyTemplateData(String text, JsonNode data) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        Matcher matcher = TEMPLATE_VARIABLE.matcher(text);
-        StringBuilder out = new StringBuilder();
-        while (matcher.find()) {
-            String key = matcher.group(1);
-            if ("amazonSESUnsubscribeUrl".equals(key)) {
-                // Reserved list-management placeholder: leave it intact for post-render replacement
-                // in the send path, so a templated body can carry {{amazonSESUnsubscribeUrl}} without
-                // failing as a missing rendering attribute.
-                matcher.appendReplacement(out, Matcher.quoteReplacement(matcher.group(0)));
-                continue;
-            }
-            if (data == null || !data.hasNonNull(key)) {
-                throw new AwsException("MissingRenderingAttribute",
-                        "Attribute '" + key + "' is not present in the rendering data.", 400);
-            }
-            JsonNode value = data.get(key);
-            String replacement = value.isValueNode() ? value.asText() : value.toString();
-            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(out);
-        return out.toString();
-    }
-
-    /**
-     * Extracts the template name from an SES template ARN of the form
-     * {@code arn:aws:ses:<region>:<account>:template/<name>}. Region and
-     * account segments are not validated; only the {@code template/<name>}
-     * suffix is required.
-     */
-    public static String templateNameFromArn(String arn) {
-        if (arn == null || arn.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "TemplateArn is required.", 400);
-        }
-        int marker = arn.indexOf(":template/");
-        if (!arn.startsWith("arn:") || marker < 0) {
-            throw new AwsException("InvalidParameterValue",
-                    "TemplateArn is not a valid SES template ARN: " + arn, 400);
-        }
-        String name = arn.substring(marker + ":template/".length());
-        if (name.isEmpty()) {
-            throw new AwsException("InvalidParameterValue",
-                    "TemplateArn is missing a template name: " + arn, 400);
-        }
-        return name;
-    }
-
 }

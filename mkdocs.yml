@@ -106,6 +106,7 @@ nav:
     - Lambda MicroVMs: services/lambda-microvms.md
     - API Gateway: services/api-gateway.md
     - Cognito: services/cognito.md
+    - Cognito Identity: services/cognitoidentity.md
     - KMS: services/kms.md
     - CloudHSM v2: services/cloudhsmv2.md
     - Kinesis: services/kinesis.md
@@ -118,6 +119,11 @@ nav:
     - IAM: services/iam.md
     - STS: services/sts.md
     - Organizations: services/organizations.md
+    - AWS Account Management: services/account.md
+    - IAM Access Analyzer: services/access-analyzer.md
+    - IAM Identity Center (SSO Admin): services/ssoadmin.md
+    - Identity Store: services/identitystore.md
+    - Amazon Macie: services/macie2.md
     - Control Tower: services/controltower.md
     - AWS Service Catalog: services/service-catalog.md
     - ElastiCache: services/elasticache.md

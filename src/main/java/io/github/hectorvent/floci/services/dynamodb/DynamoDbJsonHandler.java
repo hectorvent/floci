@@ -363,14 +363,15 @@ public class DynamoDbJsonHandler {
             evaluateLegacyExpected(oldItem, expected, conditionalOperator, returnValuesOnConditionCheckFailure);
         }
 
-        dynamoDbService.putItem(tableName, item, conditionExpression, exprAttrNames, exprAttrValues, region, returnValuesOnConditionCheckFailure);
+        var previousItem = dynamoDbService.putItem(tableName, item, conditionExpression,
+                exprAttrNames, exprAttrValues, region, returnValuesOnConditionCheckFailure);
 
         ObjectNode response = objectMapper.createObjectNode();
         if ("ALL_OLD" .equals(returnValues) && oldItem != null) {
             response.set("Attributes", oldItem);
         }
         addItemCollectionMetrics(response, request, tableName, item, region);
-        addConsumedCapacity(response, request, tableName, 1, true);
+        addWriteConsumedCapacity(response, request, tableName, region, previousItem, item);
         return Response.ok(response).build();
     }
 
@@ -404,6 +405,7 @@ public class DynamoDbJsonHandler {
         }
 
         JsonNode item = dynamoDbService.getItem(tableName, key, region);
+        var itemBytes = item != null ? DynamoDbItemSize.calculateItemSize(item) : 0;
         if (item != null && projectionExpression != null) {
             item = ProjectionEvaluator.project(item, projectionExpression, exprAttrNames);
         } else if (item != null && attributesToGet != null) {
@@ -416,7 +418,8 @@ public class DynamoDbJsonHandler {
         if (item != null) {
             response.set("Item", item);
         }
-        addConsumedCapacity(response, request, tableName, item != null ? 1 : 0, false);
+        addConsumedCapacity(response, request, tableName,
+                readCapacityUnits(itemBytes, request.path("ConsistentRead").asBoolean(false)), null);
         return Response.ok(response).build();
     }
 
@@ -482,7 +485,7 @@ public class DynamoDbJsonHandler {
             response.set("Attributes", oldItem);
         }
         addItemCollectionMetrics(response, request, tableName, key, region);
-        addConsumedCapacity(response, request, tableName, 1, true);
+        addWriteConsumedCapacity(response, request, tableName, region, oldItem, null);
         return Response.ok(response).build();
     }
 
@@ -594,7 +597,7 @@ public class DynamoDbJsonHandler {
             response.set("Attributes", getChangedAttributes(result.oldItem(), result.newItem()));
         }
         addItemCollectionMetrics(response, request, tableName, key, region);
-        addConsumedCapacity(response, request, tableName, 1, true);
+        addWriteConsumedCapacity(response, request, tableName, region, result.oldItem(), result.newItem());
         return Response.ok(response).build();
     }
 
@@ -743,67 +746,6 @@ public class DynamoDbJsonHandler {
         return changedAttributes;
     }
 
-    // DynamoDB requires an ExclusiveStartKey to exactly match the paged key schema's
-    // attribute names and scalar types. Query and Scan report different messages for faults.
-    private void validateExclusiveStartKey(JsonNode exclusiveStartKey, TableDefinition table,
-                                           DynamoDbAccessPath accessPath, boolean isScan) {
-        if (exclusiveStartKey == null || exclusiveStartKey.isNull()) return;
-        Set<String> expected = new HashSet<>();
-        expected.add(table.getPartitionKeyName());
-        String sortKey = table.getSortKeyName();
-        if (sortKey != null) expected.add(sortKey);
-        if (accessPath.isIndex()) {
-            expected.addAll(accessPath.keyAttributeNames());
-        }
-        Set<String> actual = new HashSet<>();
-        exclusiveStartKey.fieldNames().forEachRemaining(actual::add);
-        if (!actual.equals(expected) || hasInvalidKeyValue(exclusiveStartKey, table, expected)) {
-            throw invalidStartingKey(isScan);
-        }
-    }
-
-    private boolean hasInvalidKeyValue(JsonNode exclusiveStartKey, TableDefinition table,
-                                       Set<String> expected) {
-        if (table.getAttributeDefinitions() == null) {
-            return true;
-        }
-        for (String attribute : expected) {
-            String expectedType = table.getAttributeDefinitions().stream()
-                    .filter(definition -> attribute.equals(definition.getAttributeName()))
-                    .map(AttributeDefinition::getAttributeType)
-                    .findFirst()
-                    .orElse(null);
-            if (expectedType == null || hasInvalidScalarValue(exclusiveStartKey.get(attribute), expectedType)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasInvalidScalarValue(JsonNode value, String expectedType) {
-        if (value == null || !value.isObject() || value.size() != 1 || !value.has(expectedType)) {
-            return true;
-        }
-        JsonNode payload = value.get(expectedType);
-        if (payload == null || !payload.isTextual() || payload.textValue().isEmpty()) {
-            return true;
-        }
-        if ("N".equals(expectedType)) {
-            DynamoDbNumberUtils.validateAndNormalize(payload.textValue());
-        }
-        if ("B".equals(expectedType)) {
-            return !payload.textValue().matches(
-                    "(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?");
-        }
-        return false;
-    }
-
-    private AwsException invalidStartingKey(boolean isScan) {
-        return new AwsException("ValidationException", isScan
-                ? "The provided starting key is invalid: The provided key element does not match the schema"
-                : "The provided starting key is invalid", 400);
-    }
-
     private static final Set<String> VALID_SELECT = Set.of(
             "ALL_ATTRIBUTES", "ALL_PROJECTED_ATTRIBUTES", "SPECIFIC_ATTRIBUTES", "COUNT");
 
@@ -918,9 +860,8 @@ public class DynamoDbJsonHandler {
         Set<String> hashTokens = extractHashTokens(keyConditionExpr, filterExpr, projectionExpression);
         checkUnusedEan(exprAttrNames, hashTokens);
         checkUnusedEav(exprAttrValues, extractColonTokens(keyConditionExpr, filterExpr));
-
         if (exclusiveStartKey != null) {
-            validateExclusiveStartKey(exclusiveStartKey, queryTable, queryAccessPath, false);
+            DynamoDbAccessPathValidator.validateExclusiveStartKey(exclusiveStartKey, queryTable, queryAccessPath, false);
         }
 
         DynamoDbService.QueryResult result = dynamoDbService.query(tableName, keyConditions,
@@ -965,7 +906,8 @@ public class DynamoDbJsonHandler {
         if (result.lastEvaluatedKey() != null) {
             response.set("LastEvaluatedKey", result.lastEvaluatedKey());
         }
-        addConsumedCapacity(response, request, tableName, queryItems.size(), false);
+        addConsumedCapacity(response, request, tableName,
+                readCapacityUnits(result.scannedBytes(), request.path("ConsistentRead").asBoolean(false)), queryAccessPath);
         return Response.ok(response).build();
     }
 
@@ -1054,7 +996,7 @@ public class DynamoDbJsonHandler {
         rejectConsistentReadOnGsi(request, scanAccessPath);
 
         if (exclusiveStartKey != null) {
-            validateExclusiveStartKey(exclusiveStartKey, scanTable, scanAccessPath, true);
+            DynamoDbAccessPathValidator.validateExclusiveStartKey(exclusiveStartKey, scanTable, scanAccessPath, true);
         }
 
         DynamoDbService.ScanResult result = dynamoDbService.scan(
@@ -1101,7 +1043,8 @@ public class DynamoDbJsonHandler {
         if (result.lastEvaluatedKey() != null) {
             response.set("LastEvaluatedKey", result.lastEvaluatedKey());
         }
-        addConsumedCapacity(response, request, tableName, scanItems.size(), false);
+        addConsumedCapacity(response, request, tableName,
+                readCapacityUnits(result.scannedBytes(), request.path("ConsistentRead").asBoolean(false)), scanAccessPath);
         return Response.ok(response).build();
     }
 
@@ -1156,11 +1099,46 @@ public class DynamoDbJsonHandler {
             }
         }
 
+        // The per-table write cost needs the stored images from before the batch runs.
+        var returnCCBatch = request.path("ReturnConsumedCapacity").asText("NONE");
+        if (!VALID_RETURN_CONSUMED_CAPACITY.contains(returnCCBatch)) {
+            throw new AwsException("ValidationException",
+                    "1 validation error detected: Value '" + returnCCBatch
+                    + "' at 'returnConsumedCapacity' failed to satisfy constraint: "
+                    + "Member must satisfy enum value set: [INDEXES, TOTAL, NONE]", 400);
+        }
+        Map<String, DynamoDbWriteCapacity.Cost> costs = null;
+        if (!"NONE".equals(returnCCBatch)) {
+            costs = new LinkedHashMap<>();
+            for (var entry : items.entrySet()) {
+                var costTable = dynamoDbService.describeTable(entry.getKey(), region);
+                var cost = DynamoDbWriteCapacity.Cost.zero();
+                for (var writeReq : entry.getValue()) {
+                    var newItem = writeReq.has("PutRequest")
+                            ? DynamoDbNumberUtils.normalizeNumbersInItem(writeReq.get("PutRequest").get("Item"))
+                            : null;
+                    var keyNode = writeReq.has("PutRequest")
+                            ? writeReq.get("PutRequest").get("Item")
+                            : writeReq.get("DeleteRequest").get("Key");
+                    var previous = dynamoDbService.getItem(entry.getKey(), keyNode, region);
+                    cost = cost.plus(DynamoDbWriteCapacity.forWrite(costTable, previous, newItem));
+                }
+                costs.put(entry.getKey(), cost);
+            }
+        }
+
         dynamoDbService.batchWriteItem(items, region);
 
         ObjectNode response = objectMapper.createObjectNode();
         response.set("UnprocessedItems", objectMapper.createObjectNode());
-        addBatchConsumedCapacity(response, request, items, true);
+        if (costs != null) {
+            var ccArray = objectMapper.createArrayNode();
+            for (var entry : costs.entrySet()) {
+                ccArray.add(writeCapacityNode(entry.getKey(), entry.getValue(),
+                        "INDEXES".equals(returnCCBatch)));
+            }
+            response.set("ConsumedCapacity", ccArray);
+        }
         return Response.ok(response).build();
     }
 
@@ -1282,6 +1260,7 @@ public class DynamoDbJsonHandler {
 
         List<GlobalSecondaryIndex> gsiCreates = new ArrayList<>();
         List<String> gsiDeletes = new ArrayList<>();
+        List<JsonNode> gsiUpdatesToApply = new ArrayList<>();
         JsonNode gsiUpdates = request.path("GlobalSecondaryIndexUpdates");
         if (!gsiUpdates.isMissingNode() && gsiUpdates.isArray()) {
             for (JsonNode update : gsiUpdates) {
@@ -1322,6 +1301,25 @@ public class DynamoDbJsonHandler {
                 if (!deleteNode.isMissingNode()) {
                     gsiDeletes.add(deleteNode.path("IndexName").asText());
                 }
+                JsonNode updateNode = update.path("Update");
+                if (updateNode.isObject()) {
+                    gsiUpdatesToApply.add(updateNode);
+                }
+            }
+        }
+
+        if (!gsiUpdatesToApply.isEmpty()) {
+            TableDefinition currentTable = dynamoDbService.describeTable(tableName, region);
+            for (JsonNode updateNode : gsiUpdatesToApply) {
+                String indexName = updateNode.path("IndexName").asText();
+                if (gsiDeletes.contains(indexName)) {
+                    throw new AwsException("ValidationException",
+                            "Cannot delete and update the same index: " + indexName, 400);
+                }
+                if (currentTable.findGsi(indexName).isEmpty()) {
+                    throw new AwsException("ValidationException",
+                            "The table does not have the specified index: " + indexName, 400);
+                }
             }
         }
 
@@ -1342,6 +1340,28 @@ public class DynamoDbJsonHandler {
 
         TableDefinition table = dynamoDbService.updateTable(tableName, readCapacity, writeCapacity,
                 gsiCreates, gsiDeletes, newAttrDefs, region);
+
+        for (JsonNode updateNode : gsiUpdatesToApply) {
+            GlobalSecondaryIndex gsi = table.findGsi(updateNode.path("IndexName").asText()).orElseThrow();
+            JsonNode gsiPt = updateNode.path("ProvisionedThroughput");
+            if (gsiPt.isObject()) {
+                if (gsiPt.has("ReadCapacityUnits")) {
+                    gsi.getProvisionedThroughput().setReadCapacityUnits(gsiPt.get("ReadCapacityUnits").asLong());
+                }
+                if (gsiPt.has("WriteCapacityUnits")) {
+                    gsi.getProvisionedThroughput().setWriteCapacityUnits(gsiPt.get("WriteCapacityUnits").asLong());
+                }
+            }
+            JsonNode gsiOnDemand = updateNode.path("OnDemandThroughput");
+            if (gsiOnDemand.isObject()) {
+                if (gsiOnDemand.has("MaxReadRequestUnits")) {
+                    gsi.setOnDemandMaxReadRequestUnits(gsiOnDemand.get("MaxReadRequestUnits").asInt());
+                }
+                if (gsiOnDemand.has("MaxWriteRequestUnits")) {
+                    gsi.setOnDemandMaxWriteRequestUnits(gsiOnDemand.get("MaxWriteRequestUnits").asInt());
+                }
+            }
+        }
 
         JsonNode deletionProtectionNode = request.path("DeletionProtectionEnabled");
         if (!deletionProtectionNode.isMissingNode()) {
@@ -1833,6 +1853,8 @@ public class DynamoDbJsonHandler {
         existing.get().setDestinationStatus("DISABLED");
         existing.get().setDestinationStatusDescription("Kinesis streaming is disabled for this table");
         dynamoDbService.persistTable(resolvedTableName, table, region);
+        // Stop forwarding and discard buffered CDC records for this now-disabled destination.
+        dynamoDbService.onKinesisStreamingDestinationDisabled(resolvedTableName, streamArn, region);
 
         ObjectNode response = objectMapper.createObjectNode();
         response.put("TableName", resolvedTableName);
@@ -2012,21 +2034,70 @@ public class DynamoDbJsonHandler {
         }
 
         Set<String> allowed = accessPath.projectedAttributeNames(table);
-        return items.stream().map(item -> {
-            ObjectNode filtered = objectMapper.createObjectNode();
-            item.fields().forEachRemaining(e -> {
-                if (allowed.contains(e.getKey())) filtered.set(e.getKey(), e.getValue());
-            });
-            return (JsonNode) filtered;
-        }).toList();
+        return items.stream()
+                .map(item -> (JsonNode) ProjectionEvaluator.trimToAttributes((ObjectNode) item, allowed))
+                .toList();
+    }
+
+    /**
+     * Half a read unit per 4KB read, doubled for a strongly consistent read, with the
+     * half-unit minimum DynamoDB charges even when nothing is found.
+     */
+    private static double readCapacityUnits(long bytes, boolean consistentRead) {
+        var units = Math.max(1, (bytes + 4095) / 4096) * 0.5;
+        return consistentRead ? units * 2 : units;
+    }
+
+    /**
+     * Write-side ConsumedCapacity with the per-index arms DynamoDB reports under
+     * INDEXES. oldItem and newItem are the stored images around the write; the new
+     * image is normalized the way storage normalizes it so an identical overwrite
+     * compares equal.
+     */
+    private void addWriteConsumedCapacity(ObjectNode response, JsonNode request, String tableName,
+                                           String region, JsonNode oldItem, JsonNode newItem) {
+        String returnCC = request.path("ReturnConsumedCapacity").asText("NONE");
+        if ("NONE".equals(returnCC)) return;
+        TableDefinition table = dynamoDbService.describeTable(tableName, region);
+        var cost = DynamoDbWriteCapacity.forWrite(table, oldItem,
+                newItem != null ? DynamoDbNumberUtils.normalizeNumbersInItem(newItem) : null);
+        response.set("ConsumedCapacity",
+                writeCapacityNode(tableName, cost, "INDEXES".equals(returnCC)));
+    }
+
+    private ObjectNode writeCapacityNode(String tableName, DynamoDbWriteCapacity.Cost cost,
+                                          boolean withBreakdown) {
+        var cc = objectMapper.createObjectNode();
+        cc.put("TableName", DynamoDbTableNames.resolve(tableName));
+        cc.put("CapacityUnits", cost.total());
+        if (withBreakdown) {
+            var tableCap = objectMapper.createObjectNode();
+            tableCap.put("CapacityUnits", cost.table());
+            cc.set("Table", tableCap);
+            if (!cost.gsi().isEmpty()) {
+                cc.set("GlobalSecondaryIndexes", capacityUnitsMap(cost.gsi()));
+            }
+            if (!cost.lsi().isEmpty()) {
+                cc.set("LocalSecondaryIndexes", capacityUnitsMap(cost.lsi()));
+            }
+        }
+        return cc;
+    }
+
+    private ObjectNode capacityUnitsMap(Map<String, Double> unitsByIndex) {
+        var node = objectMapper.createObjectNode();
+        unitsByIndex.forEach((indexName, units) -> {
+            var cap = objectMapper.createObjectNode();
+            cap.put("CapacityUnits", units);
+            node.set(indexName, cap);
+        });
+        return node;
     }
 
     private void addConsumedCapacity(ObjectNode response, JsonNode request, String tableName,
-                                      int itemCount, boolean isWrite) {
+                                      double cu, DynamoDbAccessPath accessPath) {
         String returnCC = request.path("ReturnConsumedCapacity").asText("NONE");
         if ("NONE".equals(returnCC)) return;
-
-        double cu = isWrite ? Math.max(1.0, itemCount) : Math.max(0.5, itemCount * 0.5);
 
         ObjectNode cc = objectMapper.createObjectNode();
         cc.put("TableName", DynamoDbTableNames.resolve(tableName));
@@ -2034,15 +2105,15 @@ public class DynamoDbJsonHandler {
 
         if ("INDEXES".equals(returnCC)) {
             ObjectNode tableCap = objectMapper.createObjectNode();
-            String indexName = request.path("IndexName").asText(null);
-            if (indexName != null) {
+            if (accessPath != null && accessPath.isIndex()) {
                 tableCap.put("CapacityUnits", 0.0);
                 cc.set("Table", tableCap);
-                ObjectNode gsiCaps = objectMapper.createObjectNode();
+                ObjectNode indexCaps = objectMapper.createObjectNode();
                 ObjectNode indexCap = objectMapper.createObjectNode();
                 indexCap.put("CapacityUnits", cu);
-                gsiCaps.set(indexName, indexCap);
-                cc.set("GlobalSecondaryIndexes", gsiCaps);
+                indexCaps.set(accessPath.indexName(), indexCap);
+                cc.set(accessPath.isGlobalSecondaryIndex()
+                        ? "GlobalSecondaryIndexes" : "LocalSecondaryIndexes", indexCaps);
             } else {
                 tableCap.put("CapacityUnits", cu);
                 cc.set("Table", tableCap);
@@ -2336,7 +2407,9 @@ public class DynamoDbJsonHandler {
         DynamoDbPartiQLParser.Stmt stmt = DynamoDbPartiQLParser.parse(statement, parameters);
         PartiQLExecuteContext ctx = PartiQLExecuteContext.builder()
                 .limit(request.has("Limit") ? request.get("Limit").asInt() : null)
-                .nextToken(request.has("NextToken") ? request.get("NextToken").asText() : null);
+                .nextToken(request.has("NextToken") ? request.get("NextToken").asText() : null)
+                .consistentRead(request.path("ConsistentRead").asBoolean(false))
+                .tokenBinding(partiQLHandler.tokenBinding(statement, parameters));
         JsonNode result = partiQLHandler.execute(stmt, ctx, region);
         return Response.ok(result).build();
     }
@@ -2385,7 +2458,14 @@ public class DynamoDbJsonHandler {
             try {
                 DynamoDbPartiQLParser.Stmt stmt = DynamoDbPartiQLParser.parse(
                         s.path("Statement").asText(), toPartiQLParams(s.path("Parameters")));
-                JsonNode result = partiQLHandler.execute(stmt, PartiQLExecuteContext.builder(), region);
+                if (stmt instanceof DynamoDbPartiQLParser.Stmt.Select select
+                        && !batchSelectResolvesThroughPrimaryKey(select, region)) {
+                    throw new AwsException("ValidationError",
+                            "Select statements within BatchExecuteStatement must specify the primary key "
+                                    + "in the where clause.", 400);
+                }
+                JsonNode result = partiQLHandler.execute(stmt, PartiQLExecuteContext.builder()
+                        .consistentRead(s.path("ConsistentRead").asBoolean(false)), region);
                 ObjectNode slot = objectMapper.createObjectNode();
                 JsonNode firstItem = result.path("Items").path(0);
                 if (!firstItem.isMissingNode()) {
@@ -2404,6 +2484,31 @@ public class DynamoDbJsonHandler {
         ObjectNode resp = objectMapper.createObjectNode();
         resp.set("Responses", responses);
         return Response.ok(resp).build();
+    }
+
+    // BatchExecuteStatement only runs SELECT statements that resolve through
+    // the table's primary key: index-qualified statements and partial-key
+    // WHERE clauses are rejected per statement (characterised on real AWS,
+    // eu-west-1, 2026-09-02).
+    private boolean batchSelectResolvesThroughPrimaryKey(DynamoDbPartiQLParser.Stmt.Select select, String region) {
+        if (select.index() != null) {
+            return false;
+        }
+        TableDefinition table = dynamoDbService.describeTable(select.table(), region);
+        String pkName = table.getPartitionKeyName();
+        String skName = table.getSortKeyName();
+        boolean pkEq = false;
+        boolean skEq = skName == null;
+        for (DynamoDbPartiQLParser.Cond c : select.where()) {
+            if (c instanceof DynamoDbPartiQLParser.Cond.Eq eq) {
+                if (eq.attr().equals(pkName)) {
+                    pkEq = true;
+                } else if (skName != null && eq.attr().equals(skName)) {
+                    skEq = true;
+                }
+            }
+        }
+        return pkEq && skEq;
     }
 
     private List<JsonNode> toPartiQLParams(JsonNode node) {
