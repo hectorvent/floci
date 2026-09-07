@@ -1344,6 +1344,40 @@ class SsmIntegrationTest {
             .body("Parameters.Name", not(hasItem(al2023)));
     }
 
+    @Test
+    @Order(16)
+    void putParameterRejectsReservedPrefixes() {
+        given()
+            .header("X-Amz-Target", "AmazonSSM.PutParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                {
+                    "Name": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
+                    "Value": "ami-mine",
+                    "Type": "String",
+                    "Overwrite": true
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ValidationException"))
+            .body("message", containsString("can't be prefixed with \"aws\" or \"ssm\""));
+
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                { "Name": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64" }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Value", equalTo("ami-0abcdef1234567891"));
+    }
+
     private static void createSharableDocument(String name) {
         given()
             .header("X-Amz-Target", "AmazonSSM.CreateDocument")

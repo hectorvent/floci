@@ -155,6 +155,7 @@ public class SsmService implements ResourceProvider {
      * Returns the version number.
      */
     public long putParameter(String name, String value, String type, String description, boolean overwrite, String region) {
+        rejectReservedName(name);
         String storageKey = regionKey(region, name);
         Parameter existing = parameterStore.get(storageKey).orElse(null);
 
@@ -191,6 +192,22 @@ public class SsmService implements ResourceProvider {
             findParameter(name, region).ifPresent(result::add);
         }
         return result;
+    }
+
+    /**
+     * AWS reserves the {@code aws} and {@code ssm} prefixes, with or without a leading slash
+     * and regardless of case, so an account can never write over a public parameter.
+     */
+    private static void rejectReservedName(String name) {
+        String bare = name == null ? "" : name.startsWith("/") ? name.substring(1) : name;
+        String lower = bare.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("aws") || lower.startsWith("ssm")) {
+            throw new AwsException("ValidationException",
+                    "Parameter name: can't be prefixed with \"aws\" or \"ssm\" (case-insensitive). "
+                            + "If formed as a path, it can consist of sub-paths divided by slash symbol; "
+                            + "each sub-path can be formed as a mix of letters, numbers and the following "
+                            + "3 symbols .-_", 400);
+        }
     }
 
     private Optional<Parameter> findParameter(String name, String region) {
@@ -230,10 +247,11 @@ public class SsmService implements ResourceProvider {
             }
             return underPath(key.substring(prefix.length()), normalizedPath, recursive);
         }));
-        if (imageCatalog != null && normalizedPath.startsWith(PUBLIC_PARAMETER_PREFIX)) {
+        if (imageCatalog != null) {
+            // The public names answer to the same path and Recursive rules as stored ones, so a
+            // recursive query on an ancestor such as /aws lists them too.
             for (String name : imageCatalog.publicParameterNames()) {
-                if (underPath(name, normalizedPath, recursive)
-                        && parameterStore.get(regionKey(region, name)).isEmpty()) {
+                if (underPath(name, normalizedPath, recursive)) {
                     publicParameter(name, region).ifPresent(result::add);
                 }
             }

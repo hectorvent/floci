@@ -77,6 +77,31 @@ class SsmServicePublicAmiParameterTest {
     }
 
     @Test
+    void ancestorQueriesFollowTheSamePathRules() {
+        List<String> recursive = ssmService.getParametersByPath("/aws", true, REGION)
+                .stream().map(Parameter::getName).toList();
+
+        assertTrue(recursive.contains(AL2023_DEFAULT), recursive.toString());
+        assertTrue(ssmService.getParametersByPath("/aws", false, REGION).isEmpty());
+        assertTrue(ssmService.getParametersByPath("/aws/service", false, REGION).isEmpty());
+        assertTrue(ssmService.getParametersByPath("/aws/service", true, REGION)
+                .stream().map(Parameter::getName).toList().contains(AMZN2_DEFAULT));
+    }
+
+    @Test
+    void putParameterRejectsTheReservedPrefixesSoPublicNamesCannotBeShadowed() {
+        for (String name : List.of(AL2023_DEFAULT, "/aws/custom", "aws-custom", "/AWS/custom",
+                "/ssm/custom", "SsmThing")) {
+            AwsException ex = assertThrows(AwsException.class, () ->
+                    ssmService.putParameter(name, "ami-mine", "String", null, true, REGION), name);
+            assertEquals("ValidationException", ex.getErrorCode(), name);
+            assertEquals(400, ex.getHttpStatus(), name);
+        }
+        assertEquals("ami-0abcdef1234567891", ssmService.getParameter(AL2023_DEFAULT, REGION).getValue());
+        assertEquals(1, ssmService.putParameter("/awesome/param", "ok", "String", null, false, REGION));
+    }
+
+    @Test
     void publicParametersAreNotTheAccountsOwn() {
         ssmService.getParameter(AL2023_DEFAULT, REGION);
 
