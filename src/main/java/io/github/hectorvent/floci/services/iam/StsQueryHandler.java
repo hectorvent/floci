@@ -274,6 +274,12 @@ public class StsQueryHandler {
         WebIdentityToken claims;
         try {
             claims = tokenVerifier.verify(token, key.get(), issuer.get(), STS_AUDIENCE);
+        } catch (WebIdentityTokenVerifier.ExpiredTokenException e) {
+            LOG.debugv("Rejecting web identity token for role {0}: {1}", roleArn, e.getMessage());
+            return WebIdentityOutcome.deny(AwsQueryResponse.error("ExpiredTokenException",
+                    "The web identity token that was passed is expired or is not valid. Get a new "
+                            + "identity token from the identity provider and then retry the request.",
+                    AwsNamespaces.STS, 400));
         } catch (WebIdentityTokenVerifier.InvalidTokenException e) {
             LOG.debugv("Rejecting web identity token for role {0}: {1}", roleArn, e.getMessage());
             return WebIdentityOutcome.deny(AwsQueryResponse.error("InvalidIdentityToken",

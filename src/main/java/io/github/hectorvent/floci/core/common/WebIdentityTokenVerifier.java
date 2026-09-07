@@ -54,6 +54,17 @@ public class WebIdentityTokenVerifier {
     }
 
     /**
+     * Thrown when a token is past its {@code exp} claim. STS reports this as
+     * {@code ExpiredTokenException} rather than {@code InvalidIdentityToken}, so callers can tell
+     * a stale token apart from one that can never verify.
+     */
+    public static class ExpiredTokenException extends InvalidTokenException {
+        public ExpiredTokenException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Reads the {@code iss} claim without verifying the signature. Returns empty when {@code token}
      * is not a parseable JWT at all — the caller must reject it.
      */
@@ -123,7 +134,7 @@ public class WebIdentityTokenVerifier {
             throw new InvalidTokenException("The web identity token has no expiration claim");
         }
         if (now > exp.asLong() + CLOCK_SKEW_SECONDS) {
-            throw new InvalidTokenException("The web identity token has expired");
+            throw new ExpiredTokenException("The web identity token has expired");
         }
 
         JsonNode nbf = claims.get("nbf");
