@@ -675,3 +675,24 @@ resource "aws_transfer_server" "compat" {
 output "transfer_server_id" {
   value = aws_transfer_server.compat.id
 }
+
+# -- CloudTrail Trail (issue #2800) --------------------------------------------
+# The provider sends tags inside CreateTrail and reads them back with ListTags on
+# every refresh, so this covers the post-create tag refresh path end to end.
+resource "aws_s3_bucket" "trail_logs" {
+  bucket        = "floci-compat-trail-logs"
+  force_destroy = true
+}
+
+resource "aws_cloudtrail" "compat" {
+  name           = "floci-compat-trail"
+  s3_bucket_name = aws_s3_bucket.trail_logs.id
+
+  tags = {
+    Environment = "compat-test"
+  }
+}
+
+output "cloudtrail_arn" {
+  value = aws_cloudtrail.compat.arn
+}
