@@ -602,6 +602,45 @@ class RdsContainerManagerTest {
         assertEquals(handle, manager.getActiveHandle(runtimeId));
     }
 
+    @Test
+    void tryStartKeepsAndLaterCleansTheIdentityOfAContainerCreatedBeforeTheDaemonWentAway() {
+        // Docker answered the create and then went away: the created container must stay known
+        // so the retry removes it once the daemon is back, rather than being forgotten.
+        ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
+        when(lifecycleManager.create(any())).thenReturn("created-container");
+        when(lifecycleManager.startCreated(any(), any()))
+                .thenThrow(new IllegalStateException("java.net.SocketException: Connection reset"));
+        doThrow(new IllegalStateException("Failed to remove container created-container"))
+                .when(lifecycleManager).stopAndRemoveStrict(any(), any());
+        when(lifecycleManager.getDockerClient()).thenThrow(
+                new RuntimeException("java.net.SocketException: No such file or directory"));
+        RdsContainerManager manager = daemonlessCapableManager(lifecycleManager);
+        String runtimeId = "arn:aws:rds:us-east-1:000000000000:db:db1";
+
+        assertNull(manager.tryStart(runtimeId, "db1", "db1", "floci-rds-db1",
+                DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db"));
+        assertEquals("created-container", manager.getActiveHandle(runtimeId).getContainerId());
+
+        // Still no daemon: the retry keeps the identity rather than dropping it.
+        assertNull(manager.tryStart(runtimeId, "db1", "db1", "floci-rds-db1",
+                DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db"));
+        assertEquals("created-container", manager.getActiveHandle(runtimeId).getContainerId());
+
+        // The daemon is back: the leftover is removed first, then the start goes through.
+        org.mockito.Mockito.reset(lifecycleManager);
+        stubStarts(lifecycleManager, new ContainerLifecycleManager.ContainerInfo(
+                "late-container", Map.of(3306, new ContainerLifecycleManager.EndpointInfo("db1", 3306))));
+        DockerClient dockerClient = mock(DockerClient.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        when(lifecycleManager.getDockerClient()).thenReturn(dockerClient);
+
+        RdsContainerHandle handle = manager.tryStart(runtimeId, "db1", "db1", "floci-rds-db1",
+                DatabaseEngine.MYSQL, "mysql:8.0", "root", "password", "db");
+
+        assertEquals("late-container", handle.getContainerId());
+        verify(lifecycleManager).stopAndRemoveStrict(
+                org.mockito.ArgumentMatchers.eq("created-container"), any());
+    }
+
     private RdsContainerManager daemonlessCapableManager(ContainerLifecycleManager lifecycleManager) {
         EmulatorConfig config = config(tempDir.resolve("host-root"));
         ContainerLogStreamer logStreamer = mock(ContainerLogStreamer.class);

@@ -1442,7 +1442,8 @@ public class RdsService implements Resettable, ResourceProvider {
      * one, because no Docker daemon was reachable when it was created, rebooted or restored.
      * Every operation that needs the live database calls this first, so the backend comes up as
      * soon as a daemon appears. Instances that already have a backend, and mock-mode instances,
-     * are returned untouched.
+     * are returned untouched. The record is only updated once both halves are up, so a proxy
+     * failure leaves it retrying next time instead of pointing at a container nothing listens on.
      *
      * @return the instance, with its container fields populated when a backend became available
      */
@@ -1455,43 +1456,55 @@ public class RdsService implements Resettable, ResourceProvider {
         }
 
         String clusterId = instance.getDbClusterIdentifier();
+        RdsContainerHandle started = null;
+        String backendContainerId;
+        String backendHost;
+        int backendPort;
         if (clusterId != null && !clusterId.isBlank()) {
             DbCluster cluster = ensureClusterBackend(clusterId, effectiveRegion);
             if (!hasBackend(cluster.getContainerHost(), cluster.getContainerPort())) {
                 return instance;
             }
-            instance.setContainerId(cluster.getContainerId());
-            instance.setContainerHost(cluster.getContainerHost());
-            instance.setContainerPort(cluster.getContainerPort());
+            backendContainerId = cluster.getContainerId();
+            backendHost = cluster.getContainerHost();
+            backendPort = cluster.getContainerPort();
         } else {
             String image = imageForEngine(instance.getEngine(), instance.getEngineVersion());
-            String storageResourceId = resolvedInstanceStorageResourceId(instance);
-            String dockerVolumeName = resolvedInstanceDockerVolumeName(instance);
-            RdsContainerHandle handle = containerManager.tryStart(
-                    instance.getDbInstanceArn(), id, storageResourceId, dockerVolumeName,
-                    instance.getEngine(), image, instance.getMasterUsername(),
-                    instance.getMasterPassword(), instance.getDbName());
-            if (handle == null) {
+            started = containerManager.tryStart(
+                    instance.getDbInstanceArn(), id, resolvedInstanceStorageResourceId(instance),
+                    resolvedInstanceDockerVolumeName(instance), instance.getEngine(), image,
+                    instance.getMasterUsername(), instance.getMasterPassword(), instance.getDbName());
+            if (started == null) {
                 return instance;
             }
-            instance.setContainerStorageResourceId(storageResourceId);
-            instance.setDockerVolumeName(dockerVolumeName);
-            instance.setContainerId(handle.getContainerId());
-            instance.setContainerHost(handle.getHost());
-            instance.setContainerPort(handle.getPort());
+            backendContainerId = started.getContainerId();
+            backendHost = started.getHost();
+            backendPort = started.getPort();
         }
 
         String effectiveMasterUser = instance.getMasterUsername() != null
                 ? instance.getMasterUsername() : "root";
         final String accountId = accountIdFromArn(instance.getDbInstanceArn());
         final String instanceRegion = regionFromArn(instance.getDbInstanceArn());
-        proxyManager.startProxy(rdsResourceRelayKey(instance.getDbInstanceArn(), id),
-                instance.getEngine(), instance.isIamDatabaseAuthenticationEnabled(),
-                instance.getProxyPort(), instance.getContainerHost(), instance.getContainerPort(),
-                instance.getEndpoint().address(),
-                effectiveMasterUser, instance.getMasterPassword(), instance.getDbName(),
-                (user, pw) -> validateDbPasswordForScope(
-                        accountId, instanceRegion, id, user, pw));
+        try {
+            proxyManager.startProxy(rdsResourceRelayKey(instance.getDbInstanceArn(), id),
+                    instance.getEngine(), instance.isIamDatabaseAuthenticationEnabled(),
+                    instance.getProxyPort(), backendHost, backendPort,
+                    instance.getEndpoint().address(),
+                    effectiveMasterUser, instance.getMasterPassword(), instance.getDbName(),
+                    (user, pw) -> validateDbPasswordForScope(
+                            accountId, instanceRegion, id, user, pw));
+        } catch (RuntimeException e) {
+            stopStartedBackend(started, e);
+            throw e;
+        }
+        if (started != null) {
+            instance.setContainerStorageResourceId(resolvedInstanceStorageResourceId(instance));
+            instance.setDockerVolumeName(resolvedInstanceDockerVolumeName(instance));
+        }
+        instance.setContainerId(backendContainerId);
+        instance.setContainerHost(backendHost);
+        instance.setContainerPort(backendPort);
         putInstanceForScope(currentAccountId(), effectiveRegion, id, instance);
         LOG.infov("Backing database container for DB instance {0} started on retry", id);
         return instance;
@@ -1513,33 +1526,51 @@ public class RdsService implements Resettable, ResourceProvider {
         String image = imageForEngine(cluster.getEngine(), cluster.getEngineVersion());
         String storageResourceId = resolvedClusterStorageResourceId(cluster);
         String dockerVolumeName = resolvedClusterDockerVolumeName(cluster);
-        RdsContainerHandle handle = containerManager.tryStart(
+        RdsContainerHandle started = containerManager.tryStart(
                 cluster.getDbClusterArn(), id, storageResourceId, dockerVolumeName,
                 cluster.getEngine(), image, cluster.getMasterUsername(),
                 cluster.getMasterPassword(), cluster.getDatabaseName());
-        if (handle == null) {
+        if (started == null) {
             return cluster;
         }
-        cluster.setContainerStorageResourceId(storageResourceId);
-        cluster.setDockerVolumeName(dockerVolumeName);
-        cluster.setContainerId(handle.getContainerId());
-        cluster.setContainerHost(handle.getHost());
-        cluster.setContainerPort(handle.getPort());
 
         String effectiveMasterUser = cluster.getMasterUsername() != null
                 ? cluster.getMasterUsername() : "root";
         final String accountId = accountIdFromArn(cluster.getDbClusterArn());
         final String clusterRegion = regionFromArn(cluster.getDbClusterArn());
-        proxyManager.startProxy(rdsResourceRelayKey(cluster.getDbClusterArn(), id),
-                cluster.getEngine(), cluster.isIamDatabaseAuthenticationEnabled(),
-                cluster.getProxyPort(), cluster.getContainerHost(), cluster.getContainerPort(),
-                cluster.getEndpoint().address(),
-                effectiveMasterUser, cluster.getMasterPassword(), cluster.getDatabaseName(),
-                (user, pw) -> validateDbClusterPasswordForScope(
-                        accountId, clusterRegion, id, user, pw));
+        try {
+            proxyManager.startProxy(rdsResourceRelayKey(cluster.getDbClusterArn(), id),
+                    cluster.getEngine(), cluster.isIamDatabaseAuthenticationEnabled(),
+                    cluster.getProxyPort(), started.getHost(), started.getPort(),
+                    cluster.getEndpoint().address(),
+                    effectiveMasterUser, cluster.getMasterPassword(), cluster.getDatabaseName(),
+                    (user, pw) -> validateDbClusterPasswordForScope(
+                            accountId, clusterRegion, id, user, pw));
+        } catch (RuntimeException e) {
+            stopStartedBackend(started, e);
+            throw e;
+        }
+        cluster.setContainerStorageResourceId(storageResourceId);
+        cluster.setDockerVolumeName(dockerVolumeName);
+        cluster.setContainerId(started.getContainerId());
+        cluster.setContainerHost(started.getHost());
+        cluster.setContainerPort(started.getPort());
         putClusterForScope(currentAccountId(), effectiveRegion, id, cluster);
         LOG.infov("Backing database container for DB cluster {0} started on retry", id);
         return cluster;
+    }
+
+    private void stopStartedBackend(RdsContainerHandle started, RuntimeException proxyFailure) {
+        if (started == null) {
+            return;
+        }
+        try {
+            containerManager.stop(started);
+        } catch (RuntimeException | Error stopFailure) {
+            proxyFailure.addSuppressed(stopFailure);
+            LOG.warnv(stopFailure, "Failed to stop container {0} after its auth proxy did not start",
+                    started.getContainerId());
+        }
     }
 
     /**

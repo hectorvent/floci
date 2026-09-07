@@ -1687,6 +1687,35 @@ class RdsServiceTest {
     }
 
     @Test
+    void retryLeavesTheRecordWithoutABackendWhenTheProxyDoesNotStart() {
+        when(containerManager.tryStart(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(null);
+        DbInstance created = rdsService.createDbInstance("probe-db", "postgres", "16.3",
+                "admin", "password", "dbname", "db.t3.micro",
+                20, false, null, null, null);
+        RdsContainerHandle late = new RdsContainerHandle("late-container", created.getDbInstanceArn(),
+                "probe-db", "127.0.0.1", 15432);
+        when(containerManager.tryStart(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(late);
+        doThrow(new IllegalStateException("port in use")).doNothing()
+                .when(proxyManager).startProxy(any(), any(), anyBoolean(), anyInt(), any(), anyInt(),
+                        any(), any(), any(), any(), any());
+
+        assertThrows(IllegalStateException.class,
+                () -> rdsService.ensureInstanceBackend("probe-db", "us-east-1"));
+
+        // The container is stopped and the record still says it has no backend, so the next
+        // call retries both halves instead of returning a container nothing listens on.
+        verify(containerManager).stop(late);
+        assertNull(rdsService.getDbInstance("probe-db").getContainerId());
+
+        DbInstance started = rdsService.ensureInstanceBackend("probe-db", "us-east-1");
+        assertEquals("late-container", started.getContainerId());
+        verify(containerManager, times(3))
+                .tryStart(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void clusterMemberBackendIsRetriedThroughItsCluster() {
         when(containerManager.tryStart(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(null);
