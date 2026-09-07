@@ -86,6 +86,7 @@ public class DynamoDbService implements ResourceProvider {
     // Items stored per table: storageKey -> Map<itemKey, item>
     // itemKey is "pk" or "pk#sk" depending on table schema
     private final ConcurrentHashMap<String, ConcurrentSkipListMap<String, JsonNode>> itemsByTable = new ConcurrentHashMap<>();
+
     // Per-item locks: storageKey -> itemKey -> ReentrantLock. Locks are created lazily
     // on first access and cleared with the table (see deleteTable); transactWriteItems
     // relies on ReentrantLock's re-entrancy so the inner put/update/delete calls do
@@ -183,7 +184,7 @@ public class DynamoDbService implements ResourceProvider {
 
     private void persistItems(String storageKey) {
         if (itemStore == null) return;
-        var items = itemsByTable.get(scopedItemsKey(storageKey));
+        var items = currentItems(storageKey, false);
         if (items != null) {
             itemStore.put(storageKey, new HashMap<>(items));
         } else {
@@ -559,6 +560,17 @@ public class DynamoDbService implements ResourceProvider {
                                   String region, String returnValuesOnConditionCheckFailure,
                                   boolean shouldPersist,
                                   Consumer<Runnable> deferredStreamEvents) {
+        return putItemInternal(tableName, item, conditionExpression, exprAttrNames, exprAttrValues,
+                region, returnValuesOnConditionCheckFailure, shouldPersist, deferredStreamEvents, null);
+    }
+
+    private JsonNode putItemInternal(String tableName, JsonNode item,
+                                  String conditionExpression,
+                                  JsonNode exprAttrNames, JsonNode exprAttrValues,
+                                  String region, String returnValuesOnConditionCheckFailure,
+                                  boolean shouldPersist,
+                                  Consumer<Runnable> deferredStreamEvents,
+                                  Map<String, ConcurrentSkipListMap<String, JsonNode>> stagedItems) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
         TableDefinition table = tableStore.get(storageKey)
@@ -571,7 +583,7 @@ public class DynamoDbService implements ResourceProvider {
         validateIndexKeyTypes(table, normalizedItem, false);
 
         return withItemLock(storageKey, itemKey, () -> {
-            var tableItems = itemsByTable.computeIfAbsent(scopedItemsKey(storageKey), k -> new ConcurrentSkipListMap<>());
+            var tableItems = itemsFor(storageKey, stagedItems, true);
 
             JsonNode existing = tableItems.get(itemKey);
 
@@ -615,7 +627,7 @@ public class DynamoDbService implements ResourceProvider {
                 .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
 
         String itemKey = buildItemKey(table, key, true);
-        var items = itemsByTable.get(scopedItemsKey(storageKey));
+        var items = currentItems(storageKey, false);
         if (items == null) {
             LOG.tracev("Got item from {0}: key={1} item=<not found>", canonicalTableName, itemKey);
             return null;
@@ -656,6 +668,17 @@ public class DynamoDbService implements ResourceProvider {
                                          String region, String returnValuesOnConditionCheckFailure,
                                          boolean shouldPersist,
                                          Consumer<Runnable> deferredStreamEvents) {
+        return deleteItemInternal(tableName, key, conditionExpression, exprAttrNames, exprAttrValues,
+                region, returnValuesOnConditionCheckFailure, shouldPersist, deferredStreamEvents, null);
+    }
+
+    private JsonNode deleteItemInternal(String tableName, JsonNode key,
+                                         String conditionExpression,
+                                         JsonNode exprAttrNames, JsonNode exprAttrValues,
+                                         String region, String returnValuesOnConditionCheckFailure,
+                                         boolean shouldPersist,
+                                         Consumer<Runnable> deferredStreamEvents,
+                                         Map<String, ConcurrentSkipListMap<String, JsonNode>> stagedItems) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
         TableDefinition table = tableStore.get(storageKey)
@@ -664,7 +687,7 @@ public class DynamoDbService implements ResourceProvider {
         String itemKey = buildItemKey(table, key, true);
 
         return withItemLock(storageKey, itemKey, () -> {
-            var items = itemsByTable.get(scopedItemsKey(storageKey));
+            var items = itemsFor(storageKey, stagedItems, false);
             if (items == null) return null;
 
             if (conditionExpression != null) {
@@ -739,6 +762,20 @@ public class DynamoDbService implements ResourceProvider {
                                              String returnValuesOnConditionCheckFailure,
                                              boolean shouldPersist,
                                              Consumer<Runnable> deferredStreamEvents) {
+        return updateItemInternal(tableName, key, attributeUpdates, updateExpression,
+                expressionAttrNames, expressionAttrValues, returnValues,
+                conditionExpression, region, returnValuesOnConditionCheckFailure, shouldPersist,
+                deferredStreamEvents, null);
+    }
+
+    private UpdateResult updateItemInternal(String tableName, JsonNode key, JsonNode attributeUpdates,
+                                             String updateExpression,
+                                             JsonNode expressionAttrNames, JsonNode expressionAttrValues,
+                                             String returnValues, String conditionExpression, String region,
+                                             String returnValuesOnConditionCheckFailure,
+                                             boolean shouldPersist,
+                                             Consumer<Runnable> deferredStreamEvents,
+                                             Map<String, ConcurrentSkipListMap<String, JsonNode>> stagedItems) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
         TableDefinition table = tableStore.get(storageKey)
@@ -747,7 +784,7 @@ public class DynamoDbService implements ResourceProvider {
         String itemKey = buildItemKey(table, key, true);
 
         return withItemLock(storageKey, itemKey, () -> {
-            var items = itemsByTable.computeIfAbsent(scopedItemsKey(storageKey), k -> new ConcurrentSkipListMap<>());
+            var items = itemsFor(storageKey, stagedItems, true);
 
             // Get existing item or create new one from key
             JsonNode existing = items.get(itemKey);
@@ -1330,11 +1367,26 @@ public class DynamoDbService implements ResourceProvider {
                 acquired.add(lock);
             }
 
-            // First pass: evaluate all conditions and collect failures.
+            List<Runnable> pendingStreamEvents = new ArrayList<>();
+            Set<String> affectedStorageKeys = new LinkedHashSet<>();
+            Map<String, ConcurrentSkipListMap<String, JsonNode>> staged = new HashMap<>();
+            for (TransactParticipant participant : toAcquire.keySet()) {
+                ConcurrentSkipListMap<String, JsonNode> stagedTable =
+                        staged.computeIfAbsent(participant.storageKey(), ignored -> new ConcurrentSkipListMap<>());
+                ConcurrentSkipListMap<String, JsonNode> live = itemsByTable.get(scopedItemsKey(participant.storageKey()));
+                if (live != null) {
+                    JsonNode existing = live.get(participant.itemKey());
+                    if (existing != null) {
+                        stagedTable.put(participant.itemKey(), existing);
+                    }
+                }
+            }
+
             List<TransactionCanceledException.CancellationReason> cancellationReasons = new ArrayList<>();
             boolean hasFailed = false;
             for (JsonNode transactItem : transactItems) {
-                TransactionCanceledException.CancellationReason failReason = evaluateTransactCondition(transactItem, region);
+                TransactionCanceledException.CancellationReason failReason =
+                        evaluateTransactCondition(transactItem, region, staged);
                 if (failReason != null) {
                     hasFailed = true;
                     cancellationReasons.add(failReason);
@@ -1342,87 +1394,57 @@ public class DynamoDbService implements ResourceProvider {
                     cancellationReasons.add(new TransactionCanceledException.CancellationReason("", null));
                 }
             }
-
             if (hasFailed) {
                 throw new TransactionCanceledException(cancellationReasons);
             }
 
-            // Pre-validation pass: validate all operations before mutating memory or emitting stream effects
             for (JsonNode transactItem : transactItems) {
-                validateTransactItem(transactItem, region);
+                validateTransactItem(transactItem, region, staged);
             }
-
-            // Second pass: apply all writes with rollback protection and deferred streams
-            record RollbackEntry(String storageKey, String itemKey, JsonNode previousValue) {}
-            List<RollbackEntry> rollbackList = new ArrayList<>();
-            List<Runnable> pendingStreamEvents = new ArrayList<>();
-            Set<String> affectedStorageKeys = new LinkedHashSet<>();
-            boolean transactionSucceeded = false;
-            try {
-                for (JsonNode transactItem : transactItems) {
-                    if (transactItem.has("Put")) {
-                        JsonNode put = transactItem.get("Put");
-                        String tableName = put.path("TableName").asText();
-                        JsonNode item = put.get("Item");
-                        String canonicalTableName = canonicalTableName(region, tableName);
-                        String storageKey = regionKey(region, canonicalTableName);
-                        TableDefinition table = tableStore.get(storageKey)
-                                .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
-                        String itemKey = buildItemKey(table, item);
-                        JsonNode prev = putItemInternal(tableName, item, null, null, null, region, "NONE", false, pendingStreamEvents::add);
-                        rollbackList.add(new RollbackEntry(storageKey, itemKey, prev));
-                        affectedStorageKeys.add(storageKey);
-                    } else if (transactItem.has("Delete")) {
-                        JsonNode del = transactItem.get("Delete");
-                        String tableName = del.path("TableName").asText();
-                        JsonNode key = del.get("Key");
-                        String canonicalTableName = canonicalTableName(region, tableName);
-                        String storageKey = regionKey(region, canonicalTableName);
-                        TableDefinition table = tableStore.get(storageKey)
-                                .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
-                        String itemKey = buildItemKey(table, key, true);
-                        JsonNode prev = deleteItemInternal(tableName, key, null, null, null, region, "NONE", false, pendingStreamEvents::add);
-                        rollbackList.add(new RollbackEntry(storageKey, itemKey, prev));
-                        affectedStorageKeys.add(storageKey);
-                    } else if (transactItem.has("Update")) {
-                        JsonNode upd = transactItem.get("Update");
-                        String tableName = upd.path("TableName").asText();
-                        JsonNode key = upd.get("Key");
-                        String canonicalTableName = canonicalTableName(region, tableName);
-                        String storageKey = regionKey(region, canonicalTableName);
-                        TableDefinition table = tableStore.get(storageKey)
-                                .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
-                        String itemKey = buildItemKey(table, key, true);
-                        String updateExpression = upd.has("UpdateExpression") ? upd.get("UpdateExpression").asText() : null;
-                        JsonNode exprAttrNames = upd.has("ExpressionAttributeNames") ? upd.get("ExpressionAttributeNames") : null;
-                        JsonNode exprAttrValues = upd.has("ExpressionAttributeValues") ? upd.get("ExpressionAttributeValues") : null;
-                        UpdateResult res = updateItemInternal(tableName, key, null, updateExpression, exprAttrNames, exprAttrValues,
-                                   "NONE", null, region, "NONE", false, pendingStreamEvents::add);
-                        rollbackList.add(new RollbackEntry(storageKey, itemKey, res.oldItem()));
-                        affectedStorageKeys.add(storageKey);
-                    }
-                    // ConditionCheck-only items are handled in the first pass only
-                }
-                for (String storageKey : affectedStorageKeys) {
-                    persistItems(storageKey);
-                }
-                transactionSucceeded = true;
-            } finally {
-                if (!transactionSucceeded) {
-                    for (int i = rollbackList.size() - 1; i >= 0; i--) {
-                        RollbackEntry r = rollbackList.get(i);
-                        var tableItems = itemsByTable.get(scopedItemsKey(r.storageKey()));
-                        if (tableItems != null) {
-                            if (r.previousValue() == null) {
-                                tableItems.remove(r.itemKey());
-                            } else {
-                                tableItems.put(r.itemKey(), r.previousValue());
-                            }
-                        }
-                    }
+            for (JsonNode transactItem : transactItems) {
+                if (transactItem.has("Put")) {
+                    JsonNode put = transactItem.get("Put");
+                    String tableName = put.path("TableName").asText();
+                    String storageKey = regionKey(region, canonicalTableName(region, tableName));
+                    putItemInternal(tableName, put.get("Item"), null, null, null, region, "NONE", false,
+                            pendingStreamEvents::add, staged);
+                    affectedStorageKeys.add(storageKey);
+                } else if (transactItem.has("Delete")) {
+                    JsonNode del = transactItem.get("Delete");
+                    String tableName = del.path("TableName").asText();
+                    String storageKey = regionKey(region, canonicalTableName(region, tableName));
+                    deleteItemInternal(tableName, del.get("Key"), null, null, null, region, "NONE", false,
+                            pendingStreamEvents::add, staged);
+                    affectedStorageKeys.add(storageKey);
+                } else if (transactItem.has("Update")) {
+                    JsonNode upd = transactItem.get("Update");
+                    String tableName = upd.path("TableName").asText();
+                    String storageKey = regionKey(region, canonicalTableName(region, tableName));
+                    updateItemInternal(tableName, upd.get("Key"), null,
+                            upd.has("UpdateExpression") ? upd.get("UpdateExpression").asText() : null,
+                            upd.has("ExpressionAttributeNames") ? upd.get("ExpressionAttributeNames") : null,
+                            upd.has("ExpressionAttributeValues") ? upd.get("ExpressionAttributeValues") : null,
+                            "NONE", null, region, "NONE", false, pendingStreamEvents::add, staged);
+                    affectedStorageKeys.add(storageKey);
                 }
             }
 
+            // Each participant remains protected by the locks acquired above. Only participant
+            // entries are committed, so concurrent writes to other items are never overwritten.
+            for (TransactParticipant participant : toAcquire.keySet()) {
+                ConcurrentSkipListMap<String, JsonNode> live = itemsByTable.computeIfAbsent(
+                        scopedItemsKey(participant.storageKey()), ignored -> new ConcurrentSkipListMap<>());
+                ConcurrentSkipListMap<String, JsonNode> stagedTable = staged.get(participant.storageKey());
+                JsonNode value = stagedTable.get(participant.itemKey());
+                if (value == null) {
+                    live.remove(participant.itemKey());
+                } else {
+                    live.put(participant.itemKey(), value);
+                }
+            }
+            for (String storageKey : affectedStorageKeys) {
+                persistItems(storageKey);
+            }
             for (Runnable streamEvent : pendingStreamEvents) {
                 streamEvent.run();
             }
@@ -1469,6 +1491,12 @@ public class DynamoDbService implements ResourceProvider {
     }
 
     private TransactionCanceledException.CancellationReason evaluateTransactCondition(JsonNode transactItem, String region) {
+        return evaluateTransactCondition(transactItem, region, null);
+    }
+
+    private TransactionCanceledException.CancellationReason evaluateTransactCondition(
+            JsonNode transactItem, String region,
+            Map<String, ConcurrentSkipListMap<String, JsonNode>> stagedItems) {
         JsonNode target;
         if (transactItem.has("Put")) {
             target = transactItem.get("Put");
@@ -1501,7 +1529,7 @@ public class DynamoDbService implements ResourceProvider {
                 .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
 
         String itemKey = buildItemKey(table, key);
-        var tableItems = itemsByTable.get(scopedItemsKey(storageKey));
+        var tableItems = itemsFor(storageKey, stagedItems, false);
         JsonNode existing = tableItems != null ? tableItems.get(itemKey) : null;
 
         try {
@@ -1536,6 +1564,11 @@ public class DynamoDbService implements ResourceProvider {
     }
 
     private void validateTransactItem(JsonNode transactItem, String region) {
+        validateTransactItem(transactItem, region, null);
+    }
+
+    private void validateTransactItem(JsonNode transactItem, String region,
+                                      Map<String, ConcurrentSkipListMap<String, JsonNode>> stagedItems) {
         if (transactItem.has("Put")) {
             JsonNode put = transactItem.get("Put");
             String tableName = canonicalTableName(region, put.path("TableName").asText());
@@ -1572,7 +1605,7 @@ public class DynamoDbService implements ResourceProvider {
                 throw new AwsException("ValidationException", "Key is required for Update", 400);
             }
             String itemKey = buildItemKey(table, key, true);
-            var items = itemsByTable.get(scopedItemsKey(storageKey));
+            var items = itemsFor(storageKey, stagedItems, false);
             JsonNode existing = items != null ? items.get(itemKey) : null;
             ObjectNode item = existing != null ? existing.deepCopy() : key.deepCopy();
 
@@ -2967,6 +3000,25 @@ public class DynamoDbService implements ResourceProvider {
     // can be used directly as an itemsByTable/itemLocks key.
     private String scopedItemsKey(String storageKey) {
         return regionResolver.getAccountId() + "/" + storageKey;
+    }
+
+    private ConcurrentSkipListMap<String, JsonNode> currentItems(String storageKey, boolean create) {
+        return itemsFor(storageKey, null, create);
+    }
+
+    private ConcurrentSkipListMap<String, JsonNode> itemsFor(
+            String storageKey,
+            Map<String, ConcurrentSkipListMap<String, JsonNode>> stagedItems,
+            boolean create) {
+        if (stagedItems != null) {
+            if (create) {
+                return stagedItems.computeIfAbsent(storageKey, ignored -> new ConcurrentSkipListMap<>());
+            }
+            return stagedItems.get(storageKey);
+        }
+        return create
+                ? itemsByTable.computeIfAbsent(scopedItemsKey(storageKey), k -> new ConcurrentSkipListMap<>())
+                : itemsByTable.get(scopedItemsKey(storageKey));
     }
 
     private ReentrantLock lockFor(String storageKey, String itemKey) {

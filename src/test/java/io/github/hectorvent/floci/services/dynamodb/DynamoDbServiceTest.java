@@ -30,6 +30,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class DynamoDbServiceTest {
 
@@ -76,6 +77,99 @@ class DynamoDbServiceTest {
             node.set(kvPairs[i], attributeValue("S", kvPairs[i + 1]));
         }
         return node;
+    }
+
+    @Test
+    void transactWriteDoesNotPartiallyApplyAfterFailedConditionCheck() throws Exception {
+        String region = "eu-west-1";
+        createUsersTable(region);
+        JsonNode put = mapper.readTree("""
+                {"Put":{"TableName":"Users","Item":{"userId":{"S":"new"},"name":{"S":"created"}}}}
+                """);
+        JsonNode invalidUpdate = mapper.readTree("""
+                {"ConditionCheck":{"TableName":"Users","Key":{"userId":{"S":"missing"}},
+                  "ConditionExpression":"attribute_exists(userId)"}}
+                """);
+
+        assertThrows(AwsException.class, () -> service.transactWriteItems(List.of(put, invalidUpdate), region));
+
+        assertNull(service.getItem("Users", mapper.readTree("{\"userId\":{\"S\":\"new\"}}"), region));
+    }
+
+    @Test
+    void transactWriteDoesNotPartiallyApplyAcrossTablesAfterFailedConditionCheck() throws Exception {
+        String region = "eu-west-1";
+        createUsersTable(region);
+        createOrdersTable(region);
+        JsonNode put = mapper.readTree("""
+                {"Put":{"TableName":"Users","Item":{"userId":{"S":"new"}}}}
+                """);
+        JsonNode invalidUpdate = mapper.readTree("""
+                {"ConditionCheck":{"TableName":"Orders","Key":{"customerId":{"S":"c"},"orderId":{"S":"o"}},
+                  "ConditionExpression":"attribute_exists(customerId)"}}
+                """);
+
+        assertThrows(AwsException.class, () -> service.transactWriteItems(List.of(put, invalidUpdate), region));
+
+        assertNull(service.getItem("Users", mapper.readTree("{\"userId\":{\"S\":\"new\"}}"), region));
+        assertNull(service.getItem("Orders", mapper.readTree("{\"customerId\":{\"S\":\"c\"},\"orderId\":{\"S\":\"o\"}}"), region));
+    }
+
+    @Test
+    void failedTransactWritePublishesNoStreamOrKinesisEvents() throws Exception {
+        String region = "eu-west-1";
+        DynamoDbStreamService stream = mock(DynamoDbStreamService.class);
+        KinesisStreamingForwarder kinesis = mock(KinesisStreamingForwarder.class);
+        service = new DynamoDbService(new InMemoryStorage<>(), null,
+                new RegionResolver(region, "000000000000"), stream, kinesis);
+        createUsersTable(region);
+        JsonNode put = mapper.readTree("""
+                {"Put":{"TableName":"Users","Item":{"userId":{"S":"new"}}}}
+                """);
+        JsonNode invalidUpdate = mapper.readTree("""
+                {"ConditionCheck":{"TableName":"Users","Key":{"userId":{"S":"missing"}},
+                  "ConditionExpression":"attribute_exists(userId)"}}
+                """);
+
+        assertThrows(AwsException.class, () -> service.transactWriteItems(List.of(put, invalidUpdate), region));
+
+        verifyNoInteractions(stream, kinesis);
+    }
+
+    @Test
+    void validTransactWriteCommitsAllMutations() throws Exception {
+        String region = "eu-west-1";
+        createUsersTable(region);
+        JsonNode put = mapper.readTree("""
+                {"Put":{"TableName":"Users","Item":{"userId":{"S":"new"}}}}
+                """);
+        JsonNode update = mapper.readTree("""
+                {"Update":{"TableName":"Users","Key":{"userId":{"S":"existing"}},
+                  "UpdateExpression":"SET #name = :name",
+                  "ExpressionAttributeNames":{"#name":"name"},
+                  "ExpressionAttributeValues":{":name":{"S":"updated"}}}}
+                """);
+
+        service.putItem("Users", mapper.readTree("{\"userId\":{\"S\":\"existing\"}}"), region);
+        service.transactWriteItems(List.of(put, update), region);
+
+        assertNotNull(service.getItem("Users", mapper.readTree("{\"userId\":{\"S\":\"new\"}}"), region));
+        assertEquals("updated", service.getItem("Users", mapper.readTree("{\"userId\":{\"S\":\"existing\"}}"), region).path("name").path("S").asText());
+    }
+
+    @Test
+    void failedTransactWriteLeavesExistingItemsUnchanged() throws Exception {
+        String region = "eu-west-1";
+        createUsersTable(region);
+        service.putItem("Users", item("userId", "existing", "name", "before"), region);
+        JsonNode invalidUpdate = mapper.readTree("""
+                {"ConditionCheck":{"TableName":"Users","Key":{"userId":{"S":"existing"}},
+                  "ConditionExpression":"attribute_not_exists(userId)"}}
+                """);
+
+        assertThrows(AwsException.class, () -> service.transactWriteItems(List.of(invalidUpdate), region));
+
+        assertEquals("before", service.getItem("Users", mapper.readTree("{\"userId\":{\"S\":\"existing\"}}"), region).path("name").path("S").asText());
     }
 
     @Test

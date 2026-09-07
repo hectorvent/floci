@@ -3467,6 +3467,57 @@ given()
     }
 
     @Test
+    void transactWriteFailureIsAtomicThroughAwsProtocol() {
+        String firstTable = "TxAtomicPublicOne";
+        String secondTable = "TxAtomicPublicTwo";
+        String createTable = """
+                {
+                  "TableName":"%s",
+                  "KeySchema":[{"AttributeName":"pk","KeyType":"HASH"}],
+                  "AttributeDefinitions":[{"AttributeName":"pk","AttributeType":"S"}],
+                  "BillingMode":"PAY_PER_REQUEST"
+                }
+                """;
+
+        for (String table : new String[]{firstTable, secondTable}) {
+            given().header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+                    .contentType(DYNAMODB_CONTENT_TYPE)
+                    .body(createTable.formatted(table))
+                    .when().post("/")
+                    .then().statusCode(200);
+        }
+
+        String transaction = """
+                {
+                  "TransactItems":[
+                    {"Put":{"TableName":"%s","Item":{"pk":{"S":"new"}}}},
+                    {"ConditionCheck":{"TableName":"%s","Key":{"pk":{"S":"bad"}},
+                      "ConditionExpression":"attribute_exists(pk)"}}
+                  ]
+                }
+                """.formatted(firstTable, secondTable);
+
+        given().header("X-Amz-Target", "DynamoDB_20120810.TransactWriteItems")
+                .contentType(DYNAMODB_CONTENT_TYPE)
+                .body(transaction)
+                .when().post("/")
+                .then().statusCode(400)
+                .body("__type", equalTo("TransactionCanceledException"));
+
+        for (String table : new String[]{firstTable, secondTable}) {
+            given().header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+                    .contentType(DYNAMODB_CONTENT_TYPE)
+                    .body("{\"TableName\":\"%s\",\"Key\":{\"pk\":{\"S\":\"new\"}}}".formatted(table))
+                    .when().post("/")
+                    .then().statusCode(200)
+                    .body("Item", nullValue());
+        }
+
+        deleteTable(firstTable);
+        deleteTable(secondTable);
+    }
+
+    @Test
     void nullTypedKeyAttributeIsRejected() {
         given()
             .header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
