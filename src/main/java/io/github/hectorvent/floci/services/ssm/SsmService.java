@@ -195,13 +195,17 @@ public class SsmService implements ResourceProvider {
     }
 
     /**
-     * AWS reserves the {@code aws} and {@code ssm} prefixes, with or without a leading slash
-     * and regardless of case, so an account can never write over a public parameter.
+     * AWS reserves the {@code aws} and {@code ssm} namespaces, with or without a leading slash
+     * and regardless of case, so an account can never write over a public parameter. The rule
+     * keys on the first path segment rather than a bare prefix, so a name such as
+     * {@code ssm-auto-stack-Param-ABC}, which CloudFormation generates for a stack whose name
+     * starts with ssm, is still accepted.
      */
     private static void rejectReservedName(String name) {
         String bare = name == null ? "" : name.startsWith("/") ? name.substring(1) : name;
         String lower = bare.toLowerCase(Locale.ROOT);
-        if (lower.startsWith("aws") || lower.startsWith("ssm")) {
+        if (lower.equals("aws") || lower.equals("ssm")
+                || lower.startsWith("aws/") || lower.startsWith("ssm/")) {
             throw new AwsException("ValidationException",
                     "Parameter name: can't be prefixed with \"aws\" or \"ssm\" (case-insensitive). "
                             + "If formed as a path, it can consist of sub-paths divided by slash symbol; "

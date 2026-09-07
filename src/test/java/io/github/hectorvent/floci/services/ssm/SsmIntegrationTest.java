@@ -1365,6 +1365,20 @@ class SsmIntegrationTest {
             .body("__type", equalTo("ValidationException"))
             .body("message", containsString("can't be prefixed with \"aws\" or \"ssm\""));
 
+        // Only the aws and ssm path segments are reserved, so a CloudFormation-generated name
+        // for a stack called ssm-auto-stack still writes.
+        given()
+            .header("X-Amz-Target", "AmazonSSM.PutParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                { "Name": "ssm-auto-stack-Param-ABC123", "Value": "ok", "Type": "String" }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Version", equalTo(1));
+
         given()
             .header("X-Amz-Target", "AmazonSSM.GetParameter")
             .contentType(SSM_CONTENT_TYPE)

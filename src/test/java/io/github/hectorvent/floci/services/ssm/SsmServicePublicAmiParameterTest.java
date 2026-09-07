@@ -90,15 +90,19 @@ class SsmServicePublicAmiParameterTest {
 
     @Test
     void putParameterRejectsTheReservedPrefixesSoPublicNamesCannotBeShadowed() {
-        for (String name : List.of(AL2023_DEFAULT, "/aws/custom", "aws-custom", "/AWS/custom",
-                "/ssm/custom", "SsmThing")) {
+        for (String name : List.of(AL2023_DEFAULT, "/aws/custom", "aws/custom", "/AWS/custom",
+                "/ssm/custom", "SSM/x", "/aws", "ssm")) {
             AwsException ex = assertThrows(AwsException.class, () ->
                     ssmService.putParameter(name, "ami-mine", "String", null, true, REGION), name);
             assertEquals("ValidationException", ex.getErrorCode(), name);
             assertEquals(400, ex.getHttpStatus(), name);
         }
         assertEquals("ami-0abcdef1234567891", ssmService.getParameter(AL2023_DEFAULT, REGION).getValue());
-        assertEquals(1, ssmService.putParameter("/awesome/param", "ok", "String", null, false, REGION));
+        // Only the aws and ssm path segments are reserved. CloudFormation names an
+        // AWS::SSM::Parameter after its stack, so a stack called ssm-auto-stack must still work.
+        for (String name : List.of("/awesome/param", "awsfoo", "ssm-thing", "ssm-auto-stack-Param-ABC")) {
+            assertEquals(1, ssmService.putParameter(name, "ok", "String", null, false, REGION), name);
+        }
     }
 
     @Test
