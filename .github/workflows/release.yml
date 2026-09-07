@@ -47,7 +47,12 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build native executable
-        run: mvn clean package -Dnative -DskipTests -B -Dquarkus.native.additional-build-args-append="-march=x86-64-v2"
+        # Quarkus 3.39 switches on -H:+AOTSingleCallsiteInline for Mandrel 25.0.4+. The generated
+        # REST invokers for AwsQueryController.dispatch and AwsJson11Controller.handle are each the
+        # single call site of a very large method; inlined, the method outgrows the aarch64
+        # conditional-branch range and the build dies with BranchTargetOutOfBoundsException.
+        # The flag only exists on Mandrel, so it is passed here rather than in application.yml.
+        run: mvn clean package -Dnative -DskipTests -B -Dquarkus.native.additional-build-args-append="-march=x86-64-v2,-H:-AOTSingleCallsiteInline"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -76,7 +81,12 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build native executable
-        run: mvn clean package -Dnative -DskipTests -B
+        # Quarkus 3.39 switches on -H:+AOTSingleCallsiteInline for Mandrel 25.0.4+. The generated
+        # REST invokers for AwsQueryController.dispatch and AwsJson11Controller.handle are each the
+        # single call site of a very large method; inlined, the method outgrows the aarch64
+        # conditional-branch range and the build dies with BranchTargetOutOfBoundsException.
+        # The flag only exists on Mandrel, so it is passed here rather than in application.yml.
+        run: mvn clean package -Dnative -DskipTests -B -Dquarkus.native.additional-build-args-append="-H:-AOTSingleCallsiteInline"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

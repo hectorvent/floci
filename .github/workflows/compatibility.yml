@@ -162,7 +162,12 @@ jobs:
           restore-keys: maven-${{ runner.os }}-
 
       - name: Build native executable (quick build)
-        run: mvn clean package -Dnative -DskipTests -B -Dquarkus.native.additional-build-args-append="-Ob"
+        # Quarkus 3.39 switches on -H:+AOTSingleCallsiteInline for Mandrel 25.0.4+. The generated
+        # REST invokers for AwsQueryController.dispatch and AwsJson11Controller.handle are each the
+        # single call site of a very large method; inlined, the method outgrows the aarch64
+        # conditional-branch range and the build dies with BranchTargetOutOfBoundsException.
+        # The flag only exists on Mandrel, so it is passed here rather than in application.yml.
+        run: mvn clean package -Dnative -DskipTests -B -Dquarkus.native.additional-build-args-append="-Ob,-H:-AOTSingleCallsiteInline"
 
       # Quarkus always writes GraalVM's build-output JSON next to the native source jar. Surfacing
       # it here gives every PR a size record for both architectures: code area, image heap, total
