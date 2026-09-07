@@ -3765,6 +3765,16 @@ public class Ec2QueryHandler {
             xml.start("networkInfo")
                     .elem("encryptionInTransitSupported",
                             String.valueOf(networkInfo.get("encryptionInTransitSupported")))
+                    .elem("defaultNetworkCardIndex", (Integer) networkInfo.get("defaultNetworkCardIndex"))
+                    .elem("ipv4AddressesPerInterface", (Integer) networkInfo.get("ipv4AddressesPerInterface"))
+                    .start("networkCards");
+            for (Map<String, Object> card : (List<Map<String, Object>>) networkInfo.get("networkCards")) {
+                xml.start("item")
+                        .elem("networkCardIndex", (Integer) card.get("networkCardIndex"))
+                        .elem("maximumNetworkInterfaces", (Integer) card.get("maximumNetworkInterfaces"))
+                        .end("item");
+            }
+            xml.end("networkCards")
                     .end("networkInfo")
                     .end("item");
         }
