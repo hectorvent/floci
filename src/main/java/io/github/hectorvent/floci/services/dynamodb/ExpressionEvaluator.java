@@ -470,8 +470,11 @@ final class ExpressionEvaluator {
         if (!lowType.equals(high.fieldNames().next()) || compareBoundValues(low, high) <= 0) {
             return;
         }
-        throw new AwsException("ValidationException",
-                "Invalid " + exprType + ": The BETWEEN operator requires upper bound to be greater than "
+        // AWS wraps the ConditionExpression form in its validation-error envelope, but reports
+        // the FilterExpression and KeyConditionExpression forms on their own.
+        String envelope = "ConditionExpression".equals(exprType) ? "1 validation error detected: " : "";
+        throw new AwsException("ValidationException", envelope
+                + "Invalid " + exprType + ": The BETWEEN operator requires upper bound to be greater than "
                 + "or equal to lower bound; lower bound operand: " + displayAttributeValue(low)
                 + ", upper bound operand: " + displayAttributeValue(high), 400);
     }

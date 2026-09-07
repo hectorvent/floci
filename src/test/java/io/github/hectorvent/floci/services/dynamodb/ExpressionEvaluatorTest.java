@@ -606,9 +606,9 @@ class ExpressionEvaluatorTest {
                     ExpressionEvaluator.validateExpression("n BETWEEN :hi AND :lo",
                             "ConditionExpression", null, values));
             assertEquals("ValidationException", e.getErrorCode());
-            assertEquals("Invalid ConditionExpression: The BETWEEN operator requires upper bound to be "
-                    + "greater than or equal to lower bound; lower bound operand: AttributeValue: {N:10}, "
-                    + "upper bound operand: AttributeValue: {N:1}", e.getMessage());
+            assertEquals("1 validation error detected: Invalid ConditionExpression: The BETWEEN operator "
+                    + "requires upper bound to be greater than or equal to lower bound; lower bound operand: "
+                    + "AttributeValue: {N:10}, upper bound operand: AttributeValue: {N:1}", e.getMessage());
         }
 
         // Checked against real DynamoDB (us-east-1, 2026-09-07): U+E000 as the lower bound
@@ -658,6 +658,22 @@ class ExpressionEvaluatorTest {
                             "ConditionExpression", null, malformed));
             assertEquals("SerializationException", serialization.getErrorCode());
             assertEquals(400, serialization.getHttpStatus());
+        }
+
+        // A FilterExpression carries the same text without the envelope on AWS.
+        @Test
+        void filterExpressionReportsTheReversedBoundsWithoutTheEnvelope() {
+            var mapper = new ObjectMapper();
+            var values = mapper.createObjectNode();
+            values.set(":hi", mapper.createObjectNode().put("N", "10"));
+            values.set(":lo", mapper.createObjectNode().put("N", "1"));
+
+            var e = assertThrows(AwsException.class, () ->
+                    ExpressionEvaluator.validateExpression("n BETWEEN :hi AND :lo",
+                            "FilterExpression", null, values));
+            assertEquals("Invalid FilterExpression: The BETWEEN operator requires upper bound to be "
+                    + "greater than or equal to lower bound; lower bound operand: AttributeValue: {N:10}, "
+                    + "upper bound operand: AttributeValue: {N:1}", e.getMessage());
         }
 
         @Test
