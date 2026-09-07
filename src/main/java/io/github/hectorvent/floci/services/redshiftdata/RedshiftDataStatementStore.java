@@ -27,6 +27,7 @@ class RedshiftDataStatementStore {
 
     private static final Logger LOG = Logger.getLogger(RedshiftDataStatementStore.class);
 
+    @RegisterForReflection
     enum Status { PICKED, STARTED, FINISHED, FAILED, ABORTED }
 
     // Statements live in the configured storage backend like every other service's state
