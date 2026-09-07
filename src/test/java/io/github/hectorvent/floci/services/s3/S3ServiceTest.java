@@ -838,6 +838,59 @@ class S3ServiceTest {
     }
 
     @Test
+    void analyticsAndInventoryConfigurationsOnABucketWithoutAnyBehaveAsEmpty() {
+        // A bucket persisted before these fields existed deserializes with null maps, which is
+        // the same shape a freshly created bucket has, so neither may fault.
+        s3Service.createBucket("no-configs", "us-east-1");
+
+        assertTrue(s3Service.listBucketAnalyticsConfigurations("no-configs")
+                .contains("<IsTruncated>false</IsTruncated>"));
+        assertTrue(s3Service.listBucketInventoryConfigurations("no-configs")
+                .contains("<IsTruncated>false</IsTruncated>"));
+        assertEquals("NoSuchConfiguration", assertThrows(AwsException.class,
+                () -> s3Service.getBucketAnalyticsConfiguration("no-configs", "any")).getErrorCode());
+        assertEquals("NoSuchConfiguration", assertThrows(AwsException.class,
+                () -> s3Service.deleteBucketInventoryConfiguration("no-configs", "any")).getErrorCode());
+
+        // And the first put still lands on it, in its own map.
+        s3Service.putBucketAnalyticsConfiguration("no-configs", "first", "<Id>first</Id>");
+        s3Service.putBucketInventoryConfiguration("no-configs", "first", "<Id>first</Id>");
+        assertTrue(s3Service.getBucketAnalyticsConfiguration("no-configs", "first")
+                .contains("<AnalyticsConfiguration"));
+        assertTrue(s3Service.getBucketInventoryConfiguration("no-configs", "first")
+                .contains("<InventoryConfiguration"));
+        assertEquals("NoSuchConfiguration", assertThrows(AwsException.class,
+                () -> s3Service.getBucketMetricsConfiguration("no-configs", "first")).getErrorCode());
+    }
+
+    @Test
+    void analyticsAndInventoryConfigurationsDoNotOutliveTheirBucket() {
+        s3Service.createBucket("recycled-configs", "us-east-1");
+        s3Service.putBucketAnalyticsConfiguration("recycled-configs", "old", "<Id>old</Id>");
+        s3Service.putBucketInventoryConfiguration("recycled-configs", "old", "<Id>old</Id>");
+        s3Service.deleteBucket("recycled-configs");
+
+        s3Service.createBucket("recycled-configs", "us-east-1");
+
+        assertEquals("NoSuchConfiguration", assertThrows(AwsException.class,
+                () -> s3Service.getBucketAnalyticsConfiguration("recycled-configs", "old")).getErrorCode());
+        assertEquals("NoSuchConfiguration", assertThrows(AwsException.class,
+                () -> s3Service.getBucketInventoryConfiguration("recycled-configs", "old")).getErrorCode());
+    }
+
+    @Test
+    void analyticsAndInventoryConfigurationsSurviveAJacksonRoundTrip() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        Bucket bucket = new Bucket("persisted-configs");
+        bucket.setAnalyticsConfigurations(new java.util.LinkedHashMap<>(Map.of("a", "<Id>a</Id>")));
+        bucket.setInventoryConfigurations(new java.util.LinkedHashMap<>(Map.of("i", "<Id>i</Id>")));
+
+        Bucket reloaded = mapper.readValue(mapper.writeValueAsString(bucket), Bucket.class);
+        assertEquals("<Id>a</Id>", reloaded.getAnalyticsConfigurations().get("a"));
+        assertEquals("<Id>i</Id>", reloaded.getInventoryConfigurations().get("i"));
+    }
+
+    @Test
     void metricsConfigurationsSurviveAJacksonRoundTrip() throws Exception {
         // Bucket records are persisted as JSON, so the configurations have to come back after a
         // restart, and a record written before the field existed has to still load.

@@ -2013,6 +2013,168 @@ public class S3Service implements Resettable, ResourceProvider {
         return new AwsException("NoSuchConfiguration", "The specified configuration does not exist.", 404);
     }
 
+    // --- Analytics Configurations ---
+
+    /**
+     * Stores an analytics configuration under {@code id}, replacing any configuration
+     * already stored under it. floci records the configuration and returns it; nothing is
+     * produced from it.
+     */
+    public void putBucketAnalyticsConfiguration(String bucketName, String id, String innerXml) {
+        Bucket bucket = requireBucket(bucketName);
+        // Read-modify-write of the bucket record, so it takes the same monitor as the other
+        // bucket-scoped mutations: without it two concurrent puts of different ids both start from
+        // the same map and one of the configurations is lost.
+        synchronized (bucket) {
+            requireSameRecord(bucketName, bucket);
+            Map<String, String> configurations = bucket.getAnalyticsConfigurations() != null
+                    ? new java.util.LinkedHashMap<>(bucket.getAnalyticsConfigurations())
+                    : new java.util.LinkedHashMap<>();
+            configurations.put(id, innerXml);
+            bucket.setAnalyticsConfigurations(configurations);
+            bucketStore.put(bucketName, bucket);
+        }
+        LOG.debugv("Put analytics configuration {0} on bucket: {1}", id, bucketName);
+    }
+
+    public String getBucketAnalyticsConfiguration(String bucketName, String id) {
+        Bucket bucket = requireBucket(bucketName);
+        String innerXml = bucket.getAnalyticsConfigurations() == null
+                ? null : bucket.getAnalyticsConfigurations().get(id);
+        if (innerXml == null) {
+            throw noSuchAnalyticsConfiguration();
+        }
+        return S3_XML_DECLARATION + new XmlBuilder()
+                .start("AnalyticsConfiguration", AwsNamespaces.S3)
+                .raw(innerXml)
+                .end("AnalyticsConfiguration")
+                .build();
+    }
+
+    /**
+     * Lists every analytics configuration on the bucket. AWS pages these with a continuation
+     * token; floci returns them all in one unpaged response, ordered by id so that the listing is
+     * stable.
+     */
+    public String listBucketAnalyticsConfigurations(String bucketName) {
+        Bucket bucket = requireBucket(bucketName);
+        Map<String, String> configurations = bucket.getAnalyticsConfigurations() != null
+                ? bucket.getAnalyticsConfigurations() : Map.of();
+
+        XmlBuilder xml = new XmlBuilder().start("ListBucketAnalyticsConfigurationResult", AwsNamespaces.S3);
+        configurations.keySet().stream().sorted().forEach(id -> xml
+                .start("AnalyticsConfiguration")
+                .raw(configurations.get(id))
+                .end("AnalyticsConfiguration"));
+        return S3_XML_DECLARATION + xml
+                .elem("IsTruncated", false)
+                .end("ListBucketAnalyticsConfigurationResult")
+                .build();
+    }
+
+    public void deleteBucketAnalyticsConfiguration(String bucketName, String id) {
+        Bucket bucket = requireBucket(bucketName);
+        // Same monitor as the put: the existence check and the write have to be one step, or a
+        // concurrent put of another id is dropped by the write that follows it.
+        synchronized (bucket) {
+            requireSameRecord(bucketName, bucket);
+            Map<String, String> configurations = bucket.getAnalyticsConfigurations();
+            if (configurations == null || !configurations.containsKey(id)) {
+                throw noSuchAnalyticsConfiguration();
+            }
+            Map<String, String> remaining = new java.util.LinkedHashMap<>(configurations);
+            remaining.remove(id);
+            bucket.setAnalyticsConfigurations(remaining);
+            bucketStore.put(bucketName, bucket);
+        }
+        LOG.debugv("Deleted analytics configuration {0} from bucket: {1}", id, bucketName);
+    }
+
+    private static AwsException noSuchAnalyticsConfiguration() {
+        return new AwsException("NoSuchConfiguration", "The specified configuration does not exist.", 404);
+    }
+
+    // --- Inventory Configurations ---
+
+    /**
+     * Stores an inventory configuration under {@code id}, replacing any configuration
+     * already stored under it. floci records the configuration and returns it; nothing is
+     * produced from it.
+     */
+    public void putBucketInventoryConfiguration(String bucketName, String id, String innerXml) {
+        Bucket bucket = requireBucket(bucketName);
+        // Read-modify-write of the bucket record, so it takes the same monitor as the other
+        // bucket-scoped mutations: without it two concurrent puts of different ids both start from
+        // the same map and one of the configurations is lost.
+        synchronized (bucket) {
+            requireSameRecord(bucketName, bucket);
+            Map<String, String> configurations = bucket.getInventoryConfigurations() != null
+                    ? new java.util.LinkedHashMap<>(bucket.getInventoryConfigurations())
+                    : new java.util.LinkedHashMap<>();
+            configurations.put(id, innerXml);
+            bucket.setInventoryConfigurations(configurations);
+            bucketStore.put(bucketName, bucket);
+        }
+        LOG.debugv("Put inventory configuration {0} on bucket: {1}", id, bucketName);
+    }
+
+    public String getBucketInventoryConfiguration(String bucketName, String id) {
+        Bucket bucket = requireBucket(bucketName);
+        String innerXml = bucket.getInventoryConfigurations() == null
+                ? null : bucket.getInventoryConfigurations().get(id);
+        if (innerXml == null) {
+            throw noSuchInventoryConfiguration();
+        }
+        return S3_XML_DECLARATION + new XmlBuilder()
+                .start("InventoryConfiguration", AwsNamespaces.S3)
+                .raw(innerXml)
+                .end("InventoryConfiguration")
+                .build();
+    }
+
+    /**
+     * Lists every inventory configuration on the bucket. AWS pages these with a continuation
+     * token; floci returns them all in one unpaged response, ordered by id so that the listing is
+     * stable.
+     */
+    public String listBucketInventoryConfigurations(String bucketName) {
+        Bucket bucket = requireBucket(bucketName);
+        Map<String, String> configurations = bucket.getInventoryConfigurations() != null
+                ? bucket.getInventoryConfigurations() : Map.of();
+
+        XmlBuilder xml = new XmlBuilder().start("ListInventoryConfigurationsResult", AwsNamespaces.S3);
+        configurations.keySet().stream().sorted().forEach(id -> xml
+                .start("InventoryConfiguration")
+                .raw(configurations.get(id))
+                .end("InventoryConfiguration"));
+        return S3_XML_DECLARATION + xml
+                .elem("IsTruncated", false)
+                .end("ListInventoryConfigurationsResult")
+                .build();
+    }
+
+    public void deleteBucketInventoryConfiguration(String bucketName, String id) {
+        Bucket bucket = requireBucket(bucketName);
+        // Same monitor as the put: the existence check and the write have to be one step, or a
+        // concurrent put of another id is dropped by the write that follows it.
+        synchronized (bucket) {
+            requireSameRecord(bucketName, bucket);
+            Map<String, String> configurations = bucket.getInventoryConfigurations();
+            if (configurations == null || !configurations.containsKey(id)) {
+                throw noSuchInventoryConfiguration();
+            }
+            Map<String, String> remaining = new java.util.LinkedHashMap<>(configurations);
+            remaining.remove(id);
+            bucket.setInventoryConfigurations(remaining);
+            bucketStore.put(bucketName, bucket);
+        }
+        LOG.debugv("Deleted inventory configuration {0} from bucket: {1}", id, bucketName);
+    }
+
+    private static AwsException noSuchInventoryConfiguration() {
+        return new AwsException("NoSuchConfiguration", "The specified configuration does not exist.", 404);
+    }
+
     // --- Object Lock Configuration ---
 
     public void setBucketObjectLockEnabled(String bucketName) {

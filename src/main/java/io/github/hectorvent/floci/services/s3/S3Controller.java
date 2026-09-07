@@ -347,6 +347,20 @@ public class S3Controller {
                 s3Service.authorizeBucketWrite(bucket, "s3:PutIntelligentTieringConfiguration", authorization);
                 return handlePutBucketIntelligentTieringConfiguration(bucket, uriInfo, body);
             }
+            // Same fall-through hazard as metrics: an analytics or inventory PUT must not become
+            // a CreateBucket.
+            if (hasQueryParam(uriInfo, "analytics")) {
+                S3Service.RequestAuthorization authorization = S3RequestAuthorizationParser.parseIfRequired(
+                        s3Service.isAuthEnforced(), httpHeaders, uriInfo);
+                s3Service.authorizeBucketWrite(bucket, "s3:PutAnalyticsConfiguration", authorization);
+                return handlePutBucketAnalyticsConfiguration(bucket, uriInfo, body);
+            }
+            if (hasQueryParam(uriInfo, "inventory")) {
+                S3Service.RequestAuthorization authorization = S3RequestAuthorizationParser.parseIfRequired(
+                        s3Service.isAuthEnforced(), httpHeaders, uriInfo);
+                s3Service.authorizeBucketWrite(bucket, "s3:PutInventoryConfiguration", authorization);
+                return handlePutBucketInventoryConfiguration(bucket, uriInfo, body);
+            }
 
             String locationConstraint = null;
             if (body != null && body.length > 0) {
@@ -441,6 +455,22 @@ public class S3Controller {
                 s3Service.authorizeBucketWrite(bucket, "s3:PutIntelligentTieringConfiguration", authorization);
                 s3Service.deleteBucketIntelligentTieringConfiguration(bucket,
                         requireIntelligentTieringId(uriInfo));
+                return Response.noContent().build();
+            }
+            if (hasQueryParam(uriInfo, "analytics")) {
+                // Likewise this must not fall through to deleting the bucket.
+                S3Service.RequestAuthorization authorization = S3RequestAuthorizationParser.parseIfRequired(
+                        s3Service.isAuthEnforced(), httpHeaders, uriInfo);
+                s3Service.authorizeBucketWrite(bucket, "s3:PutAnalyticsConfiguration", authorization);
+                s3Service.deleteBucketAnalyticsConfiguration(bucket, requireAnalyticsId(uriInfo));
+                return Response.noContent().build();
+            }
+            if (hasQueryParam(uriInfo, "inventory")) {
+                // Likewise this must not fall through to deleting the bucket.
+                S3Service.RequestAuthorization authorization = S3RequestAuthorizationParser.parseIfRequired(
+                        s3Service.isAuthEnforced(), httpHeaders, uriInfo);
+                s3Service.authorizeBucketWrite(bucket, "s3:PutInventoryConfiguration", authorization);
+                s3Service.deleteBucketInventoryConfiguration(bucket, requireInventoryId(uriInfo));
                 return Response.noContent().build();
             }
             if (hasQueryParam(uriInfo, "accelerate")) {
@@ -577,6 +607,27 @@ public class S3Controller {
                 String xml = id != null
                         ? s3Service.getBucketIntelligentTieringConfiguration(bucket, id)
                         : s3Service.listBucketIntelligentTieringConfigurations(bucket);
+                return Response.ok(xml).type("application/xml").build();
+            }
+            // GetBucketAnalyticsConfiguration and ListBucketAnalyticsConfigurations share
+            // ?analytics and are told apart by the id, which only the single-configuration read
+            // carries.
+            if (hasQueryParam(uriInfo, "analytics")) {
+                s3Service.authorizeBucketRead(bucket, "s3:GetAnalyticsConfiguration", authorization);
+                String id = uriInfo.getQueryParameters().getFirst("id");
+                String xml = id != null
+                        ? s3Service.getBucketAnalyticsConfiguration(bucket, id)
+                        : s3Service.listBucketAnalyticsConfigurations(bucket);
+                return Response.ok(xml).type("application/xml").build();
+            }
+            // GetBucketInventoryConfiguration and ListBucketInventoryConfigurations share
+            // ?inventory and are told apart the same way.
+            if (hasQueryParam(uriInfo, "inventory")) {
+                s3Service.authorizeBucketRead(bucket, "s3:GetInventoryConfiguration", authorization);
+                String id = uriInfo.getQueryParameters().getFirst("id");
+                String xml = id != null
+                        ? s3Service.getBucketInventoryConfiguration(bucket, id)
+                        : s3Service.listBucketInventoryConfigurations(bucket);
                 return Response.ok(xml).type("application/xml").build();
             }
 
@@ -1943,6 +1994,64 @@ public class S3Controller {
         if (id == null) {
             throw new AwsException("InvalidArgument",
                     "The intelligent-tiering configuration id must be specified.", 400);
+        }
+        return id;
+    }
+
+    // --- Analytics Configurations ---
+
+    private Response handlePutBucketAnalyticsConfiguration(String bucket, UriInfo uriInfo, byte[] body) {
+        String id = requireAnalyticsId(uriInfo);
+        String xml = body == null ? null : new String(body, StandardCharsets.UTF_8);
+        S3AnalyticsConfiguration configuration = S3AnalyticsConfiguration.parse(xml);
+        // AWS rejects a body whose Id disagrees with the id in the query string.
+        if (!id.equals(configuration.id())) {
+            throw new AwsException("MalformedXML",
+                    "The XML you provided was not well-formed or did not validate against our "
+                            + "published schema", 400);
+        }
+        s3Service.putBucketAnalyticsConfiguration(bucket, id, configuration.innerXml());
+        return Response.noContent().build();
+    }
+
+    /**
+     * The id identifies the configuration, so a request without one is refused rather than guessed
+     * at, mirroring the metrics subresource.
+     */
+    private String requireAnalyticsId(UriInfo uriInfo) {
+        String id = uriInfo.getQueryParameters().getFirst("id");
+        if (id == null) {
+            throw new AwsException("InvalidArgument",
+                    "The analytics configuration id must be specified.", 400);
+        }
+        return id;
+    }
+
+    // --- Inventory Configurations ---
+
+    private Response handlePutBucketInventoryConfiguration(String bucket, UriInfo uriInfo, byte[] body) {
+        String id = requireInventoryId(uriInfo);
+        String xml = body == null ? null : new String(body, StandardCharsets.UTF_8);
+        S3InventoryConfiguration configuration = S3InventoryConfiguration.parse(xml);
+        // AWS rejects a body whose Id disagrees with the id in the query string.
+        if (!id.equals(configuration.id())) {
+            throw new AwsException("MalformedXML",
+                    "The XML you provided was not well-formed or did not validate against our "
+                            + "published schema", 400);
+        }
+        s3Service.putBucketInventoryConfiguration(bucket, id, configuration.innerXml());
+        return Response.noContent().build();
+    }
+
+    /**
+     * The id identifies the configuration, so a request without one is refused rather than guessed
+     * at, mirroring the metrics subresource.
+     */
+    private String requireInventoryId(UriInfo uriInfo) {
+        String id = uriInfo.getQueryParameters().getFirst("id");
+        if (id == null) {
+            throw new AwsException("InvalidArgument",
+                    "The inventory configuration id must be specified.", 400);
         }
         return id;
     }
