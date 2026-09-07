@@ -83,6 +83,12 @@ class Ec2InstanceTypeCatalogTest {
         assertEquals(0, m5Large.defaultNetworkCardIndex);
         assertEquals(10, m5Large.ipv4AddressesPerInterface);
         assertEquals(3, m5Large.networkCards.get(0).maximumNetworkInterfaces);
+
+        Ec2InstanceTypeCatalog.CatalogInstanceType m8gd2xlarge =
+                instanceTypeCatalog.find("m8gd.2xlarge").orElseThrow();
+        assertEquals(0, m8gd2xlarge.defaultNetworkCardIndex);
+        assertEquals(15, m8gd2xlarge.ipv4AddressesPerInterface);
+        assertEquals(4, m8gd2xlarge.networkCards.get(0).maximumNetworkInterfaces);
     }
 
     @Test

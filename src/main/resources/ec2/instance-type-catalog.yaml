@@ -196,7 +196,7 @@ instanceTypes:
     currentGeneration: true
     encryptionInTransitSupported: false
     defaultNetworkCardIndex: 0
-    ipv4AddressesPerInterface: 10
+    ipv4AddressesPerInterface: 15
     networkCards:
       - networkCardIndex: 0
-        maximumNetworkInterfaces: 3
+        maximumNetworkInterfaces: 4

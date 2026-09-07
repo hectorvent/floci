@@ -233,14 +233,35 @@ class Ec2Tests {
                 .build());
 
         assertThat(resp.instanceTypes()).hasSize(2);
-        assertThat(resp.instanceTypes()).allSatisfy(instanceType -> {
-            NetworkInfo networkInfo = instanceType.networkInfo();
-            assertThat(networkInfo.defaultNetworkCardIndex()).isEqualTo(0);
-            assertThat(networkInfo.ipv4AddressesPerInterface()).isEqualTo(10);
-            assertThat(networkInfo.networkCards()).hasSize(1);
-            NetworkCardInfo networkCard = networkInfo.networkCards().get(0);
-            assertThat(networkCard.networkCardIndex()).isEqualTo(0);
-            assertThat(networkCard.maximumNetworkInterfaces()).isEqualTo(3);
+        assertThat(resp.instanceTypes()).anySatisfy(instanceType -> {
+            assertThat(instanceType.instanceType()).isEqualTo(InstanceType.M5_LARGE);
+            assertThat(instanceType.networkInfo().defaultNetworkCardIndex()).isEqualTo(0);
+            assertThat(instanceType.networkInfo().ipv4AddressesPerInterface()).isEqualTo(10);
+            assertThat(instanceType.networkInfo().networkCards()).singleElement().satisfies(networkCard -> {
+                assertThat(networkCard.networkCardIndex()).isEqualTo(0);
+                assertThat(networkCard.maximumNetworkInterfaces()).isEqualTo(3);
+            });
+        });
+        assertThat(resp.instanceTypes()).anySatisfy(instanceType -> {
+            assertThat(instanceType.instanceTypeAsString()).isEqualTo("t4g.medium");
+            assertThat(instanceType.networkInfo().defaultNetworkCardIndex()).isEqualTo(0);
+            assertThat(instanceType.networkInfo().ipv4AddressesPerInterface()).isEqualTo(6);
+            assertThat(instanceType.networkInfo().networkCards()).singleElement().satisfies(networkCard -> {
+                assertThat(networkCard.networkCardIndex()).isEqualTo(0);
+                assertThat(networkCard.maximumNetworkInterfaces()).isEqualTo(3);
+            });
+        });
+
+        DescribeInstanceTypesResponse largerArmResponse = ec2.describeInstanceTypes(DescribeInstanceTypesRequest.builder()
+                .instanceTypes(InstanceType.fromValue("m8gd.2xlarge"))
+                .build());
+        assertThat(largerArmResponse.instanceTypes()).singleElement().satisfies(instanceType -> {
+            assertThat(instanceType.networkInfo().defaultNetworkCardIndex()).isEqualTo(0);
+            assertThat(instanceType.networkInfo().ipv4AddressesPerInterface()).isEqualTo(15);
+            assertThat(instanceType.networkInfo().networkCards()).singleElement().satisfies(networkCard -> {
+                assertThat(networkCard.networkCardIndex()).isEqualTo(0);
+                assertThat(networkCard.maximumNetworkInterfaces()).isEqualTo(4);
+            });
         });
     }
 
