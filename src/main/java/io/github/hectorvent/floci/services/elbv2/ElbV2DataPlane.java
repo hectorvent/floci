@@ -478,13 +478,13 @@ public class ElbV2DataPlane {
             if (Boolean.TRUE.equals(isBase64)) {
                 decodedBody = Base64.getDecoder().decode(String.valueOf(responseBody));
                 if (decodedBody.length > MAX_LAMBDA_BODY_BYTES) {
-                    req.response().setStatusCode(460).end();
+                    req.response().setStatusCode(502).end();
                     return;
                 }
             } else {
                 textBody = String.valueOf(responseBody);
                 if (textBody.getBytes(StandardCharsets.UTF_8).length > MAX_LAMBDA_BODY_BYTES) {
-                    req.response().setStatusCode(460).end();
+                    req.response().setStatusCode(502).end();
                     return;
                 }
             }

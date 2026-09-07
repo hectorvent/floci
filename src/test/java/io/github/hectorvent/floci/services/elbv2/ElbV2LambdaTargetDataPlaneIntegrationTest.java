@@ -266,7 +266,7 @@ class ElbV2LambdaTargetDataPlaneIntegrationTest {
             .when()
                 .get("/response-oversized");
 
-        response.then().statusCode(460);
+        response.then().statusCode(502);
         assertNotEquals("1048577", response.getHeader("Content-Length"));
     }
 
