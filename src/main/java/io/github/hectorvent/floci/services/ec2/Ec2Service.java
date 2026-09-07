@@ -2268,9 +2268,31 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
                                     String userData, String iamInstanceProfileArn,
                                     Boolean associatePublicIp, String networkInterfaceId,
                                     int networkInterfaceDeviceIndex, String availabilityZone) {
+        return runInstances(region, imageId, instanceType, minCount, maxCount, keyName,
+                securityGroupIds, subnetId, clientToken, instanceTags, userData,
+                iamInstanceProfileArn, associatePublicIp, networkInterfaceId,
+                networkInterfaceDeviceIndex, availabilityZone, null);
+    }
+
+    /**
+     * @param metadataOptions the launch's MetadataOptions, with null fields for whatever the
+     *                        request left unspecified so AWS's launch default applies to them,
+     *                        or null when the request set none
+     */
+    public Reservation runInstances(String region, String imageId, String instanceType,
+                                    int minCount, int maxCount, String keyName,
+                                    List<String> securityGroupIds, String subnetId,
+                                    String clientToken, List<Tag> instanceTags,
+                                    String userData, String iamInstanceProfileArn,
+                                    Boolean associatePublicIp, String networkInterfaceId,
+                                    int networkInterfaceDeviceIndex, String availabilityZone,
+                                    LaunchTemplateData.MetadataOptions metadataOptions) {
         if (imageId == null || imageId.isBlank()) {
             throw new AwsException("MissingParameter", "The request must contain the parameter ImageId", 400);
         }
+        validateMetadataOptions(metadataOptions);
+        LaunchTemplateData.MetadataOptions launchMetadataOptions = LaunchTemplateData.MetadataOptions.merge(
+                LaunchTemplateData.MetadataOptions.launchDefaults(), metadataOptions);
         ensureDefaultResources(region);
 
         // floci-kt9: a caller-supplied primary ENI (override-default-eni) governs its own
@@ -2376,6 +2398,7 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
             inst.setRegion(region);
             inst.setUserData(userData);
             inst.setIamInstanceProfileArn(iamInstanceProfileArn);
+            inst.setMetadataOptions(LaunchTemplateData.MetadataOptions.merge(launchMetadataOptions, null));
             if (instanceTags != null && !instanceTags.isEmpty()) {
                 inst.setTags(new ArrayList<>(instanceTags));
                 tags.put(instanceId, new ArrayList<>(instanceTags));
@@ -2868,6 +2891,45 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
                 && inst.getState() != null && "running".equals(inst.getState().getName())) {
             portForwardManager.reconcile(inst, desiredPublishedPorts(region, inst));
         }
+    }
+
+    /**
+     * ModifyInstanceMetadataOptions changes only the fields the caller names, as on AWS, so a
+     * call that sets HttpTokens alone leaves HttpEndpoint and the hop limit as they were.
+     */
+    public Instance modifyInstanceMetadataOptions(String region, String instanceId,
+                                                  LaunchTemplateData.MetadataOptions request) {
+        ensureDefaultResources(region);
+        validateMetadataOptions(request);
+        Instance inst = getRequiredInstance(region, instanceId);
+        inst.setMetadataOptions(LaunchTemplateData.MetadataOptions.merge(inst.effectiveMetadataOptions(), request));
+        instances.put(key(region, instanceId), inst);
+        return inst;
+    }
+
+    private static void validateMetadataOptions(LaunchTemplateData.MetadataOptions options) {
+        if (options == null) {
+            return;
+        }
+        requireMetadataOptionValue("HttpTokens", options.getHttpTokens(), "optional", "required");
+        requireMetadataOptionValue("HttpEndpoint", options.getHttpEndpoint(), "enabled", "disabled");
+        requireMetadataOptionValue("HttpProtocolIpv6", options.getHttpProtocolIpv6(), "enabled", "disabled");
+        requireMetadataOptionValue("InstanceMetadataTags", options.getInstanceMetadataTags(), "enabled", "disabled");
+        Integer hopLimit = options.getHttpPutResponseHopLimit();
+        if (hopLimit != null && (hopLimit < 1 || hopLimit > 64)) {
+            throw new AwsException("InvalidParameterValue",
+                    "Value (" + hopLimit + ") for parameter HttpPutResponseHopLimit is invalid. "
+                            + "Valid values are between 1 and 64.", 400);
+        }
+    }
+
+    private static void requireMetadataOptionValue(String parameter, String value, String... allowed) {
+        if (value == null || List.of(allowed).contains(value)) {
+            return;
+        }
+        throw new AwsException("InvalidParameterValue",
+                "Value (" + value + ") for parameter " + parameter + " is invalid. Valid values are: "
+                        + String.join(", ", allowed) + ".", 400);
     }
 
     private Instance getRequiredInstance(String region, String instanceId) {

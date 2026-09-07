@@ -169,6 +169,7 @@ Floci seeds the following resources on first use in each region so Terraform, th
 | DescribeInstanceStatus | Returns status records for stored instances. |
 | DescribeInstanceAttribute | Returns a supported attribute for an instance. |
 | ModifyInstanceAttribute | Updates supported mutable attributes for an instance. |
+| ModifyInstanceMetadataOptions | Updates an instance's IMDS options, changing only the fields the request names. |
 
 ### VPCs
 

@@ -3140,6 +3140,102 @@ class Ec2ServiceTest {
                 .getInstances().getFirst().getInstanceId();
     }
 
+    @Test
+    void runInstancesStoresAwsMetadataOptionDefaultsWhenTheLaunchSetsNone() {
+        Ec2Service service = mockModeService();
+        Instance inst = service.runInstances("us-east-1", "ami-1234567890abcdef0", "t3.micro",
+                1, 1, null, List.of(), null, null, List.of(), null, null)
+                .getInstances().getFirst();
+
+        LaunchTemplateData.MetadataOptions options = inst.effectiveMetadataOptions();
+        assertEquals("applied", options.getState());
+        assertEquals("optional", options.getHttpTokens());
+        assertEquals(1, options.getHttpPutResponseHopLimit());
+        assertEquals("enabled", options.getHttpEndpoint());
+        assertEquals("disabled", options.getHttpProtocolIpv6());
+        assertEquals("disabled", options.getInstanceMetadataTags());
+    }
+
+    @Test
+    void runInstancesHonoursExplicitMetadataOptionsAndDefaultsTheRest() {
+        Ec2Service service = mockModeService();
+        LaunchTemplateData.MetadataOptions request = new LaunchTemplateData.MetadataOptions();
+        request.setHttpTokens("required");
+        request.setHttpPutResponseHopLimit(2);
+
+        Instance inst = service.runInstances("us-east-1", "ami-1234567890abcdef0", "t3.micro",
+                1, 1, null, List.of(), null, null, List.of(), null, null, null, null, 0, null, request)
+                .getInstances().getFirst();
+
+        LaunchTemplateData.MetadataOptions options = inst.effectiveMetadataOptions();
+        assertEquals("required", options.getHttpTokens());
+        assertEquals(2, options.getHttpPutResponseHopLimit());
+        assertEquals("enabled", options.getHttpEndpoint());
+        assertEquals("disabled", options.getInstanceMetadataTags());
+        // The stored instance reads back the same values.
+        assertEquals("required", service.describeInstances("us-east-1", List.of(inst.getInstanceId()), Map.of())
+                .getFirst().getInstances().getFirst().effectiveMetadataOptions().getHttpTokens());
+    }
+
+    @Test
+    void modifyInstanceMetadataOptionsChangesOnlyTheFieldsItNames() {
+        Ec2Service service = mockModeService();
+        LaunchTemplateData.MetadataOptions launch = new LaunchTemplateData.MetadataOptions();
+        launch.setHttpPutResponseHopLimit(3);
+        String instanceId = service.runInstances("us-east-1", "ami-1234567890abcdef0", "t3.micro",
+                1, 1, null, List.of(), null, null, List.of(), null, null, null, null, 0, null, launch)
+                .getInstances().getFirst().getInstanceId();
+
+        LaunchTemplateData.MetadataOptions change = new LaunchTemplateData.MetadataOptions();
+        change.setHttpTokens("required");
+        Instance modified = service.modifyInstanceMetadataOptions("us-east-1", instanceId, change);
+
+        LaunchTemplateData.MetadataOptions options = modified.effectiveMetadataOptions();
+        assertEquals("required", options.getHttpTokens());
+        assertEquals(3, options.getHttpPutResponseHopLimit());
+        assertEquals("enabled", options.getHttpEndpoint());
+    }
+
+    @Test
+    void metadataOptionsRejectValuesOutsideTheAwsEnumerations() {
+        Ec2Service service = mockModeService();
+        String instanceId = service.runInstances("us-east-1", "ami-1234567890abcdef0", "t3.micro",
+                1, 1, null, List.of(), null, null, List.of(), null, null)
+                .getInstances().getFirst().getInstanceId();
+
+        LaunchTemplateData.MetadataOptions badTokens = new LaunchTemplateData.MetadataOptions();
+        badTokens.setHttpTokens("mandatory");
+        AwsException tokensError = assertThrows(AwsException.class,
+                () -> service.modifyInstanceMetadataOptions("us-east-1", instanceId, badTokens));
+        assertEquals("InvalidParameterValue", tokensError.getErrorCode());
+
+        LaunchTemplateData.MetadataOptions badHopLimit = new LaunchTemplateData.MetadataOptions();
+        badHopLimit.setHttpPutResponseHopLimit(65);
+        AwsException hopError = assertThrows(AwsException.class, () -> service.runInstances(
+                "us-east-1", "ami-1234567890abcdef0", "t3.micro",
+                1, 1, null, List.of(), null, null, List.of(), null, null, null, null, 0, null, badHopLimit));
+        assertEquals("InvalidParameterValue", hopError.getErrorCode());
+
+        // The failed modify left the stored options untouched.
+        assertEquals("optional", service.describeInstances("us-east-1", List.of(instanceId), Map.of())
+                .getFirst().getInstances().getFirst().effectiveMetadataOptions().getHttpTokens());
+    }
+
+    @Test
+    void modifyInstanceMetadataOptionsRequiresAnExistingInstance() {
+        Ec2Service service = mockModeService();
+        AwsException error = assertThrows(AwsException.class, () -> service.modifyInstanceMetadataOptions(
+                "us-east-1", "i-0123456789abcdef0", new LaunchTemplateData.MetadataOptions()));
+        assertEquals("InvalidInstanceID.NotFound", error.getErrorCode());
+    }
+
+    private static Ec2Service mockModeService() {
+        return new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+    }
+
     private static EmulatorConfig mockConfig(boolean ec2Mock) {
         EmulatorConfig config = mock(EmulatorConfig.class);
         EmulatorConfig.ServicesConfig services = mock(EmulatorConfig.ServicesConfig.class);
