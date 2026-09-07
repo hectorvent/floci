@@ -328,18 +328,20 @@ public class IotMqttBrokerService {
 
     /**
      * The certificate ARN of the device behind the connection when it may connect, otherwise null.
-     * A failure while deciding refuses the client rather than leaving the CONNECT unanswered.
+     * A failure while deciding refuses the client rather than leaving the CONNECT unanswered. A
+     * refusal is the client's own doing and reaches it as the CONNACK, so it is logged at debug
+     * only: the CONNECT is reachable by anyone.
      */
     private String admittedDevice(MqttEndpoint endpoint, String clientId, String sourceIp) {
         try {
             Optional<IotService.RegisteredDevice> device = presentedDevice(endpoint);
             if (device.isEmpty()) {
-                LOG.infov("IoT MQTT TLS client {0} refused: no registered certificate presented", clientId);
+                LOG.debugv("IoT MQTT TLS client {0} refused: no registered certificate presented", clientId);
                 return null;
             }
             String certificateArn = device.get().certificate().getCertificateArn();
             if (!iotService.get().isConnectAllowed(device.get(), clientId, sourceIp, requestedServerName(endpoint))) {
-                LOG.infov("IoT MQTT TLS client {0} refused: iot:Connect is not allowed for {1}", clientId, certificateArn);
+                LOG.debugv("IoT MQTT TLS client {0} refused: iot:Connect is not allowed for {1}", clientId, certificateArn);
                 return null;
             }
             return certificateArn;

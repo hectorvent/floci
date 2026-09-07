@@ -69,6 +69,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
@@ -89,6 +90,9 @@ public class IotService {
 
     /** One lock for every policy version write and the policy delete, so a cap check, an append and a delete cannot interleave. */
     private final Object policyWriteLock = new Object();
+
+    /** certificateId to the partition and key it was last found under; see {@link #findRegisteredCertificate}. */
+    private final Map<String, CertificateLocation> certificateLocations = new ConcurrentHashMap<>();
 
     private final StorageBackend<String, Thing> thingStore;
     private final StorageBackend<String, IotCertificate> certificateStore;
@@ -428,30 +432,52 @@ public class IotService {
             throw new AwsException("InvalidRequestException", "Cannot delete attached certificate", 400);
         }
         certificateStore.delete(certificateKey(region, certificateId));
+        certificateLocations.remove(certificateId);
     }
 
     /** A device certificate the registry holds, with the account partition and region it was registered in. */
     public record RegisteredDevice(String accountId, String region, IotCertificate certificate) {
     }
 
+    private record CertificateLocation(String accountId, String key) {
+    }
+
     /**
      * AWS IoT trusts a device certificate because it is registered, not because of who signed it.
      * The lookup key is the certificateId, which is the SHA-256 of the DER encoding, searched
-     * across every account partition: a connecting device carries no request context.
+     * across every account partition: a connecting device carries no request context. The
+     * partition and key a certificate was found under are remembered, so a device's next connect
+     * is one keyed read; a remembered location that no longer resolves is dropped and the scan
+     * runs again.
      */
     public Optional<RegisteredDevice> findRegisteredCertificate(X509Certificate presented) {
-        String suffix;
+        String certificateId;
         try {
-            suffix = ":" + certificateIdOf(presented);
+            certificateId = certificateIdOf(presented);
         } catch (CertificateEncodingException | NoSuchAlgorithmException e) {
             LOG.debugv("Could not fingerprint the presented device certificate: {0}", e.getMessage());
             return Optional.empty();
         }
-        return registeredCertificates(key -> key.startsWith("cert:") && key.endsWith(suffix)).stream()
-                .sorted(Comparator.comparing((AccountAwareStorageBackend.AccountEntry<IotCertificate> entry) -> entry.accountId())
-                        .thenComparing(AccountAwareStorageBackend.AccountEntry::key))
-                .findFirst()
-                .map(entry -> new RegisteredDevice(entry.accountId(), entry.key().split(":", 3)[1], entry.value()));
+        CertificateLocation known = certificateLocations.get(certificateId);
+        if (known != null) {
+            Optional<IotCertificate> current = getForAccount(certificateStore, known.accountId(), known.key());
+            if (current.isPresent()) {
+                return Optional.of(new RegisteredDevice(known.accountId(), regionOfCertificateKey(known.key()), current.get()));
+            }
+            certificateLocations.remove(certificateId, known);
+        }
+        String suffix = ":" + certificateId;
+        Optional<AccountAwareStorageBackend.AccountEntry<IotCertificate>> found =
+                registeredCertificates(key -> key.startsWith("cert:") && key.endsWith(suffix)).stream()
+                        .sorted(Comparator.comparing((AccountAwareStorageBackend.AccountEntry<IotCertificate> entry) -> entry.accountId())
+                                .thenComparing(AccountAwareStorageBackend.AccountEntry::key))
+                        .findFirst();
+        found.ifPresent(entry -> certificateLocations.put(certificateId, new CertificateLocation(entry.accountId(), entry.key())));
+        return found.map(entry -> new RegisteredDevice(entry.accountId(), regionOfCertificateKey(entry.key()), entry.value()));
+    }
+
+    private static String regionOfCertificateKey(String key) {
+        return key.split(":", 3)[1];
     }
 
     /**

@@ -160,6 +160,26 @@ class IotServiceDeviceAuthTest {
         assertFalse(connect(device, "sensor-1"));
     }
 
+    /** The location a certificate was found at is remembered, and forgotten again the moment it stops resolving. */
+    @Test
+    void aCertificateFoundOnceIsFoundAgainAfterItMovesAndReflectsItsCurrentStatus() {
+        IotCertificate created = service.createKeysAndCertificate(true, REGION);
+        X509Certificate presented = parse(created);
+        String key = "cert:" + REGION + ":" + created.getCertificateId();
+        assertEquals(ACCOUNT, service.findRegisteredCertificate(presented).orElseThrow().accountId());
+
+        service.updateCertificate(created.getCertificateId(), "INACTIVE", REGION);
+        assertEquals("INACTIVE", service.findRegisteredCertificate(presented).orElseThrow().certificate().getStatus());
+
+        IotCertificate stored = service.describeCertificate(created.getCertificateId(), REGION);
+        support.certificates.delete(key);
+        assertTrue(service.findRegisteredCertificate(presented).isEmpty(), "deleted: no longer found");
+
+        support.certificates.putForAccount(OTHER_ACCOUNT, key, stored);
+        assertEquals(OTHER_ACCOUNT, service.findRegisteredCertificate(presented).orElseThrow().accountId());
+        assertEquals(OTHER_ACCOUNT, service.findRegisteredCertificate(presented).orElseThrow().accountId());
+    }
+
     @Test
     void activeCertificateWithConnectPolicyIsAllowed() {
         RegisteredDevice device = registeredDevice(true);
