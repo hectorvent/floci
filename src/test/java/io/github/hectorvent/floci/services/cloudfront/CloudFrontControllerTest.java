@@ -192,6 +192,56 @@ class CloudFrontControllerTest {
     }
 
     @Test
+    void defaultCacheBehaviorEchoesCachedMethodsWithoutDuplicatingAllowedMethods() {
+        CloudFrontService service = mock(CloudFrontService.class);
+        CloudFrontController controller = new CloudFrontController(service);
+
+        // AWS nests CachedMethods inside AllowedMethods. A parser that doesn't scope Method
+        // elements to the right block folds the CachedMethods items into AllowedMethods too,
+        // producing duplicates (["GET","HEAD","GET","HEAD","OPTIONS"]) and dropping CachedMethods.
+        String body = distributionConfigBody("").replace(
+                """
+                <AllowedMethods><Quantity>2</Quantity><Items>
+                      <Method>GET</Method><Method>HEAD</Method></Items></AllowedMethods>""",
+                """
+                <AllowedMethods><Quantity>3</Quantity><Items>
+                      <Method>GET</Method><Method>HEAD</Method><Method>OPTIONS</Method></Items>
+                      <CachedMethods><Quantity>2</Quantity><Items>
+                        <Method>GET</Method><Method>HEAD</Method></Items></CachedMethods>
+                    </AllowedMethods>""");
+
+        ArgumentCaptor<Distribution> captor = ArgumentCaptor.forClass(Distribution.class);
+        when(service.createDistribution(captor.capture(), any())).thenAnswer(inv -> {
+            Distribution d = inv.getArgument(0);
+            d.setId("dist-cm");
+            d.setEtag("etag-cm");
+            return d;
+        });
+
+        try (Response created = controller.createDistribution(null, body)) {
+            assertEquals(201, created.getStatus());
+        }
+
+        when(service.getDistribution("dist-cm")).thenReturn(captor.getValue());
+
+        try (Response dist = controller.getDistribution("dist-cm")) {
+            String xml = (String) dist.getEntity();
+            int start = xml.indexOf("<AllowedMethods>");
+            int end = xml.indexOf("</AllowedMethods>") + "</AllowedMethods>".length();
+            String block = xml.substring(start, end);
+
+            int cachedStart = block.indexOf("<CachedMethods>");
+            assertTrue(cachedStart >= 0, "AllowedMethods must echo a nested CachedMethods object");
+            String outer = block.substring(0, cachedStart);
+            String cached = block.substring(cachedStart);
+
+            assertEquals(List.of("GET", "HEAD", "OPTIONS"), XmlParser.extractAll(outer, "Method"),
+                    "AllowedMethods.Items must not include CachedMethods entries");
+            assertEquals(List.of("GET", "HEAD"), XmlParser.extractAll(cached, "Method"));
+        }
+    }
+
+    @Test
     void orderedCacheBehaviorRoundTripsLambdaFunctionAssociations() {
         CloudFrontService service = mock(CloudFrontService.class);
         CloudFrontController controller = new CloudFrontController(service);
