@@ -33,6 +33,9 @@ public class PipesService implements TagHandler, ResourceProvider {
 
     private static final Logger LOG = Logger.getLogger(PipesService.class);
 
+    private static final int MIN_PARALLELIZATION_FACTOR = 1;
+    private static final int MAX_PARALLELIZATION_FACTOR = 10;
+
     private final StorageBackend<String, Pipe> storage;
     private final RegionResolver regionResolver;
     private final PipesPoller poller;
@@ -324,11 +327,10 @@ public class PipesService implements TagHandler, ResourceProvider {
         }
         if (source.startsWith("smk://")) {
             requireKafkaParameters(sourceParameters, "SelfManagedKafkaParameters");
-            return;
-        }
-        if (source.contains(":kafka:")) {
+        } else if (source.contains(":kafka:")) {
             requireKafkaParameters(sourceParameters, "ManagedStreamingKafkaParameters");
         }
+        validateParallelizationFactor(source, sourceParameters);
     }
 
     private void requireKafkaParameters(JsonNode sourceParameters, String parameterBlock) {
@@ -340,6 +342,48 @@ public class PipesService implements TagHandler, ResourceProvider {
         if (topicName == null || topicName.isBlank()) {
             throw new AwsException("ValidationException",
                     "SourceParameters." + parameterBlock + ".TopicName is required", 400);
+        }
+    }
+
+    /**
+     * Applies the AWS bounds on {@code ParallelizationFactor}. It is a member of the Kinesis and
+     * DynamoDB Stream parameter blocks only, so a value carried by a block that does not describe
+     * the pipe's source is rejected rather than silently kept.
+     */
+    private void validateParallelizationFactor(String source, JsonNode sourceParameters) {
+        if (sourceParameters == null) {
+            return;
+        }
+        validateParallelizationFactorBlock(sourceParameters, "KinesisStreamParameters",
+                "Kinesis stream", source.contains(":kinesis:"));
+        validateParallelizationFactorBlock(sourceParameters, "DynamoDBStreamParameters",
+                "DynamoDB Stream", source.contains(":dynamodb:"));
+    }
+
+    private void validateParallelizationFactorBlock(JsonNode sourceParameters, String parameterBlock,
+                                                    String sourceDescription, boolean sourceMatchesBlock) {
+        JsonNode factor = sourceParameters.path(parameterBlock).path("ParallelizationFactor");
+        if (factor.isMissingNode() || factor.isNull()) {
+            return;
+        }
+        String property = "SourceParameters." + parameterBlock + ".ParallelizationFactor";
+        if (!sourceMatchesBlock) {
+            throw new AwsException("ValidationException",
+                    property + " is only supported for " + sourceDescription + " sources", 400);
+        }
+        if (!factor.isNumber()) {
+            throw new AwsException("ValidationException",
+                    property + " must be a numeric value", 400);
+        }
+        if (!factor.isIntegralNumber()) {
+            throw new AwsException("ValidationException",
+                    property + " must be an integer", 400);
+        }
+        long value = factor.asLong();
+        if (value < MIN_PARALLELIZATION_FACTOR || value > MAX_PARALLELIZATION_FACTOR) {
+            throw new AwsException("ValidationException",
+                    property + " must be between " + MIN_PARALLELIZATION_FACTOR + " and "
+                            + MAX_PARALLELIZATION_FACTOR + " (got " + value + ")", 400);
         }
     }
 }

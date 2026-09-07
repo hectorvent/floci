@@ -280,6 +280,11 @@ public class PipesPoller implements Resettable {
         }
     }
 
+    /**
+     * Opens an iterator on the stream's first shard. Floci polls that one shard and delivers one
+     * batch at a time, so a pipe's {@code ParallelizationFactor} is persisted and returned on the
+     * wire but not enforced here: see docs/services/pipes.md.
+     */
     private String initKinesisIterator(String streamName, String region, String accountId) {
         try {
             return (accountId != null)
@@ -506,6 +511,10 @@ public class PipesPoller implements Resettable {
         return failed;
     }
 
+    /**
+     * Opens an iterator on the stream's first shard, under the same single-shard limit as
+     * {@link #initKinesisIterator}.
+     */
     private String initDynamoDbIterator(String streamArn) {
         try {
             return dynamoDbStreamService.getShardIterator(

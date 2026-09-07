@@ -95,6 +95,33 @@ Floci emulates EventBridge Pipes with the following supported source and target 
 - Kinesis streams
 - Step Functions state machines
 
+## ParallelizationFactor
+
+`CreatePipe` and `UpdatePipe` accept a `ParallelizationFactor` integer between 1 and 10 on the
+`KinesisStreamParameters` and `DynamoDBStreamParameters` source blocks, matching the AWS wire
+format. `DescribePipe` and `ListPipes` echo it back as part of `SourceParameters`.
+
+```bash
+aws pipes create-pipe \
+  --name kinesis-pipe \
+  --source "arn:aws:kinesis:us-east-1:000000000000:stream/events" \
+  --target "arn:aws:lambda:us-east-1:000000000000:function:my-function" \
+  --role-arn "arn:aws:iam::000000000000:role/pipe-role" \
+  --source-parameters '{"KinesisStreamParameters":{"StartingPosition":"TRIM_HORIZON","ParallelizationFactor":4}}' \
+  --endpoint-url $AWS_ENDPOINT_URL
+```
+
+Validation mirrors AWS: values outside 1 to 10 are rejected with `ValidationException`, and so is
+the field on a source its parameter block does not describe, for example
+`KinesisStreamParameters.ParallelizationFactor` on an SQS source.
+
+!!! note "Enforcement status"
+    The configured `ParallelizationFactor` is persisted and returned on the wire, but the poller
+    does not yet process concurrent batches per shard. Floci opens an iterator on a single shard
+    (`shardId-000000000000`) per Kinesis or DynamoDB Streams pipe and delivers one batch at a time
+    regardless of the configured value. Multi-shard polling and real per-shard concurrency are
+    tracked as follow-ups.
+
 ## Enrichment
 
 A pipe's optional enrichment step (`source → filter → enrichment → target`) is emulated for

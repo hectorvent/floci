@@ -1,5 +1,7 @@
 package io.github.hectorvent.floci.services.pipes;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
@@ -20,6 +22,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 class PipesServiceTest {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private PipesService pipesService;
 
@@ -354,5 +358,144 @@ class PipesServiceTest {
         AwsException ex = assertThrows(AwsException.class, () ->
                 pipesService.describePipe("region-pipe", "eu-west-1"));
         assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void createPipeAcceptsParallelizationFactorOnKinesisSource() {
+        Pipe pipe = pipesService.createPipe("kinesis-pf-pipe",
+                "arn:aws:kinesis:us-east-1:000000000000:stream/events",
+                "arn:aws:sqs:us-east-1:000000000000:target",
+                "arn:aws:iam::000000000000:role/role",
+                null, null, null,
+                sourceParameters("""
+                        {"KinesisStreamParameters":{"StartingPosition":"TRIM_HORIZON","ParallelizationFactor":4}}"""),
+                null, null, null, "us-east-1");
+
+        assertEquals(4, pipe.getSourceParameters()
+                .path("KinesisStreamParameters").path("ParallelizationFactor").asInt());
+    }
+
+    @Test
+    void createPipeAcceptsParallelizationFactorOnDynamoDbStreamSource() {
+        Pipe pipe = pipesService.createPipe("ddb-pf-pipe",
+                "arn:aws:dynamodb:us-east-1:000000000000:table/orders/stream/2024-01-01T00:00:00.000",
+                "arn:aws:sqs:us-east-1:000000000000:target",
+                "arn:aws:iam::000000000000:role/role",
+                null, null, null,
+                sourceParameters("""
+                        {"DynamoDBStreamParameters":{"StartingPosition":"LATEST","ParallelizationFactor":10}}"""),
+                null, null, null, "us-east-1");
+
+        assertEquals(10, pipe.getSourceParameters()
+                .path("DynamoDBStreamParameters").path("ParallelizationFactor").asInt());
+    }
+
+    @Test
+    void createPipeRejectsParallelizationFactorAboveMaximum() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                pipesService.createPipe("pf-too-high",
+                        "arn:aws:kinesis:us-east-1:000000000000:stream/events",
+                        "arn:aws:sqs:us-east-1:000000000000:target",
+                        "arn:aws:iam::000000000000:role/role",
+                        null, null, null,
+                        sourceParameters("""
+                                {"KinesisStreamParameters":{"ParallelizationFactor":11}}"""),
+                        null, null, null, "us-east-1"));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("must be between 1 and 10"), ex.getMessage());
+    }
+
+    @Test
+    void createPipeRejectsParallelizationFactorBelowMinimum() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                pipesService.createPipe("pf-too-low",
+                        "arn:aws:kinesis:us-east-1:000000000000:stream/events",
+                        "arn:aws:sqs:us-east-1:000000000000:target",
+                        "arn:aws:iam::000000000000:role/role",
+                        null, null, null,
+                        sourceParameters("""
+                                {"KinesisStreamParameters":{"ParallelizationFactor":0}}"""),
+                        null, null, null, "us-east-1"));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("must be between 1 and 10"), ex.getMessage());
+    }
+
+    @Test
+    void createPipeRejectsFractionalParallelizationFactor() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                pipesService.createPipe("pf-fractional",
+                        "arn:aws:kinesis:us-east-1:000000000000:stream/events",
+                        "arn:aws:sqs:us-east-1:000000000000:target",
+                        "arn:aws:iam::000000000000:role/role",
+                        null, null, null,
+                        sourceParameters("""
+                                {"KinesisStreamParameters":{"ParallelizationFactor":2.5}}"""),
+                        null, null, null, "us-east-1"));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("must be an integer"), ex.getMessage());
+    }
+
+    @Test
+    void createPipeRejectsNonNumericParallelizationFactor() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                pipesService.createPipe("pf-non-numeric",
+                        "arn:aws:kinesis:us-east-1:000000000000:stream/events",
+                        "arn:aws:sqs:us-east-1:000000000000:target",
+                        "arn:aws:iam::000000000000:role/role",
+                        null, null, null,
+                        sourceParameters("""
+                                {"KinesisStreamParameters":{"ParallelizationFactor":"4"}}"""),
+                        null, null, null, "us-east-1"));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("must be a numeric value"), ex.getMessage());
+    }
+
+    @Test
+    void createPipeRejectsParallelizationFactorOnSqsSource() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                pipesService.createPipe("pf-wrong-source",
+                        "arn:aws:sqs:us-east-1:000000000000:source",
+                        "arn:aws:sqs:us-east-1:000000000000:target",
+                        "arn:aws:iam::000000000000:role/role",
+                        null, null, null,
+                        sourceParameters("""
+                                {"KinesisStreamParameters":{"ParallelizationFactor":4}}"""),
+                        null, null, null, "us-east-1"));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("only supported for Kinesis stream sources"), ex.getMessage());
+    }
+
+    @Test
+    void updatePipeRejectsInvalidParallelizationFactor() {
+        pipesService.createPipe("pf-update-pipe",
+                "arn:aws:kinesis:us-east-1:000000000000:stream/events",
+                "arn:aws:sqs:us-east-1:000000000000:target",
+                "arn:aws:iam::000000000000:role/role",
+                null, null, null,
+                sourceParameters("""
+                        {"KinesisStreamParameters":{"ParallelizationFactor":2}}"""),
+                null, null, null, "us-east-1");
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                pipesService.updatePipe("pf-update-pipe", null, null, null, null, null,
+                        sourceParameters("""
+                                {"KinesisStreamParameters":{"ParallelizationFactor":99}}"""),
+                        null, null, "us-east-1"));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("must be between 1 and 10"), ex.getMessage());
+    }
+
+    private static JsonNode sourceParameters(String json) {
+        try {
+            return MAPPER.readTree(json);
+        } catch (Exception e) {
+            throw new IllegalStateException("invalid test JSON: " + json, e);
+        }
     }
 }
