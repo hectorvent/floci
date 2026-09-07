@@ -4773,6 +4773,11 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
         }
     }
 
+    /** The tags currently on one resource, as CreateTags and DeleteTags maintain them. */
+    public List<Tag> resourceTags(String resourceId) {
+        return List.copyOf(tags.get(resourceId).orElse(List.of()));
+    }
+
     public List<Map<String, String>> describeTags(String region, Map<String, List<String>> filters) {
         ensureDefaultResources(region);
         List<String> filterResourceIds   = filters != null ? filters.get("resource-id")   : null;

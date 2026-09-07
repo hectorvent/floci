@@ -254,6 +254,36 @@ class IamEnforcementFilterTest {
     }
 
     @Test
+    void filterPassesEc2ResourceTagConditionContextAndHonoursTheDeny() {
+        ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
+        Map<String, List<String>> conditions = Map.of("aws:ResourceTag/Team", List.of("engineering"));
+
+        String auth = "AWS4-HMAC-SHA256 Credential=AKIATAGGED/20260907/us-east-1/ec2/aws4_request, "
+                + "SignedHeaders=host, Signature=abc";
+        requestContext.setAccountId("222233334444");
+        requestContext.setRegion("us-east-1");
+
+        when(accountResolver.extractAccessKeyId(auth)).thenReturn("AKIATAGGED");
+        when(containerRequest.getHeaderString("Authorization")).thenReturn(auth);
+        when(actionRegistry.resolve("ec2", containerRequest)).thenReturn("ec2:TerminateInstances");
+        when(iamService.resolveCallerContext("AKIATAGGED"))
+                .thenReturn(CallerContext.of(List.of("""
+                        {"Version":"2012-10-17","Statement":[
+                          {"Effect":"Allow","Action":"ec2:TerminateInstances","Resource":"*",
+                           "Condition":{"StringEquals":{"aws:ResourceTag/Team":"payments"}}}
+                        ]}""")));
+        when(conditionContextResolver.resolve("ec2", "ec2:TerminateInstances", containerRequest))
+                .thenReturn(conditions);
+        when(evaluator.evaluate(any(), isNull(), eq("ec2:TerminateInstances"), eq("*"), eq(conditions)))
+                .thenReturn(IamPolicyEvaluator.Decision.DENY);
+
+        newFilter().filter(containerRequest);
+
+        verify(evaluator).evaluate(any(), isNull(), eq("ec2:TerminateInstances"), eq("*"), eq(conditions));
+        verify(containerRequest).abortWith(any(Response.class));
+    }
+
+    @Test
     void filterPassesS3ListBucketConditionContext() {
         ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
         Map<String, List<String>> conditions = Map.of("s3:prefix", List.of("my_namespace/table/"));
