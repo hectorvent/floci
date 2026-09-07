@@ -58,7 +58,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @QuarkusTest
 @TestProfile(IotMqttWebSocketIntegrationTest.Profile.class)
-class IotMqttWebSocketIntegrationTest {
+public class IotMqttWebSocketIntegrationTest {
 
     static final Path DATA_DIR = Path.of("target", "floci-iot-mqtt-ws-test").toAbsolutePath();
     static final Path TLS_DIR = DATA_DIR.resolve("tls");
@@ -208,7 +208,7 @@ class IotMqttWebSocketIntegrationTest {
     @Test
     void burstOfPublishesArrivesCompleteAndInOrder() throws Exception {
         String topic = "ws/burst/" + System.nanoTime();
-        int count = 200;
+        int count = 1000;
         byte[] filler = new byte[4096];
 
         try (WsClient subscriber = WsClient.connect(wss("/mqtt"), "ws-burst-sub-" + System.nanoTime(), null, null)) {
@@ -273,6 +273,26 @@ class IotMqttWebSocketIntegrationTest {
     }
 
     @Test
+    void connectDisconnectChurnLeavesNoBrokerSessionBehind() throws Exception {
+        List<String> clientIds = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            String clientId = "churn-" + i + "-" + System.nanoTime();
+            clientIds.add(clientId);
+            String url = i % 2 == 0 ? ws("/mqtt") : wss("/mqtt");
+            try (WsClient client = WsClient.connect(url, clientId, null, null)) {
+                assertTrue(client.isConnected());
+            }
+        }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        for (String clientId : clientIds) {
+            while (broker.getConnection(clientId).isPresent() && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertTrue(broker.getConnection(clientId).isEmpty(), clientId + " still has a broker session");
+        }
+    }
+
+    @Test
     void plaintextTcpListenerStillWorks() throws Exception {
         MqttClient client = new MqttClient("tcp://127.0.0.1:" + PLAIN_PORT, "tcp-" + System.nanoTime(), new MemoryPersistence());
         client.connect();
@@ -303,7 +323,7 @@ class IotMqttWebSocketIntegrationTest {
         return handshake.getResponse().statusCode();
     }
 
-    static SSLContext trustOnlyFlociCa() throws Exception {
+    public static SSLContext trustOnlyFlociCa() throws Exception {
         KeyStore trust = KeyStore.getInstance(KeyStore.getDefaultType());
         trust.load(null, null);
         trust.setCertificateEntry("floci", FlociCertificateAuthority.loadOrCreate(TLS_DIR).certificate());

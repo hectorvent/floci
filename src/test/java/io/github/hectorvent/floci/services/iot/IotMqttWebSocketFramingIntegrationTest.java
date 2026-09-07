@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.iot;
 
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
+import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -36,6 +38,9 @@ class IotMqttWebSocketFramingIntegrationTest {
 
     @ConfigProperty(name = "quarkus.http.test-port", defaultValue = "0")
     int testHttpPort;
+
+    @Inject
+    IotMqttBrokerService broker;
 
     @Test
     void connectSplitAcrossTwoFramesStillGetsConnack() throws Exception {
@@ -62,6 +67,43 @@ class IotMqttWebSocketFramingIntegrationTest {
             assertArrayEquals(CONNACK_ACCEPTED, raw.take(4));
             assertArrayEquals(new byte[] {(byte) 0x90, 0x03, 0x00, 0x07, 0x01}, raw.take(5), "SUBACK for id 7 granting QoS 1");
         }
+    }
+
+    @Test
+    void textFrameAfterConnectClosesWithUnsupportedDataAndFreesTheBrokerSession() throws Exception {
+        String clientId = "text-mid-" + System.nanoTime();
+        try (RawWs raw = RawWs.open(ws())) {
+            raw.socket.sendBinary(ByteBuffer.wrap(connectPacket(clientId)), true).get(10, TimeUnit.SECONDS);
+            assertArrayEquals(CONNACK_ACCEPTED, raw.take(4));
+            assertTrue(broker.getConnection(clientId).isPresent(), "precondition: a live broker session");
+
+            raw.socket.sendText("{\"not\":\"mqtt\"}", true).get(10, TimeUnit.SECONDS);
+
+            assertTrue(raw.closed.await(10, TimeUnit.SECONDS));
+            assertEquals(1003, raw.closeCode.get(10, TimeUnit.SECONDS), "MQTT over WebSocket is binary only");
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (broker.getConnection(clientId).isPresent() && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertTrue(broker.getConnection(clientId).isEmpty(), "the broker side is closed with the WebSocket");
+        }
+    }
+
+    @Test
+    void abruptTcpDropWithoutACloseFrameFreesTheBrokerSession() throws Exception {
+        String clientId = "abrupt-" + System.nanoTime();
+        RawWs raw = RawWs.open(ws());
+        raw.socket.sendBinary(ByteBuffer.wrap(connectPacket(clientId)), true).get(10, TimeUnit.SECONDS);
+        assertArrayEquals(CONNACK_ACCEPTED, raw.take(4));
+        assertTrue(broker.getConnection(clientId).isPresent(), "precondition: a live broker session");
+
+        raw.socket.abort();
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (broker.getConnection(clientId).isPresent() && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertTrue(broker.getConnection(clientId).isEmpty(), "a vanished client frees the broker session without an MQTT DISCONNECT");
     }
 
     @Test
@@ -138,6 +180,7 @@ class IotMqttWebSocketFramingIntegrationTest {
     private static final class RawWs implements AutoCloseable {
         final WebSocket socket;
         final CountDownLatch closed = new CountDownLatch(1);
+        final CompletableFuture<Integer> closeCode = new CompletableFuture<>();
         private final ByteArrayOutputStream received = new ByteArrayOutputStream();
 
         private RawWs(WebSocket socket) {
@@ -162,7 +205,9 @@ class IotMqttWebSocketFramingIntegrationTest {
 
                 @Override
                 public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-                    ready.join().closed.countDown();
+                    RawWs raw = ready.join();
+                    raw.closeCode.complete(statusCode);
+                    raw.closed.countDown();
                     return null;
                 }
 
