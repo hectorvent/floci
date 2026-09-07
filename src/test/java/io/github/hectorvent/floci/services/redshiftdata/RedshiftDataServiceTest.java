@@ -292,6 +292,13 @@ class RedshiftDataServiceTest {
     }
 
     @Test
+    void listStatementsRejectsMaxResultsAboveOneHundred() {
+        AwsException e = assertThrows(AwsException.class,
+                () -> service.listStatements(om.createObjectNode().put("MaxResults", 500)));
+        assertEquals("ValidationException", e.getErrorCode());
+    }
+
+    @Test
     void describeTableMatchesTheExactNameNotAPattern() {
         service.executeStatement(req("create table a_b (x int)"), REGION);
         service.executeStatement(req("create table axb (y int, z int)"), REGION);

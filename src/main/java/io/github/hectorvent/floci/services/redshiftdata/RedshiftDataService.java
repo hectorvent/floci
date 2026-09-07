@@ -351,11 +351,13 @@ public class RedshiftDataService implements Resettable {
     public ObjectNode listStatements(JsonNode request) {
         String nameFilter = textOrNull(request, "StatementName");
         String statusFilter = textOrNull(request, "Status");
-        // AWS caps MaxResults at 100 and treats 0 or absent as the default. An unclamped
-        // value of 0 would emit the same NextToken forever, so a follower would loop.
+        // AWS treats 0 or absent as the default and rejects anything above the documented
+        // maximum of 100. Clamping 0 up also stops a follower looping on a static NextToken.
         int maxResults = request.path("MaxResults").asInt(100);
-        if (maxResults <= 0 || maxResults > 100) {
+        if (maxResults <= 0) {
             maxResults = 100;
+        } else if (maxResults > 100) {
+            throw new AwsException("ValidationException", "MaxResults must not exceed 100.", 400);
         }
         int offset = decodeToken(textOrNull(request, "NextToken"));
 

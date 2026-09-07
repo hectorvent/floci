@@ -15,17 +15,17 @@ import software.amazon.awssdk.services.redshiftdata.model.GetStatementResultRequ
 import software.amazon.awssdk.services.redshiftdata.model.GetStatementResultResponse;
 import software.amazon.awssdk.services.redshiftdata.model.StatusString;
 
+import org.jboss.logging.Logger;
+
 import java.time.Duration;
 import java.time.Instant;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayName("Redshift Data API Operations")
 class RedshiftDataOperationsTest {
 
-    private static final Logger LOG = Logger.getLogger(RedshiftDataOperationsTest.class.getName());
+    private static final Logger LOG = Logger.getLogger(RedshiftDataOperationsTest.class);
 
     private static final String USERNAME = "admin";
     private static final String PASSWORD = "password123";
@@ -54,7 +54,7 @@ class RedshiftDataOperationsTest {
             try {
                 redshift.deleteCluster(DeleteClusterRequest.builder().clusterIdentifier(clusterId).build());
             } catch (Exception e) {
-                LOG.log(Level.WARNING, "Failed to clean up Redshift cluster " + clusterId, e);
+                LOG.warnf(e, "Failed to clean up Redshift cluster %s", clusterId);
             }
         }
         if (data != null) {
