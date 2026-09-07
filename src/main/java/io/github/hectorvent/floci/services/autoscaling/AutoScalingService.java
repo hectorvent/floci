@@ -80,6 +80,17 @@ public class AutoScalingService {
                                                           List<String> securityGroups, String userData,
                                                           String iamInstanceProfile,
                                                           Boolean associatePublicIpAddress) {
+        return createLaunchConfiguration(region, name, instanceId, imageId, instanceType, keyName,
+                securityGroups, userData, iamInstanceProfile, associatePublicIpAddress, null, List.of());
+    }
+
+    public LaunchConfiguration createLaunchConfiguration(String region, String name, String instanceId,
+                                                          String imageId, String instanceType, String keyName,
+                                                          List<String> securityGroups, String userData,
+                                                          String iamInstanceProfile,
+                                                          Boolean associatePublicIpAddress,
+                                                          Boolean instanceMonitoringEnabled,
+                                                          List<LaunchConfigurationBlockDeviceMapping> blockDeviceMappings) {
         String key = lcKey(region, name);
         if (launchConfigs.containsKey(key)) {
             throw new AwsException("AlreadyExists",
@@ -131,6 +142,10 @@ public class AutoScalingService {
         lc.setUserData(userData);
         lc.setIamInstanceProfile(iamInstanceProfile);
         lc.setAssociatePublicIpAddress(associatePublicIpAddress);
+        // AWS documents InstanceMonitoring as enabled by default and always returns the
+        // structure from Describe, unlike AssociatePublicIpAddress whose absence is meaningful.
+        lc.setInstanceMonitoringEnabled(instanceMonitoringEnabled != null ? instanceMonitoringEnabled : Boolean.TRUE);
+        lc.setBlockDeviceMappings(blockDeviceMappings != null ? new ArrayList<>(blockDeviceMappings) : new ArrayList<>());
         lc.setCreatedTime(Instant.now());
         lc.setRegion(region);
         launchConfigs.put(key, lc);

@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.services.autoscaling.model.AsgInstance;
 import io.github.hectorvent.floci.services.autoscaling.model.InstanceRefresh;
+import io.github.hectorvent.floci.services.autoscaling.model.LaunchConfigurationBlockDeviceMapping;
 import io.github.hectorvent.floci.services.autoscaling.model.MixedInstancesPolicy;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
 import io.github.hectorvent.floci.services.ec2.model.GroupIdentifier;
@@ -203,6 +204,55 @@ class AutoScalingServiceTest {
                 launchConfiguration.getIamInstanceProfile());
         assertEquals(launchConfiguration,
                 service.describeLaunchConfigurations(REGION, List.of("lc-from-instance")).getFirst());
+    }
+
+    @Test
+    void createLaunchConfigurationDefaultsInstanceMonitoringToEnabled() {
+        var lc = service.createLaunchConfiguration(REGION, "lc-default-monitoring", null,
+                "ami-12345678", "t3.micro", null, List.of(), null, null, null);
+
+        assertEquals(Boolean.TRUE, lc.getInstanceMonitoringEnabled());
+        assertEquals(List.of(), lc.getBlockDeviceMappings());
+        assertEquals(Boolean.TRUE,
+                service.describeLaunchConfigurations(REGION, List.of("lc-default-monitoring"))
+                        .getFirst().getInstanceMonitoringEnabled());
+    }
+
+    @Test
+    void createLaunchConfigurationKeepsAnExplicitInstanceMonitoringOverride() {
+        var lc = service.createLaunchConfiguration(REGION, "lc-monitoring-off", null,
+                "ami-12345678", "t3.micro", null, List.of(), null, null, null, Boolean.FALSE, List.of());
+
+        assertEquals(Boolean.FALSE, lc.getInstanceMonitoringEnabled());
+        assertEquals(Boolean.FALSE,
+                service.describeLaunchConfigurations(REGION, List.of("lc-monitoring-off"))
+                        .getFirst().getInstanceMonitoringEnabled());
+    }
+
+    @Test
+    void createLaunchConfigurationRoundTripsBlockDeviceMappings() {
+        var ebs = new LaunchConfigurationBlockDeviceMapping.Ebs();
+        ebs.setVolumeSize(100);
+        ebs.setVolumeType("gp3");
+        ebs.setIops(3000);
+        ebs.setThroughput(125);
+        ebs.setDeleteOnTermination(true);
+        var mapping = new LaunchConfigurationBlockDeviceMapping();
+        mapping.setDeviceName("/dev/xvda");
+        mapping.setEbs(ebs);
+
+        service.createLaunchConfiguration(REGION, "lc-with-root-device", null,
+                "ami-12345678", "t3.micro", null, List.of(), null, null, null, null, List.of(mapping));
+
+        var stored = service.describeLaunchConfigurations(REGION, List.of("lc-with-root-device"))
+                .getFirst().getBlockDeviceMappings();
+        assertEquals(1, stored.size());
+        assertEquals("/dev/xvda", stored.getFirst().getDeviceName());
+        assertEquals(100, stored.getFirst().getEbs().getVolumeSize());
+        assertEquals("gp3", stored.getFirst().getEbs().getVolumeType());
+        assertEquals(3000, stored.getFirst().getEbs().getIops());
+        assertEquals(125, stored.getFirst().getEbs().getThroughput());
+        assertEquals(Boolean.TRUE, stored.getFirst().getEbs().getDeleteOnTermination());
     }
 
     @Test
