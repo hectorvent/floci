@@ -2,14 +2,20 @@ package io.github.hectorvent.floci.services.controlcatalog;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
+import io.github.hectorvent.floci.services.controlcatalog.model.ControlDefinition;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ControlCatalogServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ControlCatalogService service = new ControlCatalogService(objectMapper);
+    private final AccountAwareStorageBackend<ControlDefinition> controls =
+            AccountAwareStorageBackend.inMemory("000000000000");
+    private final ControlCatalogService service = new ControlCatalogService(controls, objectMapper);
 
     @Test
     void listControlsFiltersByImplementationIdentifierAndProvider() throws Exception {
@@ -27,5 +33,20 @@ class ControlCatalogServiceTest {
                 objectMapper.readTree("{\"Filter\":{\"GovernedProviders\":[\"invalid\"]}}"), null, null));
         assertEquals("ValidationException", error.getErrorCode());
         assertEquals(400, error.getHttpStatus());
+    }
+
+    @Test
+    void clearRemovesPersistedCatalogAndNextReadReseedsIt() {
+        assertTrue(controls.keysForAccount("000000000000").isEmpty());
+
+        service.listControls(objectMapper.createObjectNode(), null, null);
+        assertFalse(controls.keysForAccount("000000000000").isEmpty());
+
+        service.clear();
+        assertTrue(controls.keysForAccount("000000000000").isEmpty());
+
+        var response = service.listControls(objectMapper.createObjectNode(), null, null);
+        assertEquals(6, response.path("Controls").size());
+        assertFalse(controls.keysForAccount("000000000000").isEmpty());
     }
 }

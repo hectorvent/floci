@@ -1,10 +1,14 @@
 package io.github.hectorvent.floci.services.controlcatalog;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.Resettable;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
+import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.controlcatalog.model.ControlDefinition;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -16,23 +20,31 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @ApplicationScoped
-public class ControlCatalogService {
+public class ControlCatalogService implements Resettable {
+    private static final String GLOBAL_PARTITION = "000000000000";
     private static final Pattern CONTROL_ARN = Pattern.compile(
             "^arn:(aws(?:[-a-z]*)?):(controlcatalog|controltower):([a-zA-Z0-9-]*)::control/([0-9a-zA-Z_\\-]+)$");
     private static final String SCP = "AWS::Organizations::Policy::SERVICE_CONTROL_POLICY";
     private static final String RCP = "AWS::Organizations::Policy::RESOURCE_CONTROL_POLICY";
     private static final String CONFIG_RULE = "AWS::Config::ConfigRule";
 
-    private static final Map<String, ControlDefinition> CONTROLS = controls();
-
+    private final AccountAwareStorageBackend<ControlDefinition> controls;
     private final ObjectMapper objectMapper;
+    private volatile boolean defaultsSeeded;
 
     @Inject
-    public ControlCatalogService(ObjectMapper objectMapper) {
+    public ControlCatalogService(StorageFactory storageFactory, ObjectMapper objectMapper) {
+        this(storageFactory.create("controlcatalog", "controlcatalog-controls.json",
+                new TypeReference<Map<String, ControlDefinition>>() {}), objectMapper);
+    }
+
+    ControlCatalogService(AccountAwareStorageBackend<ControlDefinition> controls, ObjectMapper objectMapper) {
+        this.controls = controls;
         this.objectMapper = objectMapper;
     }
 
     public ObjectNode getControl(JsonNode request, String requestRegion) {
+        ensureDefaults();
         String controlArn = requireControlArn(request);
         Matcher matcher = CONTROL_ARN.matcher(controlArn);
         if (!matcher.matches()) {
@@ -41,7 +53,7 @@ public class ControlCatalogService {
 
         String partition = matcher.group(1);
         String identifier = matcher.group(4);
-        ControlDefinition definition = CONTROLS.get(identifier);
+        ControlDefinition definition = controls.getForAccount(GLOBAL_PARTITION, identifier).orElse(null);
         if (definition == null) {
             throw new AwsException("ResourceNotFoundException",
                     "The specified control was not found in the Control Catalog.", 404);
@@ -83,6 +95,7 @@ public class ControlCatalogService {
     }
 
     public ObjectNode listControls(JsonNode request, String maxResultsRaw, String nextToken) {
+        ensureDefaults();
         int maxResults = parseMaxResults(maxResultsRaw);
         int offset = parseNextToken(nextToken);
         String implementationType = null;
@@ -110,7 +123,7 @@ public class ControlCatalogService {
         final String typeFilter = implementationType;
         final String identifierFilter = implementationIdentifier;
         final String providerFilter = governedProvider;
-        List<ControlDefinition> definitions = CONTROLS.values().stream()
+        List<ControlDefinition> definitions = controls.scanForAccount(GLOBAL_PARTITION, key -> true).stream()
                 .filter(definition -> definition.globalIdentifier() != null)
                 .filter(definition -> typeFilter == null || typeFilter.equals(definition.implementationType()))
                 .filter(definition -> identifierFilter == null || definition.aliases().contains(identifierFilter))
@@ -145,6 +158,26 @@ public class ControlCatalogService {
             response.put("NextToken", Integer.toString(end));
         }
         return response;
+    }
+
+    @Override
+    public synchronized void clear() {
+        controls.clear();
+        defaultsSeeded = false;
+    }
+
+    private void ensureDefaults() {
+        if (defaultsSeeded) {
+            return;
+        }
+        synchronized (this) {
+            if (defaultsSeeded) {
+                return;
+            }
+            controls().forEach((key, definition) ->
+                    controls.putForAccount(GLOBAL_PARTITION, key, definition));
+            defaultsSeeded = true;
+        }
     }
 
     private static String singleFilterValue(JsonNode node, String field, Pattern pattern) {

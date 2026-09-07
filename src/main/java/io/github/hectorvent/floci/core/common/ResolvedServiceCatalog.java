@@ -593,7 +593,7 @@ public class ResolvedServiceCatalog {
                         protocols(ServiceProtocol.JSON),
                         Set.of("AWS242ServiceCatalogService."), Set.of("servicecatalog"), Set.of(), Set.of()),
                 descriptor("controlcatalog", "controlcatalog", config.services().controlcatalog().enabled(), true,
-                        null, null, 5000L, null, ServiceProtocol.REST_JSON,
+                        "controlcatalog", config.storage().mode(), 5000L, null, ServiceProtocol.REST_JSON,
                         protocols(ServiceProtocol.REST_JSON), Set.of(), Set.of("controlcatalog"), Set.of(), Set.of(ControlCatalogController.class)),
                 descriptor("controltower", "controltower", config.services().controltower().enabled(), true,
                         "controltower", storageMode(config.storage().services().controltower().mode(), config.storage().mode()),
