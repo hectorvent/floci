@@ -144,6 +144,66 @@ class SesReceiptRuleSetReorderCloneV1IntegrationTest {
 
     @Test
     @Order(5)
+    void reorder_ruleNamesIndexGrammar_matchesProbedWire() {
+        // A gap of up to 10 is padded with empty members, which then fail the ruleNames
+        // Smithy constraint; nothing is truncated.
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.1", "r1")
+                .formParam("RuleNames.member.3", "r3")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("<Code>ValidationError</Code>"))
+                .body(containsString("Value at &apos;ruleNames&apos; failed to satisfy constraint"));
+
+        // A larger gap is its own MalformedInput; the skip counts from the previous index.
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.1", "r1")
+                .formParam("RuleNames.member.2", "r2")
+                .formParam("RuleNames.member.3", "r3")
+                .formParam("RuleNames.member.14", "rX")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("<Code>MalformedInput</Code>"))
+                .body(containsString("Excessively sparse input would skip 11 list elements"));
+
+        // The skip count is comma-grouped like AWS renders it.
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.1", "r1")
+                .formParam("RuleNames.member.1500", "rX")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("Excessively sparse input would skip 1,499 list elements"));
+
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.0", "r1")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("<Code>MalformedInput</Code>"))
+                .body(containsString("0 is not a valid index"));
+
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.01", "r1")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("Value found where not expected"));
+
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.x", "r1")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("Start of list found where not expected"));
+
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.999999999", "r1")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("Index 999999999 is illegal"));
+
+        // A repeated index keeps its first value: the list reads r1, r1, r3 and trips the
+        // duplicate-name check, proving the second value never displaced the first.
+        req("ReorderReceiptRuleSet").formParam("RuleSetName", RS)
+                .formParam("RuleNames.member.1", "r1", "r2")
+                .formParam("RuleNames.member.2", "r1")
+                .formParam("RuleNames.member.3", "r3")
+        .when().post("/").then().statusCode(400)
+                .body(containsString("Multiple positions found for rule: r1"));
+    }
+
+    @Test
+    @Order(6)
     void cleanup_deletesBothSets() {
         for (String name : new String[] {RS, CLONE}) {
             req("DeleteReceiptRuleSet").formParam("RuleSetName", name)

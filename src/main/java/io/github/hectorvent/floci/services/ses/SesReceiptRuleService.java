@@ -292,15 +292,15 @@ public class SesReceiptRuleService {
         }
         List<String> violations = new ArrayList<>();
         collectRuleNameParamViolations(ruleSetName, "ruleSetName", violations);
-        for (String name : ruleNames) {
-            // Probed: RuleNames members validate under the bare 'ruleNames' path with a nested
-            // list-member constraint whose length cap is 100 (not the 64 of the service-level
-            // name checks), and there is no "Not a valid ruleName" stage after it: a 65-char
-            // pattern-valid name falls through to RuleDoesNotExist.
-            if (name.isEmpty() || name.length() > MAX_REORDER_RULE_NAME_LENGTH
-                    || !RULE_SET_NAME_CHARS.matcher(name).matches()) {
-                violations.add(ruleNamesMemberViolation());
-            }
+        // Probed: RuleNames members validate under the bare 'ruleNames' path with a nested
+        // list-member constraint whose length cap is 100 (not the 64 of the service-level
+        // name checks), and there is no "Not a valid ruleName" stage after it: a 65-char
+        // pattern-valid name falls through to RuleDoesNotExist. The violation carries no
+        // member index and appears at most once, however many members are malformed.
+        if (ruleNames.stream().anyMatch(name -> name.isEmpty()
+                || name.length() > MAX_REORDER_RULE_NAME_LENGTH
+                || !RULE_SET_NAME_CHARS.matcher(name).matches())) {
+            violations.add(ruleNamesMemberViolation());
         }
         throwViolations(violations);
         requireValidRuleSetName(ruleSetName);

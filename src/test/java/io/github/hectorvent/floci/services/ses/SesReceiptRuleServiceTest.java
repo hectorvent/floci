@@ -685,6 +685,12 @@ class SesReceiptRuleServiceTest {
                 () -> service.reorderReceiptRuleSet("rules-a",
                         List.of("r1", "r2", "r3", "a".repeat(65)), REGION));
         assertEquals("RuleDoesNotExist", longButLegal.getErrorCode());
+
+        // Several malformed members still produce the single index-less violation (probed).
+        AwsException manyBad = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a",
+                        List.of("bad name!", "", "a".repeat(101)), REGION));
+        assertTrue(manyBad.getMessage().startsWith("1 validation error detected: "));
     }
 
     @Test

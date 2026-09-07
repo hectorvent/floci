@@ -1036,9 +1036,64 @@ public class SesQueryHandler {
 
     private Response handleReorderReceiptRuleSet(MultivaluedMap<String, String> params, String region) {
         sesService.reorderReceiptRuleSet(getParam(params, "RuleSetName"),
-                extractMembers(params, "RuleNames"), region);
+                parseReorderRuleNames(params), region);
         return Response.ok(AwsQueryResponse.envelopeEmptyResult(
                 "ReorderReceiptRuleSet", AwsNamespaces.SES)).build();
+    }
+
+    // Probed boundary of the RuleNames index grammar: 214748369 is the largest index the parser
+    // accepts (larger is MalformedInput "Index N is illegal"), found by bisection; it is near but
+    // not at Integer.MAX_VALUE / 10, so it is pinned as a literal rather than derived.
+    private static final int MAX_RULE_NAMES_INDEX = 214748369;
+    private static final int MAX_RULE_NAMES_INDEX_SKIP = 10;
+
+    /**
+     * Parses the ReorderReceiptRuleSet RuleNames flattened string list with the probed AWS
+     * grammar, which differs from the receipt-action struct list: an index gap is padded with
+     * empty members (up to a skip of {@value MAX_RULE_NAMES_INDEX_SKIP}, counted from the
+     * previous index, or from 1 for a leading gap), which then fail the ruleNames Smithy
+     * constraint downstream; a larger gap, index 0, a leading-zero spelling, a non-numeric
+     * token, and an index beyond {@value MAX_RULE_NAMES_INDEX} are each their own probed
+     * MalformedInput. A repeated index keeps its first value.
+     */
+    private List<String> parseReorderRuleNames(MultivaluedMap<String, String> params) {
+        String prefix = "RuleNames.member.";
+        Map<Integer, String> byIndex = new java.util.TreeMap<>();
+        for (String key : params.keySet()) {
+            if (!key.startsWith(prefix)) {
+                continue;
+            }
+            String token = key.substring(prefix.length());
+            if (token.isEmpty() || !token.chars().allMatch(c -> c >= '0' && c <= '9')) {
+                throw new AwsException("MalformedInput", "Start of list found where not expected", 400);
+            }
+            if ("0".equals(token)) {
+                throw new AwsException("MalformedInput", "0 is not a valid index", 400);
+            }
+            if (token.charAt(0) == '0') {
+                throw new AwsException("MalformedInput", "Value found where not expected", 400);
+            }
+            if (token.length() > 9 || Integer.parseInt(token) > MAX_RULE_NAMES_INDEX) {
+                throw new AwsException("MalformedInput", "Index " + token + " is illegal", 400);
+            }
+            byIndex.putIfAbsent(Integer.parseInt(token), getParam(params, key));
+        }
+        List<String> names = new ArrayList<>();
+        int previous = 0;
+        for (Map.Entry<Integer, String> member : byIndex.entrySet()) {
+            int index = member.getKey();
+            int skip = index - Math.max(previous, 1);
+            if (skip > MAX_RULE_NAMES_INDEX_SKIP) {
+                throw new AwsException("MalformedInput", String.format(java.util.Locale.ROOT,
+                        "Excessively sparse input would skip %,d list elements", skip), 400);
+            }
+            while (names.size() < index - 1) {
+                names.add("");
+            }
+            names.add(member.getValue());
+            previous = index;
+        }
+        return names;
     }
 
     private Response handleCloneReceiptRuleSet(MultivaluedMap<String, String> params, String region) {
