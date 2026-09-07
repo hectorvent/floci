@@ -7,6 +7,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import static io.restassured.RestAssured.given;
@@ -243,6 +249,52 @@ class DynamoDbImportIntegrationTest {
             .extract().jsonPath().getString("ImportTableDescription.ImportArn");
 
         assertEquals(first, second);
+    }
+
+    /** Real DynamoDB hands identical concurrent requests the same ImportArn. */
+    @Test
+    void importTable_concurrentSameClientToken_startsOneImport() throws Exception {
+        putObject("race/data.json", "{\"Item\":{\"pk\":{\"S\":\"one\"}}}\n");
+        var body = """
+                {
+                    "ClientToken": "import-token-race",
+                    "S3BucketSource": {"S3Bucket": "%s", "S3KeyPrefix": "race/"},
+                    "InputFormat": "DYNAMODB_JSON",
+                    "TableCreationParameters": {
+                        "TableName": "ImportRace",
+                        "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                        "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                        "BillingMode": "PAY_PER_REQUEST"
+                    }
+                }
+                """.formatted(BUCKET_NAME);
+        var threads = 8;
+        var startGate = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(threads);
+        try {
+            var futures = new ArrayList<Future<String>>();
+            for (var i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    startGate.await();
+                    return dynamo("ImportTable", body)
+                        .then().statusCode(200)
+                        .extract().jsonPath().getString("ImportTableDescription.ImportArn");
+                }));
+            }
+            startGate.countDown();
+            var importArns = new HashSet<String>();
+            for (var future : futures) {
+                importArns.add(future.get(30, TimeUnit.SECONDS));
+            }
+            assertEquals(1, importArns.size(), importArns.toString());
+        } finally {
+            pool.shutdownNow();
+        }
+
+        dynamo("ListImports", "{\"TableArn\": \"" + TABLE_ARN_PREFIX + "ImportRace\"}")
+            .then()
+            .statusCode(200)
+            .body("ImportSummaryList", hasSize(1));
     }
 
     @Test

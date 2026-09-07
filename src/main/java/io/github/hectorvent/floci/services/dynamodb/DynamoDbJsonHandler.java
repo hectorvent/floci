@@ -31,6 +31,7 @@ public class DynamoDbJsonHandler {
     private final KinesisService kinesisService;
     private final ObjectMapper objectMapper;
     private final DynamoDbPartiQLHandler partiQLHandler;
+    private final Object importLock = new Object();
 
     @Inject
     public DynamoDbJsonHandler(DynamoDbService dynamoDbService, DynamoDbStreamService dynamoDbStreamService,
@@ -2412,15 +2413,21 @@ public class DynamoDbJsonHandler {
     }
 
     private Response handleImportTable(JsonNode request, String region) {
-        var existing = dynamoDbService.validateImportRequest(request);
-        var desc = existing != null
-                ? existing
-                : dynamoDbService.startImport(request,
-                        createTableFromSpec(request.path("TableCreationParameters"), region, "CREATING"), region);
-
         var response = objectMapper.createObjectNode();
-        response.set("ImportTableDescription", objectMapper.valueToTree(desc));
+        response.set("ImportTableDescription", objectMapper.valueToTree(findOrStartImport(request, region)));
         return Response.ok(response).build();
+    }
+
+    /** Held across the ClientToken lookup and the table creation so identical concurrent requests share one import. */
+    private ImportTableDescription findOrStartImport(JsonNode request, String region) {
+        synchronized (importLock) {
+            var existing = dynamoDbService.validateImportRequest(request);
+            if (existing != null) {
+                return existing;
+            }
+            return dynamoDbService.startImport(request,
+                    createTableFromSpec(request.path("TableCreationParameters"), region, "CREATING"), region);
+        }
     }
 
     private Response handleDescribeImport(JsonNode request, String region) {
