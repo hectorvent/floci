@@ -2,7 +2,6 @@ package io.github.hectorvent.floci.services.dynamodb;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -594,6 +593,33 @@ class ExpressionEvaluatorTest {
                 assertEquals(400, e.getHttpStatus());
                 assertEquals("Invalid ConditionExpression: Syntax error; token: \"" + ch + "\", near: \"a " + ch + " b\"", e.getMessage());
             }
+        }
+
+        @Test
+        void reversedBetweenBoundsAreRejectedAtParseTime() {
+            var mapper = new ObjectMapper();
+            var values = mapper.createObjectNode();
+            values.set(":hi", mapper.createObjectNode().put("N", "10"));
+            values.set(":lo", mapper.createObjectNode().put("N", "1"));
+
+            var e = assertThrows(AwsException.class, () ->
+                    ExpressionEvaluator.validateExpression("n BETWEEN :hi AND :lo",
+                            "ConditionExpression", null, values));
+            assertEquals("ValidationException", e.getErrorCode());
+            assertEquals("Invalid ConditionExpression: The BETWEEN operator requires upper bound to be "
+                    + "greater than or equal to lower bound; lower bound operand: AttributeValue: {N:10}, "
+                    + "upper bound operand: AttributeValue: {N:1}", e.getMessage());
+        }
+
+        @Test
+        void orderedBetweenBoundsAreAccepted() {
+            var mapper = new ObjectMapper();
+            var values = mapper.createObjectNode();
+            values.set(":lo", mapper.createObjectNode().put("N", "1"));
+            values.set(":hi", mapper.createObjectNode().put("N", "10"));
+
+            assertDoesNotThrow(() -> ExpressionEvaluator.validateExpression("n BETWEEN :lo AND :hi",
+                    "ConditionExpression", null, values));
         }
 
         @Test

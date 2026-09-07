@@ -451,8 +451,42 @@ final class ExpressionEvaluator {
             case OrExpr o -> o.operands().forEach(x -> validateSemantics(x, exprType, names, values));
             case NotExpr n -> validateSemantics(n.operand(), exprType, names, values);
             case FunctionCallExpr f -> validateFunction(f, exprType, names, values);
+            case BetweenExpr b -> validateBetween(b, exprType, values);
             default -> {}
         }
+    }
+
+    // AWS rejects a BETWEEN whose bounds are the wrong way round when it parses the
+    // expression, rather than letting the condition fail at evaluation time.
+    private static void validateBetween(BetweenExpr between, String exprType, JsonNode values) {
+        var low = placeholderValue(between.low(), values);
+        var high = placeholderValue(between.high(), values);
+        if (low == null || high == null) {
+            return;
+        }
+        var lowType = low.fieldNames().next();
+        if (!lowType.equals(high.fieldNames().next()) || compareAttributeValues(low, high) <= 0) {
+            return;
+        }
+        throw new AwsException("ValidationException",
+                "Invalid " + exprType + ": The BETWEEN operator requires upper bound to be greater than "
+                + "or equal to lower bound; lower bound operand: " + displayAttributeValue(low)
+                + ", upper bound operand: " + displayAttributeValue(high), 400);
+    }
+
+    private static JsonNode placeholderValue(Operand operand, JsonNode values) {
+        if (operand instanceof PlaceholderOperand(String name) && values != null) {
+            var value = values.get(name);
+            if (value != null && value.isObject() && value.fieldNames().hasNext()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String displayAttributeValue(JsonNode value) {
+        var type = value.fieldNames().next();
+        return "AttributeValue: {" + type + ":" + value.get(type).asText() + "}";
     }
 
     private static void validateFunction(FunctionCallExpr f, String exprType,
