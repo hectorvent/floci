@@ -379,11 +379,14 @@ public class PipesService implements TagHandler, ResourceProvider {
             throw new AwsException("ValidationException",
                     property + " must be an integer", 400);
         }
-        long value = factor.asLong();
-        if (value < MIN_PARALLELIZATION_FACTOR || value > MAX_PARALLELIZATION_FACTOR) {
+        // canConvertToInt keeps a value wider than an int out of the bounds check: asLong would
+        // hand back the low 64 bits of a BigInteger, so 2^64 + 5 would read as 5 and be accepted.
+        if (!factor.canConvertToInt()
+                || factor.intValue() < MIN_PARALLELIZATION_FACTOR
+                || factor.intValue() > MAX_PARALLELIZATION_FACTOR) {
             throw new AwsException("ValidationException",
                     property + " must be between " + MIN_PARALLELIZATION_FACTOR + " and "
-                            + MAX_PARALLELIZATION_FACTOR + " (got " + value + ")", 400);
+                            + MAX_PARALLELIZATION_FACTOR + " (got " + factor.asText() + ")", 400);
         }
     }
 }

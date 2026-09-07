@@ -439,6 +439,22 @@ class PipesServiceTest {
     }
 
     @Test
+    void createPipeRejectsParallelizationFactorWiderThanAnInt() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                pipesService.createPipe("pf-oversized",
+                        "arn:aws:kinesis:us-east-1:000000000000:stream/events",
+                        "arn:aws:sqs:us-east-1:000000000000:target",
+                        "arn:aws:iam::000000000000:role/role",
+                        null, null, null,
+                        sourceParameters("""
+                                {"KinesisStreamParameters":{"ParallelizationFactor":18446744073709551621}}"""),
+                        null, null, null, "us-east-1"));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("18446744073709551621"), ex.getMessage());
+    }
+
+    @Test
     void createPipeRejectsNonNumericParallelizationFactor() {
         AwsException ex = assertThrows(AwsException.class, () ->
                 pipesService.createPipe("pf-non-numeric",

@@ -99,7 +99,8 @@ Floci emulates EventBridge Pipes with the following supported source and target 
 
 `CreatePipe` and `UpdatePipe` accept a `ParallelizationFactor` integer between 1 and 10 on the
 `KinesisStreamParameters` and `DynamoDBStreamParameters` source blocks, matching the AWS wire
-format. `DescribePipe` and `ListPipes` echo it back as part of `SourceParameters`.
+format. `DescribePipe` echoes it back as part of `SourceParameters`. `ListPipes` returns pipe
+summaries only and omits `SourceParameters` entirely, matching AWS.
 
 ```bash
 aws pipes create-pipe \
