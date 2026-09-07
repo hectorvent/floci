@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * The history events of the states inside a Parallel branch or a Map iteration, and the cause a
@@ -57,6 +58,8 @@ class AslExecutorBranchHistoryEventsTest {
 
     @BeforeEach
     void setUp() {
+        Instance<StepFunctionsService> sfnService = mock(Instance.class);
+        when(sfnService.get()).thenReturn(mock(StepFunctionsService.class));
         executor = new AslExecutor(
                 mock(LambdaExecutorService.class),
                 mock(LambdaFunctionStore.class),
@@ -73,7 +76,7 @@ class AslExecutorBranchHistoryEventsTest {
                 mock(io.github.hectorvent.floci.services.scheduler.SchedulerController.class),
                 objectMapper,
                 new JsonataEvaluator(objectMapper),
-                mock(Instance.class), mock(EmulatorConfig.class), vertx,
+                sfnService, mock(EmulatorConfig.class), vertx,
                 mock(io.github.hectorvent.floci.core.common.CustomResourceLiveness.class));
     }
 

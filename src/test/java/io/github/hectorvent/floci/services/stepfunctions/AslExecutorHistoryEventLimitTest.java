@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Guards the bound AWS puts on a running execution: a state machine that never reaches a terminal
@@ -183,6 +184,8 @@ class AslExecutorHistoryEventLimitTest {
 
     @BeforeEach
     void setUp() {
+        Instance<StepFunctionsService> sfnService = mock(Instance.class);
+        when(sfnService.get()).thenReturn(mock(StepFunctionsService.class));
         executor = new AslExecutor(
                 mock(LambdaExecutorService.class),
                 mock(LambdaFunctionStore.class),
@@ -199,7 +202,7 @@ class AslExecutorHistoryEventLimitTest {
                 mock(io.github.hectorvent.floci.services.scheduler.SchedulerController.class),
                 objectMapper,
                 new JsonataEvaluator(objectMapper),
-                mock(Instance.class), mock(EmulatorConfig.class), vertx, null);
+                sfnService, mock(EmulatorConfig.class), vertx, null);
     }
 
     @Test

@@ -94,6 +94,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
@@ -2195,10 +2196,14 @@ public class AslExecutor {
 
         chain.publish("MapStateStarted", Map.of("length", itemCount));
         MapRunIdentity mapRun = null;
+        MapRun mapRunRecord = null;
         if (distributed) {
             mapRun = newMapRunIdentity(stateDef, sm, context);
+            mapRunRecord = newMapRun(mapRun, context, itemCount, requestedConcurrency);
             chain.publish("MapRunStarted", Map.of("mapRunArn", mapRun.arn()));
         }
+        var succeededItems = new AtomicInteger();
+        var failedItems = new AtomicInteger();
         var iterationChains = new ArrayList<HistoryChain>(itemCount);
         for (var i = 0; i < itemCount; i++) {
             iterationChains.add(distributed ? HistoryChain.ofChildExecution() : chain.fork());
@@ -2242,11 +2247,13 @@ public class AslExecutor {
                 branchOutput = executeBranch(startAt, iteratorStates, iterInput, iterationChain, sm,
                         topLevelQueryLanguage, iterContext, variables.deepCopy());
             } catch (FailStateException e) {
+                failedItems.incrementAndGet();
                 if (!distributed && !e.isRuntimeError()) {
                     iterationChain.publishAside("MapIterationFailed", Map.of("name", name, "index", i));
                 }
                 throw new IterationFailure(i, e);
             }
+            succeededItems.incrementAndGet();
             if (!distributed) {
                 iterationChain.publish("MapIterationSucceeded", Map.of("name", name, "index", i));
             }
@@ -2273,6 +2280,7 @@ public class AslExecutor {
                     chain.continueFrom(iterationChains.get(e.index).lastEventId());
                 } else {
                     publishMapRunFailedEvent(chain, e.failure);
+                    recordMapRun(mapRunRecord, "FAILED", succeededItems.get(), failedItems.get());
                 }
                 throw e.failure;
             } finally {
@@ -2295,12 +2303,13 @@ public class AslExecutor {
             } catch (FailStateException e) {
                 // A ResultWriter failure fails the Map run on AWS.
                 publishMapRunFailedEvent(chain, e);
+                recordMapRun(mapRunRecord, "FAILED", succeededItems.get(), failedItems.get());
                 throw e;
             }
-            recordMapRun(mapResult, context, childTimings, requestedConcurrency);
         }
 
         if (distributed) {
+            recordMapRun(mapRunRecord, "SUCCEEDED", succeededItems.get(), failedItems.get());
             chain.publishAside("MapRunSucceeded", null);
         } else {
             chain.continueAfter(iterationChains);
@@ -2368,28 +2377,26 @@ public class AslExecutor {
      * a Map run's window on the export rather than on the last item. A run over no items starts and
      * stops at that same instant.
      */
-    private void recordMapRun(JsonNode mapResult, JsonNode context, List<long[]> childTimings,
-                              int requestedConcurrency) {
-        String mapRunArn = mapResult.path("MapRunArn").asText(null);
-        if (mapRunArn == null) {
-            return;
-        }
-        long stop = System.currentTimeMillis();
-        long start = stop;
-        for (long[] timing : childTimings) {
-            start = Math.min(start, timing[0]);
-        }
-
-        MapRun mapRun = new MapRun();
-        mapRun.setMapRunArn(mapRunArn);
+    private static MapRun newMapRun(MapRunIdentity identity, JsonNode context, int itemCount,
+                                    int requestedConcurrency) {
+        var mapRun = new MapRun();
+        mapRun.setMapRunArn(identity.arn());
         mapRun.setExecutionArn(context.path("Execution").path("Id").asText(null));
-        mapRun.setStartDate(start / 1000.0);
-        mapRun.setStopDate(stop / 1000.0);
-        mapRun.setItemCount(childTimings.size());
+        mapRun.setStartDate(System.currentTimeMillis() / 1000.0);
+        mapRun.setItemCount(itemCount);
         // ASL spells an unbounded Map as MaxConcurrency 0, or by omitting it; DescribeMapRun
         // reports that same run as Integer.MAX_VALUE.
         mapRun.setMaxConcurrency(
                 requestedConcurrency == 0 ? Integer.MAX_VALUE : requestedConcurrency);
+        return mapRun;
+    }
+
+    /** Kept for every Distributed Map, so the mapRunArn in the history resolves through DescribeMapRun. */
+    private void recordMapRun(MapRun mapRun, String status, int succeededItems, int failedItems) {
+        mapRun.setStopDate(System.currentTimeMillis() / 1000.0);
+        mapRun.setStatus(status);
+        mapRun.setSucceededCount(succeededItems);
+        mapRun.setFailedCount(failedItems);
         sfnService.get().recordMapRun(mapRun);
     }
 
