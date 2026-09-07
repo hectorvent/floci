@@ -168,16 +168,16 @@ class SnsSqsFanoutFifoDeliveryTest {
 
     @Test
     void publish_withDefaultThroughputScope_dedupsAcrossMessageGroups() {
-        // Arrange — no FifoThroughputScope, so the AWS default (Topic) applies
+        // Arrange: no FifoThroughputScope, so the AWS default (Topic) applies
         String queueUrl = createGroupScopedQueue("fifo-topic-scope-queue.fifo");
         String topicArn = createFifoTopic("fifo-topic-scope-topic.fifo", Map.of("FifoTopic", "true"),
                 "fifo-topic-scope-queue.fifo");
 
-        // Act — same dedup ID under two different message groups
+        // Act: same dedup ID under two different message groups
         snsService.publish(topicArn, null, null, "group-one", null, null, "group-1", "shared-dedup", REGION);
         snsService.publish(topicArn, null, null, "group-two", null, null, "group-2", "shared-dedup", REGION);
 
-        // Assert — deduplication is topic-wide, so the second publish is swallowed
+        // Assert: deduplication is topic-wide, so the second publish is swallowed
         List<Message> messages = sqsService.receiveMessage(queueUrl, 10, 30, 0, REGION);
         assertEquals(1, messages.size());
         assertTrue(messages.getFirst().getBody().contains("group-one"));
@@ -191,11 +191,11 @@ class SnsSqsFanoutFifoDeliveryTest {
                 Map.of("FifoTopic", "true", "FifoThroughputScope", "MessageGroup"),
                 "fifo-group-scope-queue.fifo");
 
-        // Act — same dedup ID under two different message groups
+        // Act: same dedup ID under two different message groups
         snsService.publish(topicArn, null, null, "group-one", null, null, "group-1", "shared-dedup", REGION);
         snsService.publish(topicArn, null, null, "group-two", null, null, "group-2", "shared-dedup", REGION);
 
-        // Assert — deduplication is scoped per group, so both are distinct messages
+        // Assert: deduplication is scoped per group, so both are distinct messages
         List<Message> messages = sqsService.receiveMessage(queueUrl, 10, 30, 0, REGION);
         assertEquals(2, messages.size());
         List<String> bodies = messages.stream().map(Message::getBody).toList();
@@ -211,11 +211,11 @@ class SnsSqsFanoutFifoDeliveryTest {
                 Map.of("FifoTopic", "true", "FifoThroughputScope", "MessageGroup"),
                 "fifo-group-scope-dup-queue.fifo");
 
-        // Act — same dedup ID twice under the same message group
+        // Act: same dedup ID twice under the same message group
         snsService.publish(topicArn, null, null, "first", null, null, "group-1", "shared-dedup", REGION);
         snsService.publish(topicArn, null, null, "second", null, null, "group-1", "shared-dedup", REGION);
 
-        // Assert — narrowing the scope must not disable deduplication inside a group
+        // Assert: narrowing the scope must not disable deduplication inside a group
         List<Message> messages = sqsService.receiveMessage(queueUrl, 10, 30, 0, REGION);
         assertEquals(1, messages.size());
         assertTrue(messages.getFirst().getBody().contains("first"));
@@ -245,7 +245,7 @@ class SnsSqsFanoutFifoDeliveryTest {
                 Map.of("FifoTopic", "true", "FifoThroughputScope", "MessageGroup"),
                 "fifo-batch-group-scope-queue.fifo");
 
-        // Act — one batch, same dedup ID under two different message groups
+        // Act: one batch, same dedup ID under two different message groups
         var entries = List.<Map<String, Object>>of(
                 Map.of("Id", "e1", "Message", "batch-group-one",
                         "MessageGroupId", "group-1", "MessageDeduplicationId", "shared-dedup"),
@@ -264,10 +264,7 @@ class SnsSqsFanoutFifoDeliveryTest {
         assertTrue(bodies.stream().anyMatch(b -> b.contains("batch-group-two")));
     }
 
-    /**
-     * The queue deduplicates per group too, so a message SNS forwards is never dropped again by
-     * SQS on the way in. Without this the queue's own topic-wide dedup would mask the topic's.
-     */
+    /** Per-group dedup on the queue too, so its own topic-wide window cannot mask the topic's. */
     private String createGroupScopedQueue(String queueName) {
         sqsService.createQueue(queueName, Map.of(
                 "FifoQueue", "true",

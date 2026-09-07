@@ -1256,10 +1256,8 @@ public class SnsService implements Resettable, ResourceProvider {
     }
 
     /**
-     * A FIFO topic with {@code FifoThroughputScope=MessageGroup} deduplicates within each message
-     * group rather than across the whole topic, so the same {@code MessageDeduplicationId} sent
-     * under two different {@code MessageGroupId}s is two distinct messages. {@code Topic} is the
-     * AWS default and keeps the scope topic-wide.
+     * {@code MessageGroup} narrows deduplication to a single message group. {@code Topic}, the AWS
+     * default, keeps it topic-wide.
      */
     private static boolean isGroupScopedDeduplication(Topic topic) {
         return "MessageGroup".equalsIgnoreCase(topic.getAttributes().get("FifoThroughputScope"));
@@ -1267,9 +1265,11 @@ public class SnsService implements Resettable, ResourceProvider {
 
     private boolean isDuplicate(String topicArn, String messageGroupId, String deduplicationId,
                                 boolean groupScoped) {
-        // NUL delimits the group from the dedup id. SNS allows neither to contain it, so a
-        // group-scoped key can never collide with a topic-scoped one.
-        String scopedId = groupScoped ? messageGroupId + "\0" + deduplicationId : deduplicationId;
+        // Length-prefixed rather than delimited: nothing validates the characters in either id,
+        // so a delimiter inside one could make two different pairs share a key.
+        String scopedId = groupScoped
+                ? messageGroupId.length() + "#" + messageGroupId + deduplicationId
+                : deduplicationId;
         String cacheKey = topicArn + ":" + scopedId;
         Instant now = Instant.now();
         Instant existing = fifoDeduplicationCache.get(cacheKey);
