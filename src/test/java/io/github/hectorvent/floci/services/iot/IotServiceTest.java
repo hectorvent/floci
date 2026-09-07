@@ -105,7 +105,8 @@ class IotServiceTest {
                 lambda,
                 firehose,
                 logs,
-                mock(io.github.hectorvent.floci.config.FlociCertificateAuthority.class));
+                mock(io.github.hectorvent.floci.config.FlociCertificateAuthority.class),
+                new io.github.hectorvent.floci.services.iam.IamPolicyEvaluator(mapper));
     }
 
     private IotTopicRule createRule(String name, String payloadJson) throws Exception {
