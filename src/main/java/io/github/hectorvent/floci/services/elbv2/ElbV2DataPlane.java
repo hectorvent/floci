@@ -650,7 +650,10 @@ public class ElbV2DataPlane {
                     clientReq.send(req);
                     req.resume();
                 })
-                .onFailure(err -> req.response().setStatusCode(503).end("Service unavailable"));
+                .onFailure(err -> {
+                    req.resume();
+                    req.response().setStatusCode(503).end("Service unavailable");
+                });
     }
 
     private void executeRedirect(io.vertx.core.http.HttpServerRequest req, Action action) {
