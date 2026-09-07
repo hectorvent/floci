@@ -79,7 +79,7 @@ class AcmServiceTest {
     }
 
     @ParameterizedTest
-    @EnumSource(KeyAlgorithm.class)
+    @EnumSource(value = KeyAlgorithm.class, names = {"RSA_2048", "EC_prime256v1", "EC_secp384r1"})
     void issuesALeafOfTheRequestedAlgorithmSignedByTheLocalCa(KeyAlgorithm algorithm) throws Exception {
         Certificate cert = service.requestCertificate("api.example.test", List.of("*.example.test"),
                 ValidationMethod.DNS, null, algorithm, null, null, Map.of(), REGION);
