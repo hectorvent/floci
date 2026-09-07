@@ -484,7 +484,21 @@ final class ExpressionEvaluator {
                     low.get("S").asText().getBytes(StandardCharsets.UTF_8),
                     high.get("S").asText().getBytes(StandardCharsets.UTF_8));
         }
+        if (low.has("B") && high.has("B")) {
+            return Arrays.compareUnsigned(decodeBinaryBound(low), decodeBinaryBound(high));
+        }
         return compareAttributeValues(low, high);
+    }
+
+    // A binary value that is not valid base64 never reaches a comparison on AWS: the request
+    // fails to deserialize first, with a 400 SerializationException.
+    private static byte[] decodeBinaryBound(JsonNode bound) {
+        try {
+            return Base64.getDecoder().decode(bound.get("B").asText());
+        } catch (IllegalArgumentException e) {
+            throw new AwsException("SerializationException",
+                    "Unexpected value type in payload", 400);
+        }
     }
 
     private static JsonNode placeholderValue(Operand operand, JsonNode values) {

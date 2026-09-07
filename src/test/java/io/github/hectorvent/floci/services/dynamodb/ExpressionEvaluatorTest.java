@@ -634,6 +634,32 @@ class ExpressionEvaluatorTest {
             assertEquals("ValidationException", e.getErrorCode());
         }
 
+        // Checked against real DynamoDB (us-east-1, 2026-09-07): binary bounds compare by
+        // unsigned bytes, and a bound that is not valid base64 fails the request with a 400
+        // SerializationException before any comparison happens.
+        @Test
+        void binaryBoundsCompareByBytesAndRejectMalformedBase64() {
+            var mapper = new ObjectMapper();
+            var reversed = mapper.createObjectNode();
+            reversed.set(":lo", mapper.createObjectNode().put("B", "/w=="));
+            reversed.set(":hi", mapper.createObjectNode().put("B", "AA=="));
+
+            var e = assertThrows(AwsException.class, () ->
+                    ExpressionEvaluator.validateExpression("n BETWEEN :lo AND :hi",
+                            "ConditionExpression", null, reversed));
+            assertEquals("ValidationException", e.getErrorCode());
+
+            var malformed = mapper.createObjectNode();
+            malformed.set(":lo", mapper.createObjectNode().put("B", "!!!not-base64!!!"));
+            malformed.set(":hi", mapper.createObjectNode().put("B", "@@@@"));
+
+            var serialization = assertThrows(AwsException.class, () ->
+                    ExpressionEvaluator.validateExpression("n BETWEEN :lo AND :hi",
+                            "ConditionExpression", null, malformed));
+            assertEquals("SerializationException", serialization.getErrorCode());
+            assertEquals(400, serialization.getHttpStatus());
+        }
+
         @Test
         void orderedBetweenBoundsAreAccepted() {
             var mapper = new ObjectMapper();
