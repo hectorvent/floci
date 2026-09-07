@@ -1105,6 +1105,24 @@ class Ec2IntegrationTest {
 
     @Test
     @Order(21)
+    void createSubnetWithConflictingCidrReturnsInvalidSubnetConflict() {
+        given()
+            .formParam("Action", "CreateSubnet")
+            .formParam("VpcId", vpcId)
+            .formParam("CidrBlock", "10.0.1.128/25")
+            .formParam("AvailabilityZone", "us-east-1a")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidSubnet.Conflict"))
+            .body("Response.Errors.Error.Message",
+                    equalTo("The CIDR '10.0.1.128/25' conflicts with another subnet"));
+    }
+
+    @Test
+    @Order(21)
     void describeSubnetById() {
         given()
             .formParam("Action", "DescribeSubnets")

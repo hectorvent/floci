@@ -257,6 +257,75 @@ class Ec2ServiceTest {
     }
 
     @Test
+    void createSubnetRejectsCidrThatConflictsWithAnExistingSubnetInTheSameVpc() {
+        // CreateSubnet has no idempotency token, so an SDK transport retry after a lost response
+        // resends the identical request. AWS's CIDR conflict check is what turns that resend into
+        // an error instead of a second, unrecorded subnet.
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpc = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        AwsException error = assertThrows(AwsException.class, () -> service.createSubnet(
+                "us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a"));
+
+        assertEquals("InvalidSubnet.Conflict", error.getErrorCode());
+        assertEquals("The CIDR '10.0.1.0/24' conflicts with another subnet", error.getMessage());
+        assertEquals(400, error.getHttpStatus());
+        assertEquals(1, service.describeSubnets("us-east-1", List.of(), Map.of()).stream()
+                .filter(s -> vpc.getVpcId().equals(s.getVpcId())).count());
+    }
+
+    @Test
+    void createSubnetRejectsCidrThatPartiallyOverlapsAnExistingSubnet() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpc = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        // 10.0.1.128/25 lies inside 10.0.1.0/24, an overlap rather than a duplicate.
+        AwsException error = assertThrows(AwsException.class, () -> service.createSubnet(
+                "us-east-1", vpc.getVpcId(), "10.0.1.128/25", "us-east-1a"));
+
+        assertEquals("InvalidSubnet.Conflict", error.getErrorCode());
+    }
+
+    @Test
+    void createSubnetAllowsNonOverlappingCidrsInTheSameVpc() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpc = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        Subnet second = service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.2.0/24", "us-east-1b");
+
+        assertEquals("10.0.2.0/24", second.getCidrBlock());
+        assertEquals(2, service.describeSubnets("us-east-1", List.of(), Map.of()).stream()
+                .filter(s -> vpc.getVpcId().equals(s.getVpcId())).count());
+    }
+
+    @Test
+    void createSubnetAllowsConflictingCidrsInDifferentVpcs() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpcA = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        Vpc vpcB = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpcA.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        Subnet subnetB = service.createSubnet("us-east-1", vpcB.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        assertEquals("10.0.1.0/24", subnetB.getCidrBlock());
+    }
+
+    @Test
     void runInstancesStoresArchitectureFromImageCatalog() {
         Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
                 mock(Ec2PortForwardManager.class),

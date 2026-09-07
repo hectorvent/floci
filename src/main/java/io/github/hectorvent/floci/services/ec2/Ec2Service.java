@@ -3294,6 +3294,7 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
         }
         ensureDefaultResources(region);
         getRequiredVpc(region, vpcId);
+        rejectConflictingSubnetCidr(region, vpcId, cidrBlock);
 
         String zoneName = resolveSubnetZoneName(region, availabilityZone, availabilityZoneId);
 
@@ -3323,6 +3324,26 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
             networkAcls.put(key(region, defaultAcl.getNetworkAclId()), defaultAcl);
         }
         return subnet;
+    }
+
+    /**
+     * AWS refuses a subnet whose IPv4 CIDR overlaps another subnet's in the same VPC. CreateSubnet
+     * carries no idempotency token, so this check is also what stops an SDK transport retry after
+     * a lost response from producing a second, unrecorded subnet at the same CIDR. Requests with
+     * no IPv4 CIDR are not checked here.
+     */
+    private void rejectConflictingSubnetCidr(String region, String vpcId, String cidrBlock) {
+        if (!Ipv4Cidrs.isIpv4(cidrBlock)) {
+            return;
+        }
+        boolean conflict = subnets.scan(k -> true).stream()
+                .filter(s -> region.equals(s.getRegion()) && vpcId.equals(s.getVpcId()))
+                .filter(s -> Ipv4Cidrs.isIpv4(s.getCidrBlock()))
+                .anyMatch(s -> Ipv4Cidrs.overlaps(cidrBlock, s.getCidrBlock()));
+        if (conflict) {
+            throw new AwsException("InvalidSubnet.Conflict",
+                    "The CIDR '" + cidrBlock + "' conflicts with another subnet", 400);
+        }
     }
 
     public List<Subnet> describeSubnets(String region, List<String> subnetIds, Map<String, List<String>> filters) {
