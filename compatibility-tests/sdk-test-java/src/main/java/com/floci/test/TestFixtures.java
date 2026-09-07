@@ -29,6 +29,7 @@ import software.amazon.awssdk.services.opensearch.OpenSearchClient;
 import software.amazon.awssdk.services.neptune.NeptuneClient;
 import software.amazon.awssdk.services.rds.RdsClient;
 import software.amazon.awssdk.services.redshift.RedshiftClient;
+import software.amazon.awssdk.services.redshiftdata.RedshiftDataClient;
 import software.amazon.awssdk.services.guardduty.GuardDutyClient;
 import software.amazon.awssdk.services.fis.FisClient;
 import software.amazon.awssdk.services.organizations.OrganizationsClient;
@@ -1109,6 +1110,14 @@ public final class TestFixtures {
 
     public static RedshiftClient redshiftClient() {
         return RedshiftClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static RedshiftDataClient redshiftDataClient() {
+        return RedshiftDataClient.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)
