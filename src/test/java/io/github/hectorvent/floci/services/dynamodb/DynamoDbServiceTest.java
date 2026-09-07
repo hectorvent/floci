@@ -3821,6 +3821,41 @@ class DynamoDbServiceTest {
         return s3;
     }
 
+    /** Checked against real DynamoDB: every item call on a CREATING table fails this way, DescribeTable still works. */
+    @Test
+    void itemCalls_creatingTable_returnResourceNotFoundWithoutTableName() {
+        var svc = serviceWithS3(mock(S3Service.class), new InMemoryStorage<>());
+        createUsersTableInCreating(svc);
+        var region = "us-east-1";
+        var key = item("userId", "u1");
+        var keys = mapper.createObjectNode();
+        keys.set("Keys", mapper.createArrayNode().add(key));
+        var putRequest = mapper.createObjectNode();
+        putRequest.putObject("PutRequest").set("Item", key);
+        var transactPut = mapper.createObjectNode();
+        transactPut.putObject("Put").put("TableName", "Users").set("Item", key);
+        var transactGet = mapper.createObjectNode();
+        transactGet.putObject("Get").put("TableName", "Users").set("Key", key);
+
+        List<org.junit.jupiter.api.function.Executable> itemCalls = List.of(
+                () -> svc.getItem("Users", key, region),
+                () -> svc.putItem("Users", key, null, null, null, region, "NONE"),
+                () -> svc.updateItem("Users", key, null, "SET x = :v", null, item("v", "1"), "NONE", region),
+                () -> svc.deleteItem("Users", key, region),
+                () -> svc.query("Users", null, item("pk", "u1"), "userId = :pk", null, null, region),
+                () -> svc.scan("Users", null, null, null, null, null, null, null, region),
+                () -> svc.batchGetItem(Map.of("Users", keys), region),
+                () -> svc.batchWriteItem(Map.of("Users", List.of(putRequest)), region),
+                () -> svc.transactWriteItems(List.of(transactPut), region, null, null),
+                () -> svc.transactGetItems(List.of(transactGet), region));
+        for (var call : itemCalls) {
+            var e = assertThrows(AwsException.class, call);
+            assertEquals("ResourceNotFoundException", e.getErrorCode());
+            assertEquals("Requested resource not found", e.getMessage());
+        }
+        assertEquals("CREATING", svc.describeTable("Users", region).getTableStatus());
+    }
+
     @Test
     void runImport_loadsGzipLinesAndCountsBadOnes() throws Exception {
         var object = s3Object("imp/part-0.json.gz",
