@@ -14,8 +14,15 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -86,6 +93,71 @@ class IotServiceDeviceAuthTest {
         assertEquals(OTHER_ACCOUNT, device.accountId());
         assertEquals("eu-west-1", device.region());
         assertEquals(created.getCertificateId(), device.certificate().getCertificateId());
+    }
+
+    @Test
+    void plainStoresWithoutAccountPartitionsWorkTheSameWay() {
+        IotService plain = new IotServiceTestSupport(REGION, ca, false).service;
+        IotCertificate created = plain.createKeysAndCertificate(true, REGION);
+        plain.createPolicy("p", CONNECT_ANY_CLIENT, REGION);
+        plain.attachPolicy("p", created.getCertificateArn(), REGION);
+
+        RegisteredDevice device = plain.findRegisteredCertificate(parse(created)).orElseThrow();
+
+        assertEquals(ACCOUNT, device.accountId(), "the resolver's default account stands in for the partition");
+        assertEquals(REGION, device.region());
+        assertTrue(plain.isConnectAllowed(device, "sensor-1", "127.0.0.1", null));
+        assertTrue(plain.findRegisteredCertificate(
+                GENERATOR.parseCertificate(ca.issueClientCertificate("stranger").certificatePem())).isEmpty());
+    }
+
+    /**
+     * Policy attachments, policy versions and thing attributes are replaced under a connecting
+     * device: every evaluation completes with a decision, never an exception, and the state the
+     * writers leave behind is the one the next evaluation sees.
+     */
+    @Test
+    void evaluationsRacingPolicyAndThingChangesAlwaysComplete() throws Exception {
+        RegisteredDevice device = registeredDevice(true);
+        service.createThing("sensor-1", Map.of("envType", "prod"), REGION);
+        service.attachThingPrincipal("sensor-1", device.certificate().getCertificateArn(), REGION);
+        createAndAttach("p", statement("Allow", "arn:aws:iot:*:*:client/${iot:Connection.Thing.ThingName}",
+                "{\"StringEquals\":{\"iot:Connection.Thing.Attributes[envType]\":\"prod\"}}"), device);
+        int rounds = 200;
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        List<Future<?>> outcomes = new ArrayList<>();
+        try {
+            for (int i = 0; i < 4; i++) {
+                outcomes.add(pool.submit(() -> {
+                    start.await();
+                    for (int round = 0; round < rounds; round++) {
+                        service.detachPolicy("p", device.certificate().getCertificateArn(), REGION);
+                        service.updateThing("sensor-1", Map.of("envType", round % 2 == 0 ? "test" : "prod"), null, REGION);
+                        service.attachPolicy("p", device.certificate().getCertificateArn(), REGION);
+                    }
+                    return null;
+                }));
+                outcomes.add(pool.submit(() -> {
+                    start.await();
+                    for (int round = 0; round < rounds; round++) {
+                        connect(device, "sensor-1");
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (Future<?> outcome : outcomes) {
+                outcome.get(60, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        service.updateThing("sensor-1", Map.of("envType", "prod"), null, REGION);
+        assertTrue(connect(device, "sensor-1"));
+        service.detachPolicy("p", device.certificate().getCertificateArn(), REGION);
+        assertFalse(connect(device, "sensor-1"));
     }
 
     @Test

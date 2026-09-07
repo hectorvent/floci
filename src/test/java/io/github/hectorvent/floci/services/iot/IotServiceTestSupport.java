@@ -5,6 +5,7 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.config.FlociCertificateAuthority;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
+import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.cloudwatch.logs.CloudWatchLogsService;
 import io.github.hectorvent.floci.services.dynamodb.DynamoDbService;
 import io.github.hectorvent.floci.services.firehose.FirehoseService;
@@ -25,9 +26,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * An {@link IotService} over account-aware in-memory stores, with every collaborator that a
- * device authorization test does not exercise mocked. The stores stay reachable so a test can
- * place a record in another account's partition, which no API call does.
+ * An {@link IotService} over in-memory stores, account-aware as in production or plain, with
+ * every collaborator that a device authorization test does not exercise mocked. The account-aware
+ * stores stay reachable so a test can place a record in another account's partition, which no
+ * API call does.
  */
 final class IotServiceTestSupport {
 
@@ -41,16 +43,20 @@ final class IotServiceTestSupport {
     final IotService service;
 
     IotServiceTestSupport(String region, FlociCertificateAuthority certificateAuthority) {
+        this(region, certificateAuthority, true);
+    }
+
+    IotServiceTestSupport(String region, FlociCertificateAuthority certificateAuthority, boolean accountAware) {
         EmulatorConfig config = mock(EmulatorConfig.class, RETURNS_DEEP_STUBS);
         when(config.defaultRegion()).thenReturn(region);
         when(config.services().iot().ruleSqlStrict()).thenReturn(false);
         ObjectMapper objectMapper = new ObjectMapper();
         service = new IotService(
-                things,
-                certificates,
-                policies,
-                policyAttachments,
-                thingPrincipals,
+                accountAware ? things : new InMemoryStorage<>(),
+                accountAware ? certificates : new InMemoryStorage<>(),
+                accountAware ? policies : new InMemoryStorage<>(),
+                accountAware ? policyAttachments : new InMemoryStorage<>(),
+                accountAware ? thingPrincipals : new InMemoryStorage<>(),
                 AccountAwareStorageBackend.inMemory(ACCOUNT),   // shadows
                 AccountAwareStorageBackend.inMemory(ACCOUNT),   // topic rules
                 AccountAwareStorageBackend.inMemory(ACCOUNT),   // retained messages
