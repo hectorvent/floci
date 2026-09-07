@@ -585,6 +585,203 @@ class SesReceiptRuleServiceTest {
         assertEquals("RuleSetDoesNotExist", e.getErrorCode());
     }
 
+    // ---- reorder / clone ----
+
+    private void createThreeRuleSet(String name) {
+        service.createReceiptRuleSet(name, REGION);
+        service.createReceiptRule(name, rule("r1"), null, REGION, ANY_SENDER_VERIFIED);
+        service.createReceiptRule(name, rule("r2"), "r1", REGION, ANY_SENDER_VERIFIED);
+        service.createReceiptRule(name, rule("r3"), "r2", REGION, ANY_SENDER_VERIFIED);
+    }
+
+    @Test
+    void reorder_appliesFullPermutation() {
+        createThreeRuleSet("rules-a");
+        service.reorderReceiptRuleSet("rules-a", List.of("r3", "r1", "r2"), REGION);
+        assertEquals(List.of("r3", "r1", "r2"), ruleNames("rules-a"));
+    }
+
+    @Test
+    void reorder_identityOrder_isNoOp() {
+        createThreeRuleSet("rules-a");
+        service.reorderReceiptRuleSet("rules-a", List.of("r1", "r2", "r3"), REGION);
+        assertEquals(List.of("r1", "r2", "r3"), ruleNames("rules-a"));
+    }
+
+    @Test
+    void reorder_unknownSet_throwsBeforeRuleNameProblems() {
+        AwsException e = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("ghost", List.of("rX", "rX"), REGION));
+        assertEquals("RuleSetDoesNotExist", e.getErrorCode());
+    }
+
+    @Test
+    void reorder_duplicateName_winsOverMissingAndUnknown() {
+        createThreeRuleSet("rules-a");
+
+        // Duplicate of an existing name, with the set only partially covered.
+        AwsException dup = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a", List.of("r1", "r1"), REGION));
+        assertEquals("InvalidParameterValue", dup.getErrorCode());
+        assertEquals("Multiple positions found for rule: r1", dup.getMessage());
+
+        // Duplicate of a name that is not in the set at all still takes the duplicate error.
+        AwsException dupUnknown = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a",
+                        List.of("r1", "r2", "r3", "rX", "rX"), REGION));
+        assertEquals("Multiple positions found for rule: rX", dupUnknown.getMessage());
+    }
+
+    @Test
+    void reorder_missingRules_listedInSetOrder_beforeUnknownNames() {
+        createThreeRuleSet("rules-a");
+        service.reorderReceiptRuleSet("rules-a", List.of("r3", "r1", "r2"), REGION);
+
+        // Unknown rX does not surface while set rules are missing; the list follows set order.
+        AwsException e = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a", List.of("r2", "rX"), REGION));
+        assertEquals("InvalidParameterValue", e.getErrorCode());
+        assertEquals("Positions for rules not found: r3, r1", e.getMessage());
+
+        // An empty RuleNames list is the same error naming every rule.
+        AwsException empty = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a", List.of(), REGION));
+        assertEquals("Positions for rules not found: r3, r1, r2", empty.getMessage());
+    }
+
+    @Test
+    void reorder_unknownName_reportsFirstInRequestOrder_andLeavesOrderUnchanged() {
+        createThreeRuleSet("rules-a");
+        AwsException e = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a",
+                        List.of("r1", "r2", "r3", "rX", "rY"), REGION));
+        assertEquals("RuleDoesNotExist", e.getErrorCode());
+        assertEquals("Rule does not exist: rX", e.getMessage());
+        assertEquals(List.of("r1", "r2", "r3"), ruleNames("rules-a"));
+    }
+
+    @Test
+    void reorder_ruleNamesMembers_getNestedSmithyViolation_beforeSetExistence() {
+        AwsException badChar = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("ghost", List.of("bad name!"), REGION));
+        assertEquals("ValidationError", badChar.getErrorCode());
+        assertEquals("1 validation error detected: Value at 'ruleNames' failed to satisfy "
+                + "constraint: Member must satisfy constraint: "
+                + "[Member must have length less than or equal to 100, "
+                + "Member must have length greater than or equal to 1, "
+                + "Member must satisfy regular expression pattern: ^[a-zA-Z0-9_.-]+$]",
+                badChar.getMessage());
+
+        // Empty and >100 take the same violation; a 65-char name passes (the cap here is 100,
+        // not the 64 of the service-level name checks) and lands on RuleDoesNotExist instead.
+        createThreeRuleSet("rules-a");
+        AwsException empty = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a", List.of(""), REGION));
+        assertEquals("ValidationError", empty.getErrorCode());
+        AwsException tooLong = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a", List.of("a".repeat(101)), REGION));
+        assertEquals("ValidationError", tooLong.getErrorCode());
+        AwsException longButLegal = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("rules-a",
+                        List.of("r1", "r2", "r3", "a".repeat(65)), REGION));
+        assertEquals("RuleDoesNotExist", longButLegal.getErrorCode());
+    }
+
+    @Test
+    void reorder_ruleSetName_getsSmithyThenServiceValidation() {
+        AwsException empty = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("", List.of("r1"), REGION));
+        assertEquals("ValidationError", empty.getErrorCode());
+        assertTrue(empty.getMessage().startsWith("2 validation errors detected: "));
+        assertTrue(empty.getMessage().contains("'ruleSetName'"));
+
+        AwsException tooLong = assertThrows(AwsException.class,
+                () -> service.reorderReceiptRuleSet("a".repeat(65), List.of("r1"), REGION));
+        assertEquals("InvalidParameterValue", tooLong.getErrorCode());
+        assertEquals("Not a valid ruleSetName: " + "a".repeat(65), tooLong.getMessage());
+    }
+
+    @Test
+    void clone_deepCopiesRulesWithNewTimestampAndInactive() {
+        createThreeRuleSet("rules-src");
+        service.createReceiptRule("rules-src",
+                rule("r0", action("S3Action", "BucketName", "inbox", "ObjectKeyPrefix", "mail/")),
+                null, REGION, ANY_SENDER_VERIFIED);
+        service.setActiveReceiptRuleSet("rules-src", REGION);
+        ReceiptRuleSet original = service.describeReceiptRuleSet("rules-src", REGION);
+
+        ReceiptRuleSet clone = service.cloneReceiptRuleSet("rules-copy", "rules-src", REGION);
+
+        assertEquals("rules-copy", clone.getName());
+        assertEquals(List.of("r0", "r1", "r2", "r3"), ruleNames("rules-copy"));
+        assertEquals("inbox", service.describeReceiptRule("rules-copy", "r0", REGION)
+                .getActions().get(0).property("BucketName"));
+        assertNotNull(clone.getCreatedTimestamp());
+        assertFalse(clone.getCreatedTimestamp().isBefore(original.getCreatedTimestamp()));
+        // The active flag stays with the original.
+        assertFalse(clone.isActive());
+        assertEquals("rules-src", service.describeActiveReceiptRuleSet(REGION).getName());
+    }
+
+    @Test
+    void clone_isIndependentOfLaterSourceMutations() {
+        createThreeRuleSet("rules-src");
+        service.cloneReceiptRuleSet("rules-copy", "rules-src", REGION);
+
+        service.deleteReceiptRule("rules-src", "r1", REGION);
+        service.describeReceiptRule("rules-src", "r2", REGION)
+                .getActions().add(action("StopAction", "Scope", "RuleSet"));
+
+        assertEquals(List.of("r1", "r2", "r3"), ruleNames("rules-copy"));
+        assertTrue(service.describeReceiptRule("rules-copy", "r2", REGION).getActions().isEmpty());
+    }
+
+    @Test
+    void clone_emptySet_succeeds() {
+        service.createReceiptRuleSet("rules-empty", REGION);
+        service.cloneReceiptRuleSet("rules-copy", "rules-empty", REGION);
+        assertEquals(List.of(), ruleNames("rules-copy"));
+    }
+
+    @Test
+    void clone_missingSource_throwsRuleSetDoesNotExist() {
+        AwsException e = assertThrows(AwsException.class,
+                () -> service.cloneReceiptRuleSet("rules-copy", "ghost", REGION));
+        assertEquals("RuleSetDoesNotExist", e.getErrorCode());
+        assertEquals("Rule set does not exist: ghost", e.getMessage());
+    }
+
+    @Test
+    void clone_existingTarget_winsOverMissingSource() {
+        service.createReceiptRuleSet("rules-a", REGION);
+        AwsException e = assertThrows(AwsException.class,
+                () -> service.cloneReceiptRuleSet("rules-a", "ghost", REGION));
+        assertEquals("AlreadyExists", e.getErrorCode());
+        assertEquals("Rule set already exists: rules-a", e.getMessage());
+    }
+
+    @Test
+    void clone_nameValidation_isTwoLayer_targetBeforeSource() {
+        // Smithy pattern layer combines both members, original first.
+        AwsException bothBad = assertThrows(AwsException.class,
+                () -> service.cloneReceiptRuleSet("bad target!", "bad source!", REGION));
+        assertEquals("ValidationError", bothBad.getErrorCode());
+        assertTrue(bothBad.getMessage().startsWith("2 validation errors detected: "));
+        assertTrue(bothBad.getMessage().indexOf("'originalRuleSetName'")
+                < bothBad.getMessage().indexOf("'ruleSetName'"));
+
+        // The service-level length check reports the target before the source and does not
+        // name the member.
+        AwsException bothLong = assertThrows(AwsException.class,
+                () -> service.cloneReceiptRuleSet("a".repeat(65), "b".repeat(65), REGION));
+        assertEquals("InvalidParameterValue", bothLong.getErrorCode());
+        assertEquals("Not a valid ruleSetName: " + "a".repeat(65), bothLong.getMessage());
+
+        AwsException sourceLong = assertThrows(AwsException.class,
+                () -> service.cloneReceiptRuleSet("rules-copy", "b".repeat(65), REGION));
+        assertEquals("Not a valid ruleSetName: " + "b".repeat(65), sourceLong.getMessage());
+    }
+
     // ---- receipt filters ----
 
     @Test

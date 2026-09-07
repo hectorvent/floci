@@ -133,6 +133,8 @@ public class SesQueryHandler {
                 case "DeleteReceiptRuleSet" -> handleDeleteReceiptRuleSet(params, region);
                 case "SetActiveReceiptRuleSet" -> handleSetActiveReceiptRuleSet(params, region);
                 case "DescribeActiveReceiptRuleSet" -> handleDescribeActiveReceiptRuleSet(region);
+                case "ReorderReceiptRuleSet" -> handleReorderReceiptRuleSet(params, region);
+                case "CloneReceiptRuleSet" -> handleCloneReceiptRuleSet(params, region);
                 case "CreateReceiptRule" -> handleCreateReceiptRule(params, region);
                 case "DescribeReceiptRule" -> handleDescribeReceiptRule(params, region);
                 case "UpdateReceiptRule" -> handleUpdateReceiptRule(params, region);
@@ -1030,6 +1032,20 @@ public class SesQueryHandler {
         }
         return Response.ok(AwsQueryResponse.envelope(
                 "DescribeActiveReceiptRuleSet", AwsNamespaces.SES, xml.build())).build();
+    }
+
+    private Response handleReorderReceiptRuleSet(MultivaluedMap<String, String> params, String region) {
+        sesService.reorderReceiptRuleSet(getParam(params, "RuleSetName"),
+                extractMembers(params, "RuleNames"), region);
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult(
+                "ReorderReceiptRuleSet", AwsNamespaces.SES)).build();
+    }
+
+    private Response handleCloneReceiptRuleSet(MultivaluedMap<String, String> params, String region) {
+        sesService.cloneReceiptRuleSet(getParam(params, "RuleSetName"),
+                getParam(params, "OriginalRuleSetName"), region);
+        return Response.ok(AwsQueryResponse.envelopeEmptyResult(
+                "CloneReceiptRuleSet", AwsNamespaces.SES)).build();
     }
 
     private Response handleCreateReceiptRule(MultivaluedMap<String, String> params, String region) {

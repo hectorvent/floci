@@ -1284,6 +1284,14 @@ public class SesService {
         return receiptRuleService.describeActiveReceiptRuleSet(region);
     }
 
+    public void reorderReceiptRuleSet(String ruleSetName, List<String> ruleNames, String region) {
+        receiptRuleService.reorderReceiptRuleSet(ruleSetName, ruleNames, region);
+    }
+
+    public ReceiptRuleSet cloneReceiptRuleSet(String ruleSetName, String originalRuleSetName, String region) {
+        return receiptRuleService.cloneReceiptRuleSet(ruleSetName, originalRuleSetName, region);
+    }
+
     // The bounce-sender check needs identity state; the rule domain receives it as a predicate
     // bound here, keeping SesIdentityService out of its constructor surface.
 
