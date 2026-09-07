@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.iot;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.services.iot.model.IotRetainedMessage;
+import io.netty.handler.codec.mqtt.MqttConnectReturnCode;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
@@ -27,9 +28,14 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import javax.net.ssl.ExtendedSSLSession;
+import javax.net.ssl.SNIHostName;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLPeerUnverifiedException;
+import javax.net.ssl.SSLSession;
 import javax.net.ssl.X509ExtendedTrustManager;
 import java.net.Socket;
+import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -40,6 +46,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 @ApplicationScoped
 public class IotMqttBrokerService {
@@ -47,10 +54,11 @@ public class IotMqttBrokerService {
     private static final Logger LOG = Logger.getLogger(IotMqttBrokerService.class);
 
     /**
-     * The TLS listener asks for a client certificate and accepts whichever one is presented: AWS
-     * IoT trusts a device certificate because it is registered, not because of its issuer, and
-     * that lookup belongs to the broker, not to the handshake. Until it exists, 8883 admits every
-     * client exactly as 1883 does.
+     * The TLS listener asks for a client certificate and lets the handshake complete with whichever
+     * one is presented: AWS IoT trusts a device certificate because it is registered, not because
+     * of its issuer, and that lookup happens on the CONNECT in {@link #handleEndpoint}, where a
+     * certificate that is missing, unregistered, inactive or not allowed to connect is answered
+     * with CONNACK not authorized.
      */
     static final X509ExtendedTrustManager ACCEPT_ANY_CLIENT_CERTIFICATE = new X509ExtendedTrustManager() {
         @Override
@@ -85,6 +93,8 @@ public class IotMqttBrokerService {
             return new X509Certificate[0];
         }
     };
+
+    private static final Pattern IPV4_LITERAL = Pattern.compile("\\d{1,3}(\\.\\d{1,3}){3}");
 
     private final EmulatorConfig config;
     private final Vertx vertx;
@@ -131,7 +141,7 @@ public class IotMqttBrokerService {
 
         MqttServer mqttServer = listen(new MqttServerOptions()
                 .setHost(config.services().iot().mqtt().host())
-                .setPort(config.services().iot().mqtt().port()), "IoT MQTT broker");
+                .setPort(config.services().iot().mqtt().port()), "IoT MQTT broker", false);
         try {
             startTlsListener();
         } catch (RuntimeException e) {
@@ -142,9 +152,10 @@ public class IotMqttBrokerService {
     }
 
     /**
-     * The MQTT over TLS listener, AWS IoT's 8883, sharing every handler with the plaintext one.
-     * Its key material is the TLS registry's default configuration, the same certificate the HTTPS
-     * endpoint presents. Not opened when the port is 0 or TLS is off.
+     * The MQTT over TLS listener, AWS IoT's 8883, sharing every handler with the plaintext one but
+     * admitting only registered devices whose policies allow the connect. Its key material is the
+     * TLS registry's default configuration, the same certificate the HTTPS endpoint presents. Not
+     * opened when the port is 0 or TLS is off.
      */
     private void startTlsListener() {
         int tlsPort = config.services().iot().mqtt().tlsPort();
@@ -168,13 +179,13 @@ public class IotMqttBrokerService {
                 .setSsl(true)
                 .setKeyCertOptions(KeyCertOptions.wrap(manager))
                 .setTrustOptions(TrustOptions.wrap(ACCEPT_ANY_CLIENT_CERTIFICATE))
-                .setClientAuth(ClientAuth.REQUEST), "IoT MQTT TLS broker");
+                .setClientAuth(ClientAuth.REQUEST), "IoT MQTT TLS broker", true);
         keyManager = manager;
     }
 
-    private MqttServer listen(MqttServerOptions options, String name) {
+    private MqttServer listen(MqttServerOptions options, String name, boolean verifyDevice) {
         MqttServer mqttServer = MqttServer.create(vertx, options);
-        mqttServer.endpointHandler(this::handleEndpoint);
+        mqttServer.endpointHandler(endpoint -> handleEndpoint(endpoint, verifyDevice));
         mqttServer.exceptionHandler(error -> LOG.warnv("{0} error: {1}", name, error.getMessage()));
         try {
             mqttServer.listen().toCompletionStage().toCompletableFuture().join();
@@ -266,13 +277,32 @@ public class IotMqttBrokerService {
                 .toList();
     }
 
-    private void handleEndpoint(MqttEndpoint endpoint) {
+    /**
+     * On the TLS listener the CONNECT is admitted only for a presented certificate that IoT Core
+     * has registered and whose attached policies allow {@code iot:Connect} for the client id;
+     * anything else is answered with CONNACK not authorized (return code 5, reason code 0x87 on
+     * MQTT 5) and never becomes a session, so a client already holding that client id keeps its
+     * connection. The plaintext listener, which the WebSocket bridge also lands on, stays open to
+     * every client.
+     */
+    private void handleEndpoint(MqttEndpoint endpoint, boolean verifyDevice) {
         String clientId = endpoint.clientIdentifier();
         SocketAddress remoteAddress = endpoint.remoteAddress();
+        String sourceIp = remoteAddress == null ? null : remoteAddress.host();
+        String principal = null;
+        if (verifyDevice) {
+            principal = admittedDevice(endpoint, clientId, sourceIp);
+            if (principal == null) {
+                endpoint.reject(endpoint.protocolVersion() == 5
+                        ? MqttConnectReturnCode.CONNECTION_REFUSED_NOT_AUTHORIZED_5
+                        : MqttConnectReturnCode.CONNECTION_REFUSED_NOT_AUTHORIZED);
+                return;
+            }
+        }
         ClientSession session = new ClientSession(
                 clientId,
                 endpoint,
-                remoteAddress == null ? null : remoteAddress.host(),
+                sourceIp,
                 remoteAddress == null ? -1 : remoteAddress.port(),
                 endpoint.isCleanSession());
 
@@ -291,6 +321,68 @@ public class IotMqttBrokerService {
         }
 
         endpoint.accept();
+        if (principal != null) {
+            LOG.debugv("IoT MQTT TLS client {0} admitted as {1}", clientId, principal);
+        }
+    }
+
+    /**
+     * The certificate ARN of the device behind the connection when it may connect, otherwise null.
+     * A failure while deciding refuses the client rather than leaving the CONNECT unanswered.
+     */
+    private String admittedDevice(MqttEndpoint endpoint, String clientId, String sourceIp) {
+        try {
+            Optional<IotService.RegisteredDevice> device = presentedDevice(endpoint);
+            if (device.isEmpty()) {
+                LOG.infov("IoT MQTT TLS client {0} refused: no registered certificate presented", clientId);
+                return null;
+            }
+            String certificateArn = device.get().certificate().getCertificateArn();
+            if (!iotService.get().isConnectAllowed(device.get(), clientId, sourceIp, requestedServerName(endpoint))) {
+                LOG.infov("IoT MQTT TLS client {0} refused: iot:Connect is not allowed for {1}", clientId, certificateArn);
+                return null;
+            }
+            return certificateArn;
+        } catch (RuntimeException e) {
+            LOG.warnv(e, "IoT MQTT TLS client {0} refused: device verification failed: {1}", clientId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** The registered certificate behind the peer's leaf, if the client presented one at all. */
+    private Optional<IotService.RegisteredDevice> presentedDevice(MqttEndpoint endpoint) {
+        SSLSession session = endpoint.isSsl() ? endpoint.sslSession() : null;
+        if (session == null) {
+            return Optional.empty();
+        }
+        Certificate[] chain;
+        try {
+            chain = session.getPeerCertificates();
+        } catch (SSLPeerUnverifiedException e) {
+            LOG.debugv("IoT MQTT TLS client {0} presented no certificate", endpoint.clientIdentifier());
+            return Optional.empty();
+        }
+        if (chain.length == 0 || !(chain[0] instanceof X509Certificate leaf)) {
+            return Optional.empty();
+        }
+        return iotService.get().findRegisteredCertificate(leaf);
+    }
+
+    /**
+     * The server name the client sent in the handshake, which AWS IoT exposes as
+     * {@code iot:DomainName}. An address literal is not a domain name: some clients send the
+     * host they dialled as SNI even when it is an IP.
+     */
+    private static String requestedServerName(MqttEndpoint endpoint) {
+        if (!(endpoint.sslSession() instanceof ExtendedSSLSession session)) {
+            return null;
+        }
+        return session.getRequestedServerNames().stream()
+                .filter(SNIHostName.class::isInstance)
+                .map(name -> ((SNIHostName) name).getAsciiName())
+                .filter(name -> !IPV4_LITERAL.matcher(name).matches())
+                .findFirst()
+                .orElse(null);
     }
 
     private void handleSubscribe(ClientSession session, MqttSubscribeMessage message) {

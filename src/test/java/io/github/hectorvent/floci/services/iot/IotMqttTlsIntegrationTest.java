@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.config.CertificateMetadata;
 import io.github.hectorvent.floci.config.FlociCertificateAuthority;
 import io.github.hectorvent.floci.config.TlsCertificateManager;
-import io.github.hectorvent.floci.services.acm.CertificateGenerator;
 import io.github.hectorvent.floci.services.acm.model.KeyAlgorithm;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
@@ -19,20 +18,15 @@ import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.junit.jupiter.api.Test;
 
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
-import javax.net.ssl.TrustManagerFactory;
 import java.io.IOException;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyStore;
-import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
@@ -55,8 +49,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Devices connect to the MQTT over TLS listener the way they connect to AWS IoT's 8883: over
- * {@code ssl://}, trusting one CA, verifying the endpoint name, with MQTT 3.1.1 or MQTT 5, and
- * with the same broker behaviour as the plaintext listener.
+ * {@code ssl://}, trusting one CA, verifying the endpoint name, presenting a registered device
+ * certificate whose policy allows the connect, with MQTT 3.1.1 or MQTT 5, and with the same
+ * broker behaviour as the plaintext listener.
  */
 @QuarkusTest
 @TestProfile(IotMqttTlsIntegrationTest.Profile.class)
@@ -69,20 +64,43 @@ class IotMqttTlsIntegrationTest {
     static final String LEARNED_HOST = "iot.dev.localhost.floci.io";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    private static IotDeviceIdentity device;
+
     @Inject
     TlsCertificateManager certificateManager;
 
     @Inject
     IotMqttBrokerService broker;
 
+    /**
+     * One registered device with a policy allowing iot:Connect for any client id, shared by the
+     * TLS clients. Provisioned by the first test that needs it: RestAssured is pointed at the
+     * test port before each test, not before the class.
+     */
+    private static synchronized IotDeviceIdentity device() {
+        if (device == null) {
+            IotDeviceIdentity provisioned = IotDeviceIdentity.provision(true);
+            String policy = "tls-roundtrip-" + System.nanoTime();
+            given()
+                    .contentType("application/json")
+                    .body(OBJECT_MAPPER.createObjectNode().put("policyDocument",
+                            "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"iot:Connect\",\"Resource\":\"arn:aws:iot:*:*:client/*\"}]}").toString())
+                    .when().post("/policies/" + policy)
+                    .then().statusCode(200);
+            given().queryParam("target", provisioned.certificateArn).when().put("/target-policies/" + policy).then().statusCode(200);
+            device = provisioned;
+        }
+        return device;
+    }
+
     @Test
     void connectSubscribePublishOverTlsTrustingOnlyTheFlociCa() throws Exception {
         String topic = "tls/roundtrip/" + System.nanoTime();
         byte[] payload = "hello over 8883".getBytes(StandardCharsets.UTF_8);
 
-        try (TlsClient subscriber = TlsClient.connect("tls-sub-" + System.nanoTime(), null)) {
+        try (TlsClient subscriber = TlsClient.connect("tls-sub-" + System.nanoTime())) {
             subscriber.subscribe(topic, 1);
-            try (TlsClient publisher = TlsClient.connect("tls-pub-" + System.nanoTime(), null)) {
+            try (TlsClient publisher = TlsClient.connect("tls-pub-" + System.nanoTime())) {
                 publisher.publish(topic, payload, 1);
             }
             assertArrayEquals(payload, subscriber.takePayload());
@@ -97,7 +115,7 @@ class IotMqttTlsIntegrationTest {
                 new org.eclipse.paho.mqttv5.client.MqttConnectionOptions();
         options.setCleanStart(true);
         options.setConnectionTimeout(10);
-        options.setSocketFactory(trustOnlyTheCa(null).getSocketFactory());
+        options.setSocketFactory(device().sslContext(TLS_DIR).getSocketFactory());
         try {
             client.connect(options);
             assertTrue(client.isConnected());
@@ -108,11 +126,10 @@ class IotMqttTlsIntegrationTest {
     }
 
     @Test
-    void aDeviceCertificateIssuedByTheCaIsAcceptedAndTheSessionIsVisibleToTheConnectionApi() throws Exception {
+    void aRegisteredDeviceIsAdmittedAndTheSessionIsVisibleToTheConnectionApi() throws Exception {
         String clientId = "tls-device-" + System.nanoTime();
-        var device = FlociCertificateAuthority.loadOrCreate(TLS_DIR).issueClientCertificate("device-" + clientId);
 
-        try (TlsClient client = TlsClient.connect(clientId, keyManagers(device))) {
+        try (TlsClient client = TlsClient.connect(clientId)) {
             assertTrue(client.isConnected());
             given()
                 .queryParam("includeSocketInformation", true)
@@ -168,7 +185,7 @@ class IotMqttTlsIntegrationTest {
     void aClientIdReconnectingOnThePlaintextListenerTakesOverTheTlsSession() throws Exception {
         String clientId = "tls-takeover-" + System.nanoTime();
 
-        try (TlsClient first = TlsClient.connect(clientId, null)) {
+        try (TlsClient first = TlsClient.connect(clientId)) {
             MqttClient second = new MqttClient("tcp://127.0.0.1:" + PLAIN_PORT, clientId, new MemoryPersistence());
             try {
                 second.connect();
@@ -184,9 +201,9 @@ class IotMqttTlsIntegrationTest {
     @Test
     void shadowUpdateOverTlsPublishesTheAcceptedResponseOverTls() throws Exception {
         String thing = "tlsThing" + System.nanoTime();
-        try (TlsClient subscriber = TlsClient.connect("tls-shadow-sub-" + System.nanoTime(), null)) {
+        try (TlsClient subscriber = TlsClient.connect("tls-shadow-sub-" + System.nanoTime())) {
             subscriber.subscribe("$aws/things/" + thing + "/shadow/update/accepted", 0);
-            try (TlsClient publisher = TlsClient.connect("tls-shadow-pub-" + System.nanoTime(), null)) {
+            try (TlsClient publisher = TlsClient.connect("tls-shadow-pub-" + System.nanoTime())) {
                 publisher.publish("$aws/things/" + thing + "/shadow/update",
                         "{\"state\":{\"desired\":{\"color\":\"blue\"}},\"clientToken\":\"tls-token\"}".getBytes(StandardCharsets.UTF_8), 0);
             }
@@ -201,7 +218,7 @@ class IotMqttTlsIntegrationTest {
         broker.stop();
         broker.startIfEnabled();
 
-        try (TlsClient client = TlsClient.connect("tls-restart-" + System.nanoTime(), null)) {
+        try (TlsClient client = TlsClient.connect("tls-restart-" + System.nanoTime())) {
             assertTrue(client.isConnected());
         }
     }
@@ -213,7 +230,7 @@ class IotMqttTlsIntegrationTest {
      */
     private static X509Certificate handshakeVerifying(String host) throws Exception {
         try (Socket raw = new Socket("127.0.0.1", TLS_PORT);
-             SSLSocket socket = (SSLSocket) trustOnlyTheCa(null).getSocketFactory().createSocket(raw, host, TLS_PORT, true)) {
+             SSLSocket socket = (SSLSocket) trustOnlyTheCa().getSocketFactory().createSocket(raw, host, TLS_PORT, true)) {
             SSLParameters params = socket.getSSLParameters();
             params.setEndpointIdentificationAlgorithm("HTTPS");
             socket.setSSLParameters(params);
@@ -222,26 +239,9 @@ class IotMqttTlsIntegrationTest {
         }
     }
 
-    private static SSLContext trustOnlyTheCa(KeyManager[] clientKeys) throws Exception {
-        KeyStore trust = KeyStore.getInstance(KeyStore.getDefaultType());
-        trust.load(null, null);
-        trust.setCertificateEntry("floci", FlociCertificateAuthority.loadOrCreate(TLS_DIR).certificate());
-        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-        tmf.init(trust);
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(clientKeys, tmf.getTrustManagers(), null);
-        return context;
-    }
-
-    private static KeyManager[] keyManagers(CertificateGenerator.GeneratedCertificate leaf) throws Exception {
-        CertificateGenerator generator = new CertificateGenerator();
-        KeyStore keys = KeyStore.getInstance(KeyStore.getDefaultType());
-        keys.load(null, null);
-        keys.setKeyEntry("device", generator.parsePrivateKey(leaf.privateKeyPem()), new char[0],
-                new Certificate[] {generator.parseCertificate(leaf.certificatePem())});
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(keys, new char[0]);
-        return kmf.getKeyManagers();
+    /** A handshake with no client certificate: enough to read the served leaf, never followed by a CONNECT. */
+    private static SSLContext trustOnlyTheCa() throws Exception {
+        return IotDeviceIdentity.trustOnlySslContext(TLS_DIR);
     }
 
     private static Set<String> sans(X509Certificate leaf) throws Exception {
@@ -261,7 +261,7 @@ class IotMqttTlsIntegrationTest {
             this.client = client;
         }
 
-        static TlsClient connect(String clientId, KeyManager[] clientKeys) throws Exception {
+        static TlsClient connect(String clientId) throws Exception {
             MqttClient client = new MqttClient("ssl://127.0.0.1:" + TLS_PORT, clientId, new MemoryPersistence());
             TlsClient tlsClient = new TlsClient(client);
             client.setCallback(new MqttCallback() {
@@ -282,7 +282,7 @@ class IotMqttTlsIntegrationTest {
             options.setCleanSession(true);
             options.setConnectionTimeout(10);
             options.setAutomaticReconnect(false);
-            options.setSocketFactory(trustOnlyTheCa(clientKeys).getSocketFactory());
+            options.setSocketFactory(device().sslContext(TLS_DIR).getSocketFactory());
             client.connect(options);
             return tlsClient;
         }
