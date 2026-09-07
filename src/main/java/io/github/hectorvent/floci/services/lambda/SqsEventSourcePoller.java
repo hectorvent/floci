@@ -174,15 +174,17 @@ public class SqsEventSourcePoller implements Resettable {
                 }
 
                 // MaximumBatchingWindowInSeconds holds an underfilled batch open: keep messages
-                // received across earlier polls invisible (visibility must cover the window) and
-                // only invoke once the batch fills or the window since the first message expires.
+                // received across earlier polls invisible and only invoke once the batch fills or
+                // the window since the first buffered message expires.
                 int window = esm.getMaximumBatchingWindowInSeconds() == null
                         ? 0 : esm.getMaximumBatchingWindowInSeconds();
-                int visibilityTimeout = Math.max(fn.getTimeout() + 30, window + 30);
+                // A message can be buffered for the whole window and then processed for the full
+                // function timeout, so visibility has to cover both plus AWS's 30s margin, not the
+                // larger of the two. Otherwise a long invoke can outlive the visibility and another
+                // consumer receives the message, causing a duplicate delivery and a stale handle.
+                int visibilityTimeout = fn.getTimeout() + Math.max(window, 0) + 30;
 
-                PendingBatch pending = window > 0
-                        ? pendingBatches.computeIfAbsent(esm.getUuid(), k -> new PendingBatch())
-                        : null;
+                PendingBatch pending = pendingBatches.get(esm.getUuid());
                 int alreadyBuffered = pending != null ? pending.messages.size() : 0;
                 int wanted = Math.max(1, esm.getBatchSize() - alreadyBuffered);
 
@@ -190,12 +192,22 @@ public class SqsEventSourcePoller implements Resettable {
                         esm.getQueueUrl(), wanted, visibilityTimeout, 0, esm.getRegion());
 
                 List<Message> messages;
-                if (pending == null) {
-                    if (received.isEmpty()) {
+                if (window <= 0) {
+                    // No window, or one that was just turned off: deliver now, draining anything a
+                    // previous positive window had buffered so those messages are not stranded
+                    // until their visibility expires (and cannot be replayed if the window returns).
+                    List<Message> batch = pending != null ? pending.messages : new ArrayList<>();
+                    pendingBatches.remove(esm.getUuid());
+                    batch.addAll(received);
+                    if (batch.isEmpty()) {
                         return;
                     }
-                    messages = received;
+                    messages = batch;
                 } else {
+                    if (pending == null) {
+                        pending = new PendingBatch();
+                        pendingBatches.put(esm.getUuid(), pending);
+                    }
                     if (pending.messages.isEmpty() && !received.isEmpty()) {
                         pending.windowStartedAtMs = clockMs.getAsLong();
                     }

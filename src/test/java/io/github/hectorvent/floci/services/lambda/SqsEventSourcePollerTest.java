@@ -554,6 +554,54 @@ class SqsEventSourcePollerTest {
         verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m2", "us-east-1");
     }
 
+    @Test
+    void batchingWindowVisibilityTimeoutCoversTheWindowPlusFunctionTimeout() {
+        EventSourceMapping esm = esm();
+        esm.setMaximumBatchingWindowInSeconds(60);
+        LambdaFunction fn = new LambdaFunction();
+        fn.setFunctionName("throwfn");
+        fn.setTimeout(120);
+        when(functionStore.getForAccount("000000000000", "us-east-1", "throwfn"))
+                .thenReturn(Optional.of(fn));
+        poller.setClockForTest(() -> 0L);
+        when(sqsService.receiveMessage(eq(esm.getQueueUrl()), anyInt(), anyInt(), anyInt(), eq("us-east-1")))
+                .thenReturn(List.of());
+
+        poller.pollAndInvoke(esm);
+
+        ArgumentCaptor<Integer> visibility = ArgumentCaptor.forClass(Integer.class);
+        verify(sqsService, timeout(2000)).receiveMessage(
+                eq(esm.getQueueUrl()), anyInt(), visibility.capture(), anyInt(), eq("us-east-1"));
+        // held up to 60s buffered, then up to 120s executing, plus AWS's 30s margin
+        assertEquals(120 + 60 + 30, visibility.getValue());
+    }
+
+    @Test
+    void turningTheBatchingWindowOffDeliversAnAlreadyBufferedBatch() {
+        LambdaFunction fn = stubThrowFn();
+        EventSourceMapping esm = esm();
+        esm.setBatchSize(10);
+        esm.setMaximumBatchingWindowInSeconds(300);
+        poller.setClockForTest(() -> 0L); // the window never elapses on its own
+
+        when(sqsService.receiveMessage(eq(esm.getQueueUrl()), anyInt(), anyInt(), anyInt(), eq("us-east-1")))
+                .thenReturn(List.of(message("m1")))
+                .thenReturn(List.of());
+        when(executorService.invoke(eq(fn), any(byte[].class), eq(InvocationType.RequestResponse)))
+                .thenReturn(new InvokeResult());
+
+        // Poll once with the window open: the record is buffered, not delivered.
+        poller.pollAndInvoke(esm);
+        verify(sqsService, timeout(2000))
+                .receiveMessage(eq(esm.getQueueUrl()), anyInt(), anyInt(), anyInt(), eq("us-east-1"));
+        verify(executorService, never()).invoke(any(), any(), any());
+
+        // Window turned off: the next poll must flush the stranded batch instead of ignoring it.
+        esm.setMaximumBatchingWindowInSeconds(0);
+        pollUntilInvoked(esm, fn);
+        verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m1", "us-east-1");
+    }
+
     private static final String BODY_PATTERN = "{\"body\":{\"type\":[\"order\"]}}";
 
     @Test
