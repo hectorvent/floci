@@ -89,6 +89,7 @@ public class CognitoService implements ResourceProvider {
 
     private static final Logger LOG = Logger.getLogger(CognitoService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String INVALID_ACCESS_TOKEN_MESSAGE = "Invalid access token";
 
     private static final String IDENTITIES_ATTRIBUTE = "identities";
 
@@ -1664,7 +1665,7 @@ public class CognitoService implements ResourceProvider {
         } catch (AwsException e) {
             if ("UserNotFoundException".equals(e.getErrorCode())
                     || "ResourceNotFoundException".equals(e.getErrorCode())) {
-                throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
+                throw new AwsException("NotAuthorizedException", INVALID_ACCESS_TOKEN_MESSAGE, 400);
             }
             throw e;
         }
@@ -2515,7 +2516,16 @@ public class CognitoService implements ResourceProvider {
     }
 
     public Map<String, Object> getUserAttributeVerificationCode(String accessToken, String attributeName) {
-        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        VerifiedAccessToken token;
+        try {
+            token = verifyAccessToken(accessToken);
+        } catch (AwsException e) {
+            if ("NotAuthorizedException".equals(e.getErrorCode())
+                    && INVALID_ACCESS_TOKEN_MESSAGE.equals(e.getMessage())) {
+                throw new AwsException("NotAuthorizedException", "Invalid Access Token", 400);
+            }
+            throw e;
+        }
         String username = token.username();
         String poolId = token.poolId();
 
@@ -3611,7 +3621,7 @@ public class CognitoService implements ResourceProvider {
             throw e;
         } catch (Exception e) {
             LOG.debug("Access token verification failed", e);
-            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
+            throw new AwsException("NotAuthorizedException", INVALID_ACCESS_TOKEN_MESSAGE, 400);
         }
     }
 
