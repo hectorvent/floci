@@ -15,7 +15,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -239,19 +241,150 @@ public class RedshiftDataService implements Resettable {
         return line.toString();
     }
 
-    // ── Not yet implemented (Tasks 4 and 5) ────────────────────────────────
+    // ── BatchExecuteStatement ──────────────────────────────────────────────
 
     public ObjectNode batchExecuteStatement(JsonNode request, String region) {
-        throw notImplemented("BatchExecuteStatement");
+        JsonNode sqlsNode = request.get("Sqls");
+        if (sqlsNode == null || !sqlsNode.isArray() || sqlsNode.isEmpty()) {
+            throw new AwsException("ValidationException", "Sqls must be a non-empty array of SQL statements.", 400);
+        }
+        List<String> sqls = new ArrayList<>();
+        for (JsonNode n : sqlsNode) {
+            sqls.add(n.asText());
+        }
+
+        RedshiftDataResourceResolver.DatabaseTarget target = resolver.resolve(request, region);
+
+        RedshiftDataStatementStore.StoredStatement parent = newStatement(request);
+        parent.batch = true;
+        parent.sql = String.join("; ", sqls);
+        parent.sqls = sqls;
+        parent.clusterIdentifier = clusterIdentifierOrNull(request);
+        parent.dbUser = textOrNull(request, "DbUser");
+        parent.database = target.database();
+        parent.resultFormat = request.path("ResultFormat").asText("JSON");
+        parent.subStatements = new ArrayList<>();
+
+        long totalDuration = 0;
+        try (Connection connection = connectionFactory.open(target)) {
+            connection.setAutoCommit(false);
+            boolean failed = false;
+            for (int n = 0; n < sqls.size(); n++) {
+                RedshiftDataStatementStore.StoredStatement sub = new RedshiftDataStatementStore.StoredStatement();
+                sub.id = parent.id + ":" + (n + 1);
+                sub.sql = sqls.get(n);
+                sub.sqls = List.of(sqls.get(n));
+                sub.clusterIdentifier = parent.clusterIdentifier;
+                sub.database = parent.database;
+                sub.dbUser = parent.dbUser;
+                sub.resultFormat = parent.resultFormat;
+                Instant now = Instant.now();
+                sub.createdAt = now;
+                sub.updatedAt = now;
+                try {
+                    runOnConnection(sub, connection, sqls.get(n), Map.of());
+                } catch (SQLException e) {
+                    sub.status = RedshiftDataStatementStore.Status.FAILED;
+                    sub.error = e.getMessage();
+                    sub.updatedAt = Instant.now();
+                    parent.subStatements.add(sub);
+                    store.put(sub);
+                    totalDuration += sub.durationNanos;
+                    parent.status = RedshiftDataStatementStore.Status.FAILED;
+                    parent.error = e.getMessage();
+                    connection.rollback();
+                    failed = true;
+                    break;
+                }
+                sub.updatedAt = Instant.now();
+                parent.subStatements.add(sub);
+                store.put(sub);
+                totalDuration += sub.durationNanos;
+            }
+            if (!failed) {
+                connection.commit();
+                parent.status = RedshiftDataStatementStore.Status.FINISHED;
+            }
+        } catch (SQLException e) {
+            parent.status = RedshiftDataStatementStore.Status.FAILED;
+            parent.error = e.getMessage();
+        }
+
+        for (int i = parent.subStatements.size() - 1; i >= 0; i--) {
+            RedshiftDataStatementStore.StoredStatement sub = parent.subStatements.get(i);
+            if (sub.hasResultSet) {
+                parent.hasResultSet = true;
+                parent.columnMetadata = sub.columnMetadata;
+                parent.rows = sub.rows;
+                parent.resultRows = sub.resultRows;
+                parent.resultSize = sub.resultSize;
+                break;
+            }
+        }
+        parent.durationNanos = totalDuration;
+        parent.updatedAt = Instant.now();
+        store.put(parent);
+        return executeResponse(parent);
     }
+
+    // ── ListStatements ─────────────────────────────────────────────────────
 
     public ObjectNode listStatements(JsonNode request) {
-        throw notImplemented("ListStatements");
+        String nameFilter = textOrNull(request, "StatementName");
+        String statusFilter = textOrNull(request, "Status");
+        int maxResults = request.path("MaxResults").asInt(100);
+        int offset = decodeToken(textOrNull(request, "NextToken"));
+
+        List<RedshiftDataStatementStore.StoredStatement> all = store.values().stream()
+                .filter(s -> s.id.indexOf(':') < 0)
+                .filter(s -> nameFilter == null || nameFilter.equals(s.statementName))
+                .filter(s -> statusFilter == null || statusFilter.equalsIgnoreCase(s.status.name()))
+                .sorted(Comparator.comparing((RedshiftDataStatementStore.StoredStatement s) -> s.createdAt).reversed())
+                .toList();
+
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode statements = response.putArray("Statements");
+        int end = Math.min(offset + maxResults, all.size());
+        for (int i = offset; i < end; i++) {
+            RedshiftDataStatementStore.StoredStatement s = all.get(i);
+            ObjectNode node = statements.addObject();
+            node.put("Id", s.id);
+            node.put("QueryString", s.sql);
+            ArrayNode queryStrings = node.putArray("QueryStrings");
+            for (String sql : s.sqls != null ? s.sqls : List.of(s.sql)) {
+                queryStrings.add(sql);
+            }
+            node.put("Status", s.status.name());
+            node.put("CreatedAt", epochSeconds(s.createdAt));
+            node.put("UpdatedAt", epochSeconds(s.updatedAt));
+            if (s.statementName != null) {
+                node.put("StatementName", s.statementName);
+            }
+            node.put("IsBatchStatement", s.batch);
+            node.put("ResultRows", s.resultRows);
+            node.put("ResultSize", s.resultSize);
+            node.put("Duration", s.durationNanos);
+        }
+        if (end < all.size()) {
+            response.put("NextToken", encodeToken(end));
+        }
+        return response;
     }
 
+    // ── CancelStatement ────────────────────────────────────────────────────
+
     public ObjectNode cancelStatement(JsonNode request) {
-        throw notImplemented("CancelStatement");
+        RedshiftDataStatementStore.StoredStatement stored = require(request);
+        if (stored.status != RedshiftDataStatementStore.Status.FINISHED) {
+            stored.status = RedshiftDataStatementStore.Status.ABORTED;
+            stored.updatedAt = Instant.now();
+        }
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("Status", true);
+        return response;
     }
+
+    // ── Not yet implemented (Task 5) ───────────────────────────────────────
 
     public ObjectNode listDatabases(JsonNode request, String region) {
         throw notImplemented("ListDatabases");

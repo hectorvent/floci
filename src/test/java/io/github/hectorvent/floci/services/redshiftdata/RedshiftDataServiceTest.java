@@ -124,4 +124,75 @@ class RedshiftDataServiceTest {
                 () -> service.executeStatement(req("select 1; select 2"), REGION));
         assertEquals("ValidationException", e.getErrorCode());
     }
+
+    private ObjectNode batchReq(String... sqls) {
+        ObjectNode r = om.createObjectNode();
+        r.put("ClusterIdentifier", "wh");
+        r.put("DbUser", "admin");
+        r.put("Database", "dev");
+        var array = r.putArray("Sqls");
+        for (String sql : sqls) {
+            array.add(sql);
+        }
+        return r;
+    }
+
+    @Test
+    void batchExecutesInOneTransactionAndDescribeShowsSubStatements() {
+        String id = service.batchExecuteStatement(batchReq(
+                "create table b (id int)",
+                "insert into b values (1), (2)",
+                "select count(*) as c from b"), REGION).get("Id").asText();
+
+        ObjectNode describe = service.describeStatement(idOf(id));
+        assertEquals("FINISHED", describe.get("Status").asText());
+        assertEquals(3, describe.get("SubStatements").size());
+
+        ObjectNode result = service.getStatementResult(idOf(id));
+        assertEquals(1, result.get("Records").size());
+        assertEquals(2L, result.get("Records").get(0).get(0).get("longValue").asLong());
+    }
+
+    @Test
+    void batchRollsBackWhenASubStatementFails() {
+        String id = service.batchExecuteStatement(batchReq(
+                "create table r1 (id int)",
+                "insert into r1 values (1)",
+                "insert into r1 (nope) values (2)"), REGION).get("Id").asText();
+
+        ObjectNode describe = service.describeStatement(idOf(id));
+        assertEquals("FAILED", describe.get("Status").asText());
+        assertFalse(describe.get("Error").asText().isBlank());
+    }
+
+    @Test
+    void listStatementsIsNewestFirstAndFiltersByName() {
+        ObjectNode a = req("select 1");
+        a.put("StatementName", "alpha");
+        service.executeStatement(a, REGION);
+        ObjectNode b = req("select 2");
+        b.put("StatementName", "beta");
+        service.executeStatement(b, REGION);
+
+        ObjectNode all = service.listStatements(om.createObjectNode());
+        assertTrue(all.get("Statements").size() >= 2);
+
+        ObjectNode filtered = service.listStatements(om.createObjectNode().put("StatementName", "alpha"));
+        assertEquals(1, filtered.get("Statements").size());
+        assertEquals("alpha", filtered.get("Statements").get(0).get("StatementName").asText());
+    }
+
+    @Test
+    void cancelOnFinishedStatementReturnsTrueWithoutChangingIt() {
+        service.executeStatement(req("create table cf (id int)"), REGION);
+        String id = service.executeStatement(req("select id from cf"), REGION).get("Id").asText();
+        assertTrue(service.cancelStatement(idOf(id)).get("Status").asBoolean());
+        assertEquals("FINISHED", service.describeStatement(idOf(id)).get("Status").asText());
+    }
+
+    @Test
+    void cancelUnknownIdIsResourceNotFound() {
+        AwsException e = assertThrows(AwsException.class, () -> service.cancelStatement(idOf("missing")));
+        assertEquals("ResourceNotFoundException", e.getErrorCode());
+    }
 }
