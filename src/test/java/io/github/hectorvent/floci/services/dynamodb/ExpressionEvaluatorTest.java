@@ -611,6 +611,29 @@ class ExpressionEvaluatorTest {
                     + "upper bound operand: AttributeValue: {N:1}", e.getMessage());
         }
 
+        // Checked against real DynamoDB (us-east-1, 2026-09-07): U+E000 as the lower bound
+        // and U+10000 as the upper bound is accepted, because DynamoDB orders strings by
+        // their UTF-8 bytes. Java's UTF-16 ordering puts them the other way round.
+        @Test
+        void stringBoundsAreOrderedByUtf8Bytes() {
+            var mapper = new ObjectMapper();
+            var values = mapper.createObjectNode();
+            values.set(":lo", mapper.createObjectNode().put("S", "\uE000"));
+            values.set(":hi", mapper.createObjectNode().put("S", "\uD800\uDC00"));
+
+            assertDoesNotThrow(() -> ExpressionEvaluator.validateExpression("n BETWEEN :lo AND :hi",
+                    "ConditionExpression", null, values));
+
+            var reversed = mapper.createObjectNode();
+            reversed.set(":lo", mapper.createObjectNode().put("S", "\uD800\uDC00"));
+            reversed.set(":hi", mapper.createObjectNode().put("S", "\uE000"));
+
+            var e = assertThrows(AwsException.class, () ->
+                    ExpressionEvaluator.validateExpression("n BETWEEN :lo AND :hi",
+                            "ConditionExpression", null, reversed));
+            assertEquals("ValidationException", e.getErrorCode());
+        }
+
         @Test
         void orderedBetweenBoundsAreAccepted() {
             var mapper = new ObjectMapper();

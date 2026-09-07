@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 
@@ -465,13 +467,24 @@ final class ExpressionEvaluator {
             return;
         }
         var lowType = low.fieldNames().next();
-        if (!lowType.equals(high.fieldNames().next()) || compareAttributeValues(low, high) <= 0) {
+        if (!lowType.equals(high.fieldNames().next()) || compareBoundValues(low, high) <= 0) {
             return;
         }
         throw new AwsException("ValidationException",
                 "Invalid " + exprType + ": The BETWEEN operator requires upper bound to be greater than "
                 + "or equal to lower bound; lower bound operand: " + displayAttributeValue(low)
                 + ", upper bound operand: " + displayAttributeValue(high), 400);
+    }
+
+    // DynamoDB orders strings by their UTF-8 bytes, which differs from Java's UTF-16
+    // ordering above the basic plane: U+E000 sorts before U+10000 on AWS but after it here.
+    private static int compareBoundValues(JsonNode low, JsonNode high) {
+        if (low.has("S") && high.has("S")) {
+            return Arrays.compareUnsigned(
+                    low.get("S").asText().getBytes(StandardCharsets.UTF_8),
+                    high.get("S").asText().getBytes(StandardCharsets.UTF_8));
+        }
+        return compareAttributeValues(low, high);
     }
 
     private static JsonNode placeholderValue(Operand operand, JsonNode values) {
