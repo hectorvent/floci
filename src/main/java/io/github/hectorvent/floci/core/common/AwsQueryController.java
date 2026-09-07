@@ -577,6 +577,7 @@ public class AwsQueryController {
             "PutConfigurationSetDeliveryOptions",
             "CreateReceiptRuleSet", "DescribeReceiptRuleSet", "ListReceiptRuleSets",
             "DeleteReceiptRuleSet", "SetActiveReceiptRuleSet", "DescribeActiveReceiptRuleSet",
+            "ReorderReceiptRuleSet", "CloneReceiptRuleSet",
             "CreateReceiptRule", "DescribeReceiptRule", "UpdateReceiptRule",
             "DeleteReceiptRule", "SetReceiptRulePosition",
             "CreateReceiptFilter", "ListReceiptFilters", "DeleteReceiptFilter"

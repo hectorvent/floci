@@ -117,7 +117,9 @@ public class AutoScalingQueryHandler {
                 memberList(p, "SecurityGroups"),
                 p.getFirst("UserData"),
                 p.getFirst("IamInstanceProfile"),
-                nullableBoolParam(p, "AssociatePublicIpAddress"));
+                nullableBoolParam(p, "AssociatePublicIpAddress"),
+                nullableBoolParam(p, "InstanceMonitoring.Enabled"),
+                parseLaunchConfigurationBlockDeviceMappings(p));
         String xml = new XmlBuilder()
                 .start("CreateLaunchConfigurationResponse", NS)
                   .raw(AwsQueryResponse.responseMetadata())
@@ -150,7 +152,15 @@ public class AutoScalingQueryHandler {
             if (lc.getIamInstanceProfile() != null) { xml.elem("IamInstanceProfile", lc.getIamInstanceProfile()); }
             xml.start("SecurityGroups");
             for (String sg : lc.getSecurityGroups()) { xml.elem("member", sg); }
-            xml.end("SecurityGroups").end("member");
+            xml.end("SecurityGroups");
+            // AWS always returns both structures. A record from before these fields were
+            // stored reads back AWS's default of enabled and an empty mapping list.
+            xml.start("InstanceMonitoring")
+               .elem("Enabled", String.valueOf(
+                       lc.getInstanceMonitoringEnabled() != null ? lc.getInstanceMonitoringEnabled() : Boolean.TRUE))
+               .end("InstanceMonitoring");
+            writeLaunchConfigurationBlockDeviceMappings(xml, lc.getBlockDeviceMappings());
+            xml.end("member");
         }
         xml.end("LaunchConfigurations")
            .end("DescribeLaunchConfigurationsResult")
@@ -1396,6 +1406,101 @@ public class AutoScalingQueryHandler {
         String val = p.getFirst(key);
         if (val == null || val.isBlank()) { return null; }
         return Boolean.parseBoolean(val);
+    }
+
+    private List<LaunchConfigurationBlockDeviceMapping> parseLaunchConfigurationBlockDeviceMappings(
+            MultivaluedMap<String, String> p) {
+        List<LaunchConfigurationBlockDeviceMapping> mappings = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            String prefix = "BlockDeviceMappings.member." + i;
+            String deviceName = p.getFirst(prefix + ".DeviceName");
+            String virtualName = p.getFirst(prefix + ".VirtualName");
+            String noDevice = p.getFirst(prefix + ".NoDevice");
+            String snapshotId = p.getFirst(prefix + ".Ebs.SnapshotId");
+            String volumeSize = p.getFirst(prefix + ".Ebs.VolumeSize");
+            String volumeType = p.getFirst(prefix + ".Ebs.VolumeType");
+            String deleteOnTermination = p.getFirst(prefix + ".Ebs.DeleteOnTermination");
+            String iops = p.getFirst(prefix + ".Ebs.Iops");
+            String throughput = p.getFirst(prefix + ".Ebs.Throughput");
+            String encrypted = p.getFirst(prefix + ".Ebs.Encrypted");
+            boolean hasEbs = snapshotId != null || volumeSize != null || volumeType != null
+                    || deleteOnTermination != null || iops != null || throughput != null || encrypted != null;
+            if (deviceName == null && virtualName == null && noDevice == null && !hasEbs) {
+                break;
+            }
+            if (deviceName == null || deviceName.isBlank()) {
+                throw new AwsException("ValidationError",
+                        "1 validation error detected: Value null at '" + prefix
+                                + ".DeviceName' failed to satisfy constraint: Member must not be null", 400);
+            }
+            LaunchConfigurationBlockDeviceMapping mapping = new LaunchConfigurationBlockDeviceMapping();
+            mapping.setDeviceName(deviceName);
+            mapping.setVirtualName(virtualName);
+            mapping.setNoDevice(parseOptionalBoolean(noDevice, prefix + ".NoDevice"));
+            if (hasEbs) {
+                LaunchConfigurationBlockDeviceMapping.Ebs ebs = new LaunchConfigurationBlockDeviceMapping.Ebs();
+                ebs.setSnapshotId(snapshotId);
+                ebs.setVolumeSize(parseOptionalInt(volumeSize, prefix + ".Ebs.VolumeSize"));
+                ebs.setVolumeType(volumeType);
+                ebs.setDeleteOnTermination(parseOptionalBoolean(deleteOnTermination, prefix + ".Ebs.DeleteOnTermination"));
+                ebs.setIops(parseOptionalInt(iops, prefix + ".Ebs.Iops"));
+                ebs.setThroughput(parseOptionalInt(throughput, prefix + ".Ebs.Throughput"));
+                ebs.setEncrypted(parseOptionalBoolean(encrypted, prefix + ".Ebs.Encrypted"));
+                mapping.setEbs(ebs);
+            }
+            mappings.add(mapping);
+        }
+        return mappings;
+    }
+
+    private Integer parseOptionalInt(String value, String name) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw new AwsException("ValidationError", name + " must be an integer.", 400);
+        }
+    }
+
+    private Boolean parseOptionalBoolean(String value, String name) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) {
+            return Boolean.parseBoolean(value);
+        }
+        throw new AwsException("ValidationError", name + " must be true or false.", 400);
+    }
+
+    // AWS returns an empty list when the launch configuration carries no mappings, so the
+    // element is always present.
+    private void writeLaunchConfigurationBlockDeviceMappings(
+            XmlBuilder xml, List<LaunchConfigurationBlockDeviceMapping> mappings) {
+        xml.start("BlockDeviceMappings");
+        for (LaunchConfigurationBlockDeviceMapping mapping : mappings != null ? mappings : List.<LaunchConfigurationBlockDeviceMapping>of()) {
+            xml.start("member");
+            if (mapping.getVirtualName() != null) { xml.elem("VirtualName", mapping.getVirtualName()); }
+            if (mapping.getDeviceName() != null) { xml.elem("DeviceName", mapping.getDeviceName()); }
+            if (mapping.getNoDevice() != null) { xml.elem("NoDevice", String.valueOf(mapping.getNoDevice())); }
+            LaunchConfigurationBlockDeviceMapping.Ebs ebs = mapping.getEbs();
+            if (ebs != null) {
+                xml.start("Ebs");
+                if (ebs.getSnapshotId() != null) { xml.elem("SnapshotId", ebs.getSnapshotId()); }
+                if (ebs.getVolumeSize() != null) { xml.elem("VolumeSize", String.valueOf(ebs.getVolumeSize())); }
+                if (ebs.getVolumeType() != null) { xml.elem("VolumeType", ebs.getVolumeType()); }
+                if (ebs.getDeleteOnTermination() != null) {
+                    xml.elem("DeleteOnTermination", String.valueOf(ebs.getDeleteOnTermination()));
+                }
+                if (ebs.getIops() != null) { xml.elem("Iops", String.valueOf(ebs.getIops())); }
+                if (ebs.getThroughput() != null) { xml.elem("Throughput", String.valueOf(ebs.getThroughput())); }
+                if (ebs.getEncrypted() != null) { xml.elem("Encrypted", String.valueOf(ebs.getEncrypted())); }
+                xml.end("Ebs");
+            }
+            xml.end("member");
+        }
+        xml.end("BlockDeviceMappings");
     }
 
     /** A required boolean member must be present and exactly "true"/"false" — never silently coerced to false. */

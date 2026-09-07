@@ -82,4 +82,16 @@ public class ReceiptRule {
     public void setActions(List<ReceiptAction> actions) {
         this.actions = actions;
     }
+
+    /** Deep copy, so a cloned rule set never aliases the mutable state of the original's rules. */
+    public ReceiptRule copy() {
+        ReceiptRule copy = new ReceiptRule();
+        copy.name = name;
+        copy.enabled = enabled;
+        copy.tlsPolicy = tlsPolicy;
+        copy.scanEnabled = scanEnabled;
+        copy.recipients = new ArrayList<>(getRecipients());
+        copy.actions = new ArrayList<>(getActions().stream().map(ReceiptAction::copy).toList());
+        return copy;
+    }
 }

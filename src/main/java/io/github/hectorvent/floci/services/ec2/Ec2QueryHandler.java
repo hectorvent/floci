@@ -1417,6 +1417,7 @@ public class Ec2QueryHandler {
         if (logDestination == null) {
             logDestination = p.getFirst("LogDestinationArn");
         }
+        String deliverLogsPermissionArn = p.getFirst("DeliverLogsPermissionArn");
         String logFormat = p.getFirst("LogFormat");
         int maxAgg = parseIntParam(p, "MaxAggregationInterval", 600);
 
@@ -1434,7 +1435,7 @@ public class Ec2QueryHandler {
                 .start("flowLogIdSet");
         for (String resourceId : resourceIds) {
             FlowLog fl = flowLogService.createFlowLog(region, resourceId, resourceType, trafficType,
-                    logDestinationType, logDestination, logFormat, maxAgg);
+                    logDestinationType, logDestination, deliverLogsPermissionArn, logFormat, maxAgg);
             xml.elem("item", fl.getFlowLogId());
         }
         xml.end("flowLogIdSet")
@@ -1460,6 +1461,7 @@ public class Ec2QueryHandler {
                     .elem("trafficType", fl.getTrafficType())
                     .elem("logDestinationType", fl.getLogDestinationType())
                     .elem("logDestination", fl.getLogDestination())
+                    .elem("deliverLogsPermissionArn", fl.getDeliverLogsPermissionArn())
                     .elem("flowLogStatus", fl.getFlowLogStatus())
                     .elem("deliverLogsStatus", fl.getDeliverLogsStatus())
                     .elem("maxAggregationInterval", String.valueOf(fl.getMaxAggregationInterval()))
@@ -3765,6 +3767,16 @@ public class Ec2QueryHandler {
             xml.start("networkInfo")
                     .elem("encryptionInTransitSupported",
                             String.valueOf(networkInfo.get("encryptionInTransitSupported")))
+                    .elem("defaultNetworkCardIndex", (Integer) networkInfo.get("defaultNetworkCardIndex"))
+                    .elem("ipv4AddressesPerInterface", (Integer) networkInfo.get("ipv4AddressesPerInterface"))
+                    .start("networkCards");
+            for (Map<String, Object> card : (List<Map<String, Object>>) networkInfo.get("networkCards")) {
+                xml.start("item")
+                        .elem("networkCardIndex", (Integer) card.get("networkCardIndex"))
+                        .elem("maximumNetworkInterfaces", (Integer) card.get("maximumNetworkInterfaces"))
+                        .end("item");
+            }
+            xml.end("networkCards")
                     .end("networkInfo")
                     .end("item");
         }

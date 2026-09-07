@@ -46,6 +46,9 @@ public class AcmService implements ResourceProvider {
     private static final int MAX_TAG_VALUE_LENGTH = 256;
     private static final int MAX_SANS = 100;
     private static final int MAX_DOMAIN_LENGTH = 253;
+    /** Key algorithms real ACM accepts for RequestCertificate; the wider enum stays valid for ImportCertificate. */
+    private static final Set<KeyAlgorithm> REQUESTABLE_KEY_ALGORITHMS =
+        EnumSet.of(KeyAlgorithm.RSA_2048, KeyAlgorithm.EC_prime256v1, KeyAlgorithm.EC_secp384r1);
     private final StorageBackend<String, Certificate> store;
     private final CertificateGenerator certificateGenerator;
     private final FlociCertificateAuthority certificateAuthority;
@@ -113,6 +116,7 @@ public class AcmService implements ResourceProvider {
         }
 
         KeyAlgorithm alg = keyAlgorithm != null ? keyAlgorithm : KeyAlgorithm.RSA_2048;
+        validateRequestableKeyAlgorithm(alg, region);
 
         // Check idempotency with parameter validation
         if (idempotencyToken != null && !idempotencyToken.isEmpty()) {
@@ -668,6 +672,16 @@ public class AcmService implements ResourceProvider {
             throw new AwsException("ValidationException",
                 "Domain name cannot exceed " + MAX_DOMAIN_LENGTH + " characters", 400);
         }
+    }
+
+    private void validateRequestableKeyAlgorithm(KeyAlgorithm alg, String region) {
+        if (REQUESTABLE_KEY_ALGORITHMS.contains(alg)) {
+            return;
+        }
+        // Real ACM quirk: the RSA_4096 message carries the account id where the region goes.
+        String location = alg == KeyAlgorithm.RSA_4096 ? regionResolver.getAccountId() : region;
+        throw new AwsException("ValidationException",
+            "Encryption Algorithm " + alg.name() + " is not supported in " + location + " region", 400);
     }
 
     private void validateSans(List<String> sans) {

@@ -6,6 +6,7 @@ import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.ec2.Ec2ImageCatalog;
 import io.github.hectorvent.floci.services.ssm.model.Parameter;
 import io.github.hectorvent.floci.services.ssm.model.ParameterHistory;
 import io.github.hectorvent.floci.services.ssm.model.PatchBaselineIdentity;
@@ -31,6 +32,8 @@ public class SsmService implements ResourceProvider {
 
     private static final Logger LOG = Logger.getLogger(SsmService.class);
 
+    private static final String PUBLIC_PARAMETER_PREFIX = "/aws/service/";
+
     /**
      * Account-default values for the service settings floci models. AWS rejects
      * unknown setting ids with ServiceSettingNotFound; so do we.
@@ -50,9 +53,11 @@ public class SsmService implements ResourceProvider {
     private final StorageBackend<String, SsmAssociation> associationStore;
     private final int maxParameterHistory;
     private final RegionResolver regionResolver;
+    private final Ec2ImageCatalog imageCatalog;
 
     @Inject
-    public SsmService(StorageFactory storageFactory, EmulatorConfig config, RegionResolver regionResolver) {
+    public SsmService(StorageFactory storageFactory, EmulatorConfig config, RegionResolver regionResolver,
+                      Ec2ImageCatalog imageCatalog) {
         this(
                 storageFactory.create("ssm", "ssm-parameters.json",
                         new TypeReference<>() {
@@ -73,7 +78,8 @@ public class SsmService implements ResourceProvider {
                         new TypeReference<>() {
                         }),
                 config.services().ssm().maxParameterHistory(),
-                regionResolver
+                regionResolver,
+                imageCatalog
         );
     }
 
@@ -117,6 +123,22 @@ public class SsmService implements ResourceProvider {
                StorageBackend<String, ServiceSetting> serviceSettingStore,
                StorageBackend<String, SsmAssociation> associationStore,
                int maxParameterHistory, RegionResolver regionResolver) {
+        this(parameterStore, historyStore, documentPermissionStore, documentStore,
+                serviceSettingStore, associationStore, maxParameterHistory, regionResolver, null);
+    }
+
+    /**
+     * Package-private constructor for testing without CDI. A null image catalog means no
+     * public parameters are answered.
+     */
+    SsmService(StorageBackend<String, Parameter> parameterStore,
+               StorageBackend<String, List<ParameterHistory>> historyStore,
+               StorageBackend<String, List<String>> documentPermissionStore,
+               StorageBackend<String, SsmDocument> documentStore,
+               StorageBackend<String, ServiceSetting> serviceSettingStore,
+               StorageBackend<String, SsmAssociation> associationStore,
+               int maxParameterHistory, RegionResolver regionResolver,
+               Ec2ImageCatalog imageCatalog) {
         this.parameterStore = parameterStore;
         this.historyStore = historyStore;
         this.documentPermissionStore = documentPermissionStore;
@@ -125,6 +147,7 @@ public class SsmService implements ResourceProvider {
         this.associationStore = associationStore;
         this.maxParameterHistory = maxParameterHistory;
         this.regionResolver = regionResolver;
+        this.imageCatalog = imageCatalog;
     }
 
     /**
@@ -132,6 +155,7 @@ public class SsmService implements ResourceProvider {
      * Returns the version number.
      */
     public long putParameter(String name, String value, String type, String description, boolean overwrite, String region) {
+        rejectReservedName(name);
         String storageKey = regionKey(region, name);
         Parameter existing = parameterStore.get(storageKey).orElse(null);
 
@@ -157,8 +181,7 @@ public class SsmService implements ResourceProvider {
     }
 
     public Parameter getParameter(String name, String region) {
-        String storageKey = regionKey(region, name);
-        return parameterStore.get(storageKey)
+        return findParameter(name, region)
                 .orElseThrow(() -> new AwsException("ParameterNotFound",
                         "Parameter " + name + " not found.", 400));
     }
@@ -166,29 +189,88 @@ public class SsmService implements ResourceProvider {
     public List<Parameter> getParameters(List<String> names, String region) {
         List<Parameter> result = new ArrayList<>();
         for (String name : names) {
-            parameterStore.get(regionKey(region, name)).ifPresent(result::add);
+            findParameter(name, region).ifPresent(result::add);
         }
         return result;
+    }
+
+    /**
+     * AWS reserves the {@code aws} and {@code ssm} namespaces, with or without a leading slash
+     * and regardless of case, so an account can never write over a public parameter. The rule
+     * keys on the first path segment rather than a bare prefix, so a name such as
+     * {@code ssm-auto-stack-Param-ABC}, which CloudFormation generates for a stack whose name
+     * starts with ssm, is still accepted.
+     */
+    private static void rejectReservedName(String name) {
+        String bare = name == null ? "" : name.startsWith("/") ? name.substring(1) : name;
+        String lower = bare.toLowerCase(Locale.ROOT);
+        if (lower.equals("aws") || lower.equals("ssm")
+                || lower.startsWith("aws/") || lower.startsWith("ssm/")) {
+            throw new AwsException("ValidationException",
+                    "Parameter name: can't be prefixed with \"aws\" or \"ssm\" (case-insensitive). "
+                            + "If formed as a path, it can consist of sub-paths divided by slash symbol; "
+                            + "each sub-path can be formed as a mix of letters, numbers and the following "
+                            + "3 symbols .-_", 400);
+        }
+    }
+
+    private Optional<Parameter> findParameter(String name, String region) {
+        Optional<Parameter> stored = parameterStore.get(regionKey(region, name));
+        if (stored.isPresent()) {
+            return stored;
+        }
+        return publicParameter(name, region);
+    }
+
+    /**
+     * AWS publishes read-only AMI id parameters under {@code /aws/service/} in every account
+     * with no setup, so a read of one of those names is answered from the EC2 image catalog.
+     * Nothing is written: like on AWS the parameter is not the account's own, so it never
+     * shows up in DescribeParameters or GetParameterHistory. Any other name under the prefix
+     * is still ParameterNotFound.
+     */
+    private Optional<Parameter> publicParameter(String name, String region) {
+        if (imageCatalog == null || name == null || !name.startsWith(PUBLIC_PARAMETER_PREFIX)) {
+            return Optional.empty();
+        }
+        return imageCatalog.findByPublicParameterName(name).map(image -> {
+            Parameter parameter = new Parameter(name, image.imageId, "String");
+            parameter.setArn("arn:aws:ssm:" + region + "::parameter" + name);
+            parameter.setLastModifiedDate(Instant.parse(image.creationDate));
+            return parameter;
+        });
     }
 
     public List<Parameter> getParametersByPath(String path, boolean recursive, String region) {
         String normalizedPath = path.endsWith("/") ? path : path + "/";
         String prefix = region + "::";
 
-        return parameterStore.scan(key -> {
+        List<Parameter> result = new ArrayList<>(parameterStore.scan(key -> {
             if (!key.startsWith(prefix)) {
                 return false;
             }
-            String paramName = key.substring(prefix.length());
-            if (!paramName.startsWith(normalizedPath)) {
-                return false;
+            return underPath(key.substring(prefix.length()), normalizedPath, recursive);
+        }));
+        if (imageCatalog != null) {
+            // The public names answer to the same path and Recursive rules as stored ones, so a
+            // recursive query on an ancestor such as /aws lists them too.
+            for (String name : imageCatalog.publicParameterNames()) {
+                if (underPath(name, normalizedPath, recursive)) {
+                    publicParameter(name, region).ifPresent(result::add);
+                }
             }
-            if (recursive) {
-                return true;
-            }
-            String remainder = paramName.substring(normalizedPath.length());
-            return !remainder.contains("/");
-        });
+        }
+        return result;
+    }
+
+    private static boolean underPath(String paramName, String normalizedPath, boolean recursive) {
+        if (!paramName.startsWith(normalizedPath)) {
+            return false;
+        }
+        if (recursive) {
+            return true;
+        }
+        return !paramName.substring(normalizedPath.length()).contains("/");
     }
 
     public void deleteParameter(String name, String region) {

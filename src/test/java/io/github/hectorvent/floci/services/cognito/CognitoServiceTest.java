@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.cognito;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.config.TlsCertificateManager;
@@ -15,6 +16,7 @@ import io.github.hectorvent.floci.services.cognito.model.CognitoGroup;
 import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
 import io.github.hectorvent.floci.services.cognito.model.IdentityProvider;
 import io.github.hectorvent.floci.services.cognito.model.ResourceServerScope;
+import io.github.hectorvent.floci.services.cognito.model.RevokedTokenInfo;
 import io.github.hectorvent.floci.services.cognito.model.UserPool;
 import io.github.hectorvent.floci.services.cognito.model.UserPoolClient;
 import io.github.hectorvent.floci.services.cognito.model.UserPoolDomain;
@@ -54,6 +56,7 @@ class CognitoServiceTest {
     private CognitoService service;
     private InMemoryStorage<String, CognitoUser> userStore;
     private InMemoryStorage<String, CognitoGroup> groupStore;
+    private InMemoryStorage<String, RevokedTokenInfo> revokedTokenStore;
     private RegionResolver regionResolver;
     private AcmService acmService;
 
@@ -61,6 +64,7 @@ class CognitoServiceTest {
     void setUp() {
         userStore = new InMemoryStorage<>();
         groupStore = new InMemoryStorage<>();
+        revokedTokenStore = new InMemoryStorage<>();
         regionResolver = new RegionResolver("us-east-1", "000000000000");
         acmService = mock(AcmService.class);
         // Every certificate exists and is issued unless a test says otherwise.
@@ -72,7 +76,7 @@ class CognitoServiceTest {
                 new InMemoryStorage<>(),
                 userStore,
                 groupStore,
-                new InMemoryStorage<>(), // revokedTokenStore
+                revokedTokenStore,
                 "http://localhost:4566",
                 regionResolver,
                 null,
@@ -858,6 +862,37 @@ class CognitoServiceTest {
                 )
         );
         assertEquals("InvalidParameterException", hashException.getErrorCode());
+    }
+
+    @Test
+    void deterministicClientIdFollowsThePoolOverrideAndIsNullWithoutOne() {
+        UserPool plain = service.createUserPool(Map.of("PoolName", "plain"), "us-east-1");
+        assertNull(service.deterministicClientIdFor(plain.getId(), "web"));
+
+        UserPool useName = service.createUserPool(Map.of("PoolName", "use-name",
+                "UserPoolTags", Map.of(ReservedTags.OVERRIDE_COGNITO_CLIENT_ID_KEY, "use-name")), "us-east-1");
+        assertEquals("web", service.deterministicClientIdFor(useName.getId(), "web"));
+
+        UserPool append = service.createUserPool(Map.of("PoolName", "append",
+                "UserPoolTags", Map.of(ReservedTags.OVERRIDE_COGNITO_CLIENT_ID_KEY, "append-to-name:-id")), "us-east-1");
+        assertEquals("web-id", service.deterministicClientIdFor(append.getId(), "web"));
+
+        UserPool prepend = service.createUserPool(Map.of("PoolName", "prepend",
+                "UserPoolTags", Map.of(ReservedTags.OVERRIDE_COGNITO_CLIENT_ID_KEY, "prepend-to-name:app-")), "us-east-1");
+        assertEquals("app-web", service.deterministicClientIdFor(prepend.getId(), "web"));
+        assertEquals("app-web", service.createUserPoolClient(prepend.getId(), "web", false, false,
+                List.of(), List.of()).getClientId());
+    }
+
+    @Test
+    void updateUserPoolRenamesThePoolWhenPoolNameIsGiven() {
+        UserPool pool = service.createUserPool(Map.of("PoolName", "before"), "us-east-1");
+
+        service.updateUserPool(Map.of("UserPoolId", pool.getId(), "PoolName", "after"), "us-east-1");
+        assertEquals("after", service.describeUserPool(pool.getId()).getName());
+
+        service.updateUserPool(Map.of("UserPoolId", pool.getId(), "MfaConfiguration", "OFF"), "us-east-1");
+        assertEquals("after", service.describeUserPool(pool.getId()).getName());
     }
 
     @Test
@@ -3107,6 +3142,75 @@ class CognitoServiceTest {
         assertTrue(isUuid(user.getUsername()), "migrated canonical username must be a generated UUID");
         assertEquals(user.getUsername(), user.getAttributes().get("sub"), "username must equal sub");
         assertEquals("migrated@example.com", user.getAttributes().get("email"));
+    }
+
+    @Test
+    void selfServiceRejectsForgedAccessTokenClaims() throws Exception {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "self-service-client", false, false, List.of(), List.of());
+        CognitoUser user = service.adminGetUser(pool.getId(), "alice");
+        String valid = service.generateSignedJwt(user, pool, "access", client, null, null);
+        UserPool otherPool = service.createUserPool(Map.of("PoolName", "OtherPool"), "us-east-1");
+        CognitoUser otherUser = service.adminCreateUser(otherPool.getId(), "alice", Map.of(), null);
+        UserPoolClient otherClient = service.createUserPoolClient(
+                otherPool.getId(), "other-client", false, false, List.of(), List.of());
+
+        String[] parts = valid.split("\\.");
+        String unsigned = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString("{\"alg\":\"none\",\"typ\":\"JWT\"}".getBytes(StandardCharsets.UTF_8))
+                + "." + parts[1] + ".";
+        assertInvalidAccessToken(unsigned, "alg=none");
+        assertInvalidAccessToken(withClaim(valid, "username", "mallory"), "modified payload");
+        assertInvalidAccessToken(withClaim(valid, "iss", service.getIssuer(otherPool.getId())), "wrong user pool");
+        String wrongKey = withClaim(service.generateSignedJwt(otherUser, otherPool, "access", otherClient, null, null),
+                "iss", service.getIssuer(pool.getId()));
+        wrongKey = withClaim(wrongKey, "client_id", client.getClientId());
+        assertInvalidAccessToken(wrongKey, "wrong signing key");
+        assertInvalidAccessToken(withClaim(valid, "iss", "https://attacker.example/issuer"), "wrong issuer");
+        assertInvalidAccessToken(withClaim(valid, "client_id", "not-a-client"), "wrong client");
+        assertInvalidAccessToken(withClaim(valid, "token_use", "id"), "wrong token_use");
+        assertInvalidAccessToken(withClaim(valid, "exp", 1), "expired token");
+
+        Map<String, Object> claims = MAPPER.readValue(jwtPayload(valid), new TypeReference<>() {});
+        String jti = (String) claims.get("jti");
+        long now = System.currentTimeMillis();
+        revokedTokenStore.put("revoked:" + pool.getId() + ":" + jti,
+                new RevokedTokenInfo(jti, "access", user.getUsername(), pool.getId(), now, now / 1000L + 3600));
+        assertInvalidAccessToken(valid, "revoked jti");
+    }
+
+    @Test
+    void everySelfServiceEntryPointRejectsInvalidAccessToken() {
+        UserPool pool = createPoolAndUser();
+        UserPoolClient client = service.createUserPoolClient(
+                pool.getId(), "self-service-client", false, false, List.of(), List.of());
+        CognitoUser user = service.adminGetUser(pool.getId(), "alice");
+        String signed = service.generateSignedJwt(user, pool, "access", client, null, null);
+        String[] parts = signed.split("\\.");
+        String invalid = parts[0] + "." + parts[1] + ".tampered";
+
+        assertThrows(AwsException.class, () -> service.getUser(invalid));
+        assertThrows(AwsException.class, () -> service.changePassword(invalid, "Perm1234!", "NewPass123!"));
+        assertThrows(AwsException.class, () -> service.updateUserAttributes(invalid, Map.of("email", "x@example.com")));
+        assertThrows(AwsException.class, () -> service.deleteUserAttributes(invalid, List.of("email")));
+        assertThrows(AwsException.class, () -> service.getUserAttributeVerificationCode(invalid, "email"));
+        assertThrows(AwsException.class, () -> service.globalSignOut(invalid));
+        assertThrows(AwsException.class, () -> service.setUserMFAPreference(invalid, true, false));
+    }
+
+    private void assertInvalidAccessToken(String token, String reason) {
+        AwsException failure = assertThrows(AwsException.class, () -> service.getUser(token), reason);
+        assertEquals("NotAuthorizedException", failure.getErrorCode(), reason);
+    }
+
+    private static String withClaim(String token, String name, Object value) throws Exception {
+        String[] parts = token.split("\\.");
+        Map<String, Object> claims = MAPPER.readValue(jwtPayload(token), new TypeReference<>() {});
+        claims.put(name, value);
+        String payload = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(MAPPER.writeValueAsBytes(claims));
+        return parts[0] + "." + payload + "." + parts[2];
     }
 
     @Test

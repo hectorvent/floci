@@ -16,7 +16,7 @@ Floci implements the EC2 Auto Scaling API — stored-state management for launch
 
 | Operation | Notes |
 |---|---|
-| `CreateLaunchConfiguration` | Stores template: `ImageId`, `InstanceType`, `KeyName`, `SecurityGroups`, `UserData`, `IamInstanceProfile` |
+| `CreateLaunchConfiguration` | Stores template: `ImageId`, `InstanceType`, `KeyName`, `SecurityGroups`, `UserData`, `IamInstanceProfile`, `InstanceMonitoring`, `BlockDeviceMappings` |
 | `DescribeLaunchConfigurations` | Filtered by name list; returns all if no filter |
 | `DeleteLaunchConfiguration` | Removes the named launch configuration |
 

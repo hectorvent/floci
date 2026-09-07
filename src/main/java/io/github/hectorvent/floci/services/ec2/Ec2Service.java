@@ -3309,7 +3309,12 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
         subnet.setOwnerId(accountId);
         subnet.setRegion(region);
         subnet.setSubnetArn(AwsArnUtils.Arn.of("ec2", region, accountId, "subnet/" + subnetId).toString());
-        subnets.put(key(region, subnetId), subnet);
+        // The conflict scan and the store must be one step under the VPC's lock, or two
+        // overlapping creates in flight together both pass the scan before either is stored.
+        synchronized (lockFor(key(region, vpcId))) {
+            rejectConflictingSubnetCidr(region, vpcId, cidrBlock);
+            subnets.put(key(region, subnetId), subnet);
+        }
 
         // Every subnet starts associated with its VPC's default NACL. ReplaceNetworkAclAssociation
         // later moves it onto a custom NACL, so this association must exist for that lookup to work.
@@ -3323,6 +3328,26 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
             networkAcls.put(key(region, defaultAcl.getNetworkAclId()), defaultAcl);
         }
         return subnet;
+    }
+
+    /**
+     * AWS refuses a subnet whose IPv4 CIDR overlaps another subnet's in the same VPC. CreateSubnet
+     * carries no idempotency token, so this check is also what stops an SDK transport retry after
+     * a lost response from producing a second, unrecorded subnet at the same CIDR. Requests with
+     * no IPv4 CIDR are not checked here.
+     */
+    private void rejectConflictingSubnetCidr(String region, String vpcId, String cidrBlock) {
+        if (!Ipv4Cidrs.isIpv4(cidrBlock)) {
+            return;
+        }
+        boolean conflict = subnets.scan(k -> true).stream()
+                .filter(s -> region.equals(s.getRegion()) && vpcId.equals(s.getVpcId()))
+                .filter(s -> Ipv4Cidrs.isIpv4(s.getCidrBlock()))
+                .anyMatch(s -> Ipv4Cidrs.overlaps(cidrBlock, s.getCidrBlock()));
+        if (conflict) {
+            throw new AwsException("InvalidSubnet.Conflict",
+                    "The CIDR '" + cidrBlock + "' conflicts with another subnet", 400);
+        }
     }
 
     public List<Subnet> describeSubnets(String region, List<String> subnetIds, Map<String, List<String>> filters) {
@@ -3956,7 +3981,45 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
                 .collect(Collectors.toList());
         List<Image> images = new ArrayList<>(catalogImages);
         images.addAll(createdImages);
+        addFallbackLaunchableImages(region, images, imageIds, owners, filters);
         return images;
+    }
+
+    // RunInstances launches an unrecognised AMI id by falling back to the catalog default image (see
+    // AmiImageResolver), so an explicitly requested but unknown id is still launchable. IaC providers read
+    // the AMI's root device via DescribeImages before RunInstances, so an empty result there aborts the
+    // create (the aws provider reports "collecting instance settings: empty result"). Mirror the launch-time
+    // fallback so a describe of a launchable id returns a matching image instead of nothing.
+    private void addFallbackLaunchableImages(String region, List<Image> images, List<String> imageIds,
+                                             List<String> owners, Map<String, List<String>> filters) {
+        if (imageIds == null || imageIds.isEmpty()) {
+            return;
+        }
+        Set<String> present = images.stream().map(Image::getImageId).collect(Collectors.toSet());
+        for (String imageId : imageIds) {
+            if (imageId == null || !imageId.startsWith("ami-") || present.contains(imageId)
+                    || imageCatalog.findByIdOrAlias(imageId).isPresent()
+                    || registeredImages.get(key(region, imageId)).isPresent()) {
+                continue;
+            }
+            Image fallback = fallbackLaunchableImage(imageId);
+            if (matchesImageOwners(fallback, owners) && matchesRegisteredImageFilters(fallback, filters)) {
+                images.add(fallback);
+                present.add(imageId);
+            }
+        }
+    }
+
+    private Image fallbackLaunchableImage(String imageId) {
+        Image image = new Image();
+        image.setImageId(imageId);
+        image.setName(imageId);
+        image.setDescription("Floci fallback image for launchable AMI " + imageId);
+        image.setArchitecture("x86_64");
+        image.setOwnerId(AMAZON_OWNER_ID);
+        image.setImageOwnerAlias("amazon");
+        image.setCreationDate("2026-01-01T00:00:00.000Z");
+        return image;
     }
 
     public Image createImage(String region, String instanceId, String name, String description,

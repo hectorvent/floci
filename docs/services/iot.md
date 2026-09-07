@@ -19,8 +19,7 @@ Supported MVP 1 behavior:
 
 Current MVP 1 limitations:
 
-- The MQTT listener does not verify device certificates yet.
-- MQTT auth remains permissive; certificate and policy resources are modeled for provisioning compatibility, not enforced as broker authorization yet.
+- The plaintext MQTT listener on 1883 stays permissive. The TLS listener on 8883 admits a device only when its certificate is registered and `ACTIVE` and an attached policy allows `iot:Connect` for the client id, see [Device verification on 8883](#device-verification-on-8883). `Publish`, `Subscribe` and `Receive` are not evaluated yet on either port.
 - Rules evaluate the SQL subset described under [Rule SQL](#rule-sql); substitution templates remain follow-up scope.
 
 ## MVP 2 Coverage
@@ -79,8 +78,8 @@ Broker scope:
 - Target real AWS IoT/device SDK style MQTT clients, not only handcrafted packet tests.
 - Support MQTT v3 and MQTT 5 CONNECT handling used by local compatibility tests.
 - Support QoS 0 and QoS 1 publish/subscribe behavior for the local AWS IoT slice.
-- Serve MQTT over TLS on 8883 next to plaintext 1883 when TLS is enabled; verifying device certificates (mutual TLS) is follow-up scope.
-- Keep MQTT authorization permissive for now, but leave room for a later pluggable IoT certificate and policy authorizer.
+- Serve MQTT over TLS on 8883 next to plaintext 1883 when TLS is enabled, and verify the device certificate and its `iot:Connect` permission there.
+- Keep the plaintext listener permissive; topic-level authorization (`Publish`, `Subscribe`, `Receive`) is follow-up scope.
 - Keep MQTT broker logging minimal.
 - Validate the relevant IoT compatibility tests against the native binary before considering the phase complete.
 
@@ -88,13 +87,30 @@ Broker scope:
 
 With `FLOCI_TLS_ENABLED=true` the broker also listens on `FLOCI_SERVICES_IOT_MQTT_TLS_PORT` (default `8883`, the port AWS IoT uses for X.509 device connections; `0` disables it). It presents the same certificate as the HTTPS endpoint, issued by the Floci CA, over TLS 1.2 or 1.3. A device connects with `ssl://localhost:8883` trusting `GET /_floci/ca.pem`, as it would trust Amazon Root CA 1 against AWS IoT. A custom domain added to the server certificate at runtime (see [TLS](../configuration/tls.md#custom-domains-learned-at-runtime)) is served on 8883 from the next connection on, without a restart.
 
-The listener asks for a client certificate and accepts the connection whether or not one is presented and whoever signed it: 8883 is as permissive as 1883 until certificate verification lands. Sessions, subscriptions and reserved topics are shared with the plaintext listener, so a client id connecting on one port replaces its session on the other, as on AWS. Both listeners start together: with the first IoT API call, or at boot with `FLOCI_SERVICES_IOT_MQTT_AUTO_START=true`.
+The listener asks for a client certificate and decides the connection when the `CONNECT` arrives, see [Device verification on 8883](#device-verification-on-8883). Sessions, subscriptions and reserved topics are shared with the plaintext listener, so a client id connecting on one port replaces its session on the other, as on AWS. Both listeners start together: with the first IoT API call, or at boot with `FLOCI_SERVICES_IOT_MQTT_AUTO_START=true`.
 
 ```bash
 docker run -e FLOCI_TLS_ENABLED=true -e FLOCI_SERVICES_IOT_MQTT_AUTO_START=true -p 4566:4566 -p 8883:8883 floci/floci:latest
 curl http://localhost:4566/_floci/ca.pem -o ca.pem
-mosquitto_sub -h localhost -p 8883 --cafile ca.pem -t 'devices/#'
+aws --endpoint-url http://localhost:4566 iot create-keys-and-certificate --set-as-active \
+  --certificate-pem-outfile device.crt --private-key-outfile device.key --query certificateArn --output text
+aws --endpoint-url http://localhost:4566 iot create-policy --policy-name connect \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iot:Connect","Resource":"arn:aws:iot:*:*:client/*"}]}'
+aws --endpoint-url http://localhost:4566 iot attach-policy --policy-name connect --target <certificateArn>
+mosquitto_sub -h localhost -p 8883 --cafile ca.pem --cert device.crt --key device.key -t 'devices/#'
 ```
+
+#### Device verification on 8883
+
+The connection is admitted when all of these hold, otherwise the broker answers `CONNACK` not authorized (return code `5`, reason code `0x87` on MQTT 5) and closes the connection:
+
+1. A certificate was presented and the SHA-256 of its DER encoding is a registered `certificateId` (`CreateKeysAndCertificate` or `CreateCertificateFromCsr`), in any account and region. Who signed it does not matter, registration does, as on AWS.
+2. The certificate is `ACTIVE` and inside its validity dates.
+3. The default versions of the policies attached to the certificate (`AttachPolicy` with the certificate ARN as target, in the certificate's own account and region) allow `iot:Connect` on `arn:aws:iot:<region>:<account>:client/<clientId>`. No attached policy means deny, and an explicit `Deny` wins.
+
+Policy variables are substituted and are also available as condition keys: `iot:ClientId`, `aws:SourceIp`, `iot:DomainName` (the server name the client sent in the TLS handshake, absent when it dialled an IP address), `iot:Connection.Thing.IsAttached` and, only when the client id names a thing attached to the certificate with `AttachThingPrincipal`, `iot:Connection.Thing.ThingName`, `iot:Connection.Thing.ThingTypeName` and `iot:Connection.Thing.Attributes[name]`. A statement that uses a variable Floci cannot resolve, such as the certificate variables `iot:Certificate.*`, matches nothing.
+
+Differences from AWS: AWS rejects an unregistered, inactive or expired certificate during the TLS handshake and closes an MQTT 3.1.1 connection it does not authorize without a `CONNACK`; Floci completes the handshake and always answers with the return code, so the reason is visible to the client. Deactivating the certificate or detaching the policy takes effect on the next connect; established sessions are not dropped. Policies attached to thing groups are not consulted, and exclusive thing attachment (`thingPrincipalType`) is not modelled: the thing is always the one named by the client id.
 
 ## Reserved Topics
 
@@ -118,7 +134,7 @@ Implementation notes:
 
 Current accepted limitation:
 
-- Certificate and policy authorization are not enforced at the broker layer yet, on either port.
+- Certificate and `iot:Connect` checks are enforced on 8883 only; topic-level authorization is not enforced on either port yet.
 - Persistent offline sessions are not modeled yet.
 - QoS 2 and advanced MQTT 5 property semantics remain follow-up scope.
 

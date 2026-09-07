@@ -868,6 +868,7 @@ public class RuntimeApiServer {
 
     private void sendInvocation(RoutingContext ctx, PendingInvocation invocation) {
         beforeSendInvocationWrite(invocation.getRequestId());
+        invocation.prepareForDispatch();
         // Invariant: callers put the invocation in inFlight under the lock before
         // dispatching, so no inFlight.put here.
         byte[] payload = invocation.getPayload();
@@ -891,7 +892,10 @@ public class RuntimeApiServer {
         }
         // Gated on the successful write: onFailure below requeues the invocation, and a fan-out
         // before the write would emit a second INVOKE for the same requestId on redelivery.
-        write.onSuccess(v -> notifyExtensionsOfInvoke(invocation));
+        write.onSuccess(v -> {
+            invocation.markDispatched();
+            notifyExtensionsOfInvoke(invocation);
+        });
         write.onFailure(err -> {
             // Requeue for the next /next poller; mirrors enqueue()'s ctx-ended branch.
             // Skip if quiesce() beat us — it already swept inFlight and settled the

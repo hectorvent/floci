@@ -621,6 +621,8 @@ floci:
       enabled: true
     identitystore:
       enabled: true
+    budgets:
+      enabled: true
     controltower:
       enabled: true
       seed-landing-zone: false
@@ -638,6 +640,10 @@ floci:
       enabled: true
     pipes:
       enabled: true
+      kafka-rest-bridge:
+        default-image: "ghcr.io/aiven-open/karapace:latest"
+        host-port-base: 9500
+        host-port-max: 9599
     configservice:
       enabled: true
     docdb:

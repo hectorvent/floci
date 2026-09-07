@@ -57,6 +57,8 @@ public class RdsContainerManager {
     private final Map<String, RdsContainerHandle> activeContainers = new ConcurrentHashMap<>();
     private final Map<String, String> activeStorageOwners = new ConcurrentHashMap<>();
     private final Set<String> claimedRuntimes = ConcurrentHashMap.newKeySet();
+    private final Set<String> cleanupPending = ConcurrentHashMap.newKeySet();
+    private volatile boolean dockerUnavailableLogged;
 
     @Inject
     public RdsContainerManager(ContainerBuilder containerBuilder,
@@ -89,6 +91,86 @@ public class RdsContainerManager {
                 config, "rds", volumeId, instanceId);
         return start(runtimeId, instanceId, instanceId, exactVolumeName,
                 engine, image, masterUsername, masterPassword, dbName);
+    }
+
+    /**
+     * Attempts {@link #start} and reports the backend as unavailable instead of propagating the
+     * failure when the cause is that no Docker daemon is reachable from Floci: Floci running
+     * inside Docker without a mounted socket, or a stopped daemon on the host. A failure raised
+     * while the daemon <em>is</em> reachable is a genuine container problem and still propagates,
+     * so nothing changes for a Floci that can start database containers.
+     * <p>
+     * A handle retained by an earlier cleanup failure is cleaned up first, so a container
+     * created just before the daemon went away, or one whose stop failed after its proxy did
+     * not start, is removed once the daemon is back instead of blocking the runtime's next
+     * start. An identity that names only the fixed container name came from a
+     * start that failed before Docker created anything, and is dropped when the daemon is
+     * unreachable so the runtime can retry.
+     *
+     * @return the container handle, or {@code null} when no Docker daemon is reachable
+     */
+    public RdsContainerHandle tryStart(
+            String runtimeId, String instanceId, String containerStorageResourceId,
+            String dockerVolumeName, DatabaseEngine engine, String image,
+            String masterUsername, String masterPassword, String dbName) {
+        String effectiveRuntimeId = runtimeId == null || runtimeId.isBlank() ? instanceId : runtimeId;
+        try {
+            retryRetainedCleanup(effectiveRuntimeId);
+            RdsContainerHandle handle = start(runtimeId, instanceId, containerStorageResourceId,
+                    dockerVolumeName, engine, image, masterUsername, masterPassword, dbName);
+            dockerUnavailableLogged = false;
+            return handle;
+        } catch (RuntimeException e) {
+            if (isDockerReachable()) {
+                throw e;
+            }
+            discardNeverCreatedIdentity(effectiveRuntimeId, dockerVolumeName);
+            if (!dockerUnavailableLogged) {
+                dockerUnavailableLogged = true;
+                LOG.warnv("No Docker daemon is reachable from Floci ({0}). RDS metadata operations "
+                        + "keep working and DB instances still reach 'available', but they have no "
+                        + "backing database container until a daemon becomes reachable.",
+                        e.getMessage());
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Probes the configured Docker endpoint, which is how a missing daemon is told apart from a
+     * container that failed for its own reasons.
+     */
+    public boolean isDockerReachable() {
+        try {
+            lifecycleManager.getDockerClient().pingCmd().exec();
+            return true;
+        } catch (Exception e) {
+            LOG.debugv("Docker daemon is not reachable: {0}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * A handle retained because its cleanup failed, whether from a failed start or from a stop
+     * that could not remove the container, is cleaned up before the runtime starts again. A live
+     * handle that is not pending cleanup is left alone, so a concurrent duplicate start is still
+     * rejected by {@link #start}.
+     */
+    private void retryRetainedCleanup(String runtimeId) {
+        RdsContainerHandle retained = activeContainers.get(runtimeId);
+        if (retained != null && cleanupPending.contains(runtimeId)) {
+            stop(retained);
+        }
+    }
+
+    private void discardNeverCreatedIdentity(String runtimeId, String containerName) {
+        RdsContainerHandle retained = activeContainers.get(runtimeId);
+        if (retained == null || retained.getHost() != null
+                || !retained.getContainerId().equals(containerName)) {
+            return;
+        }
+        activeContainers.remove(runtimeId, retained);
+        releaseOwnership(retained.getStorageKey(), retained.getContainerKey(), runtimeId);
     }
 
     public RdsContainerHandle start(
@@ -220,6 +302,7 @@ public class RdsContainerManager {
                             cleanupContainerId, effectiveRuntimeId, instanceId,
                             null, 0, storageKey, containerKey);
                     activeContainers.put(effectiveRuntimeId, retained);
+                    cleanupPending.add(effectiveRuntimeId);
                     LOG.errorv(cleanupFailure,
                             "Failed to clean up RDS container {0}; retaining storage ownership for {1}",
                             cleanupContainerId, effectiveRuntimeId);
@@ -272,6 +355,7 @@ public class RdsContainerManager {
         } catch (RuntimeException | Error e) {
             activeContainers.putIfAbsent(effectiveHandle.getRuntimeId(), effectiveHandle);
             claimedRuntimes.add(effectiveHandle.getRuntimeId());
+            cleanupPending.add(effectiveHandle.getRuntimeId());
             throw e;
         }
         activeContainers.remove(effectiveHandle.getRuntimeId(), effectiveHandle);
@@ -624,6 +708,7 @@ public class RdsContainerManager {
             activeStorageOwners.remove(containerKey, runtimeId);
         }
         claimedRuntimes.remove(runtimeId);
+        cleanupPending.remove(runtimeId);
     }
 
     private static String requireSafeStorageComponent(String value, String label) {

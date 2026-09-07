@@ -62,6 +62,94 @@ class AutoScalingIntegrationTest {
                 .body(containsString("t3.micro"));
     }
 
+    // AWS always returns InstanceMonitoring and BlockDeviceMappings from
+    // DescribeLaunchConfigurations. Omitting them made the Terraform provider read
+    // enable_monitoring as false and root_block_device as empty, which forced a
+    // replacement on every plan.
+    @Test
+    @Order(42)
+    void launchConfigurationRoundTripsMonitoringAndBlockDeviceMappings() {
+        given()
+                .formParam("Action", "CreateLaunchConfiguration")
+                .formParam("LaunchConfigurationName", "my-lc-with-root-device")
+                .formParam("ImageId", "ami-12345678")
+                .formParam("InstanceType", "t3.micro")
+                .formParam("InstanceMonitoring.Enabled", "false")
+                .formParam("BlockDeviceMappings.member.1.DeviceName", "/dev/xvda")
+                .formParam("BlockDeviceMappings.member.1.Ebs.VolumeSize", "100")
+                .formParam("BlockDeviceMappings.member.1.Ebs.VolumeType", "gp3")
+                .formParam("BlockDeviceMappings.member.1.Ebs.Throughput", "125")
+                .formParam("BlockDeviceMappings.member.1.Ebs.DeleteOnTermination", "true")
+                .formParam("BlockDeviceMappings.member.2.DeviceName", "/dev/sdb")
+                .formParam("BlockDeviceMappings.member.2.VirtualName", "ephemeral0")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body(containsString("CreateLaunchConfigurationResponse"));
+
+        given()
+                .formParam("Action", "DescribeLaunchConfigurations")
+                .formParam("LaunchConfigurationNames.member.1", "my-lc-with-root-device")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body(containsString("<InstanceMonitoring><Enabled>false</Enabled></InstanceMonitoring>"))
+                .body(containsString("<DeviceName>/dev/xvda</DeviceName>"))
+                .body(containsString("<VolumeSize>100</VolumeSize>"))
+                .body(containsString("<VolumeType>gp3</VolumeType>"))
+                .body(containsString("<Throughput>125</Throughput>"))
+                .body(containsString("<DeleteOnTermination>true</DeleteOnTermination>"))
+                .body(containsString("<VirtualName>ephemeral0</VirtualName>"));
+    }
+
+    @Test
+    @Order(43)
+    void launchConfigurationDefaultsMonitoringToEnabledAndMappingsToEmpty() {
+        given()
+                .formParam("Action", "CreateLaunchConfiguration")
+                .formParam("LaunchConfigurationName", "my-lc-defaults")
+                .formParam("ImageId", "ami-12345678")
+                .formParam("InstanceType", "t3.micro")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200);
+
+        given()
+                .formParam("Action", "DescribeLaunchConfigurations")
+                .formParam("LaunchConfigurationNames.member.1", "my-lc-defaults")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body(containsString("<InstanceMonitoring><Enabled>true</Enabled></InstanceMonitoring>"))
+                .body(containsString("<BlockDeviceMappings></BlockDeviceMappings>"));
+    }
+
+    @Test
+    @Order(44)
+    void launchConfigurationRejectsAMappingWithoutADeviceName() {
+        given()
+                .formParam("Action", "CreateLaunchConfiguration")
+                .formParam("LaunchConfigurationName", "my-lc-bad-mapping")
+                .formParam("ImageId", "ami-12345678")
+                .formParam("InstanceType", "t3.micro")
+                .formParam("BlockDeviceMappings.member.1.Ebs.VolumeSize", "100")
+                .header("Authorization", AUTH)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body(containsString("ValidationError"))
+                .body(containsString("BlockDeviceMappings.member.1.DeviceName"));
+    }
+
     // ── Auto Scaling Groups ───────────────────────────────────────────────────
 
     @Test

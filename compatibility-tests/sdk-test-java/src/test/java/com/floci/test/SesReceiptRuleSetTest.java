@@ -43,6 +43,7 @@ class SesReceiptRuleSetTest {
     private static SesClient ses;
     private static SnsClient sns;
     private static String ruleSet;
+    private static String cloneRuleSet;
     private static String topicArn;
     private static String blockFilter;
     private static String allowFilter;
@@ -53,6 +54,7 @@ class SesReceiptRuleSetTest {
         sns = TestFixtures.snsClient();
         String unique = TestFixtures.uniqueName();
         ruleSet = "sdk-v1-rule-set-" + unique;
+        cloneRuleSet = "sdk-v1-rule-set-copy-" + unique;
         blockFilter = "sdk-v1-filter-block-" + unique;
         allowFilter = "sdk-v1-filter-allow-" + unique;
         topicArn = sns.createTopic(b -> b.name("sdk-v1-receipt-rule-topic")).topicArn();
@@ -66,11 +68,13 @@ class SesReceiptRuleSetTest {
             } catch (RuntimeException e) {
                 System.err.println("Best-effort clearing of the active rule set failed: " + e.getMessage());
             }
-            try {
-                ses.deleteReceiptRuleSet(b -> b.ruleSetName(ruleSet));
-            } catch (RuntimeException e) {
-                System.err.println("Best-effort cleanup of rule set " + ruleSet
-                        + " failed (its rules cascade with it): " + e.getMessage());
+            for (String name : new String[] {ruleSet, cloneRuleSet}) {
+                try {
+                    ses.deleteReceiptRuleSet(b -> b.ruleSetName(name));
+                } catch (RuntimeException e) {
+                    System.err.println("Best-effort cleanup of rule set " + name
+                            + " failed (its rules cascade with it): " + e.getMessage());
+                }
             }
             for (String name : new String[] {blockFilter, allowFilter}) {
                 try {
@@ -238,6 +242,56 @@ class SesReceiptRuleSetTest {
 
     @Test
     @Order(12)
+    void reorder_requiresExactPermutation_andApplies() {
+        // The set holds [rich, first] here; reorder demands every rule exactly once.
+        ses.reorderReceiptRuleSet(b -> b.ruleSetName(ruleSet).ruleNames("first", "rich"));
+        assertThat(ses.describeReceiptRuleSet(b -> b.ruleSetName(ruleSet)).rules())
+                .extracting(ReceiptRule::name)
+                .containsExactly("first", "rich");
+
+        // A duplicate name is rejected before the missing-rule check, both as the wire's
+        // unmodeled InvalidParameterValue.
+        assertThatThrownBy(() -> ses.reorderReceiptRuleSet(
+                b -> b.ruleSetName(ruleSet).ruleNames("rich", "rich")))
+                .isInstanceOfSatisfying(SesException.class, e -> assertThat(
+                        e.awsErrorDetails().errorCode()).isEqualTo("InvalidParameterValue"))
+                .hasMessageContaining("Multiple positions found for rule: rich");
+
+        assertThatThrownBy(() -> ses.reorderReceiptRuleSet(
+                b -> b.ruleSetName(ruleSet).ruleNames("rich")))
+                .hasMessageContaining("Positions for rules not found: first");
+
+        assertThatThrownBy(() -> ses.reorderReceiptRuleSet(
+                b -> b.ruleSetName(ruleSet).ruleNames("first", "rich", "ghost")))
+                .isInstanceOf(RuleDoesNotExistException.class)
+                .hasMessageContaining("Rule does not exist: ghost");
+    }
+
+    @Test
+    @Order(13)
+    void clone_copiesRules_leavesActiveFlagBehind() {
+        ses.cloneReceiptRuleSet(b -> b.ruleSetName(cloneRuleSet).originalRuleSetName(ruleSet));
+
+        assertThat(ses.describeReceiptRuleSet(b -> b.ruleSetName(cloneRuleSet)).rules())
+                .extracting(ReceiptRule::name)
+                .containsExactly("first", "rich");
+        // The source was set active in an earlier test; the clone does not inherit that.
+        assertThat(ses.describeActiveReceiptRuleSet(b -> { }).metadata().name())
+                .isEqualTo(ruleSet);
+
+        assertThatThrownBy(() -> ses.cloneReceiptRuleSet(
+                b -> b.ruleSetName(cloneRuleSet).originalRuleSetName(ruleSet)))
+                .isInstanceOf(AlreadyExistsException.class)
+                .hasMessageContaining("Rule set already exists: " + cloneRuleSet);
+
+        assertThatThrownBy(() -> ses.cloneReceiptRuleSet(
+                b -> b.ruleSetName("sdk-v1-fresh").originalRuleSetName("sdk-v1-nope")))
+                .isInstanceOf(RuleSetDoesNotExistException.class)
+                .hasMessageContaining("Rule set does not exist: sdk-v1-nope");
+    }
+
+    @Test
+    @Order(14)
     void unsetActive_leavesNoActiveRuleSet() {
         ses.setActiveReceiptRuleSet(b -> { }); // no name clears the active rule set
         DescribeActiveReceiptRuleSetResponse a = ses.describeActiveReceiptRuleSet(b -> { });
@@ -245,7 +299,7 @@ class SesReceiptRuleSetTest {
     }
 
     @Test
-    @Order(13)
+    @Order(15)
     void delete_isIdempotent_andCascadesRemainingRules() {
         ses.deleteReceiptRuleSet(b -> b.ruleSetName(ruleSet));
         // Deleting an already-absent rule set still succeeds (matches AWS).
@@ -255,7 +309,7 @@ class SesReceiptRuleSetTest {
     }
 
     @Test
-    @Order(14)
+    @Order(16)
     void createFilterAndList_roundTrip() {
         ses.createReceiptFilter(b -> b.filter(f -> f.name(blockFilter)
                 .ipFilter(ip -> ip.policy(ReceiptFilterPolicy.BLOCK).cidr("10.0.0.0/24"))));
@@ -271,7 +325,7 @@ class SesReceiptRuleSetTest {
     }
 
     @Test
-    @Order(15)
+    @Order(17)
     void duplicateFilterCreate_andInvalidCidr_mapToTypedExceptions() {
         assertThatThrownBy(() -> ses.createReceiptFilter(b -> b.filter(f -> f.name(blockFilter)
                 .ipFilter(ip -> ip.policy(ReceiptFilterPolicy.ALLOW).cidr("10.9.9.9")))))
@@ -288,7 +342,7 @@ class SesReceiptRuleSetTest {
     }
 
     @Test
-    @Order(16)
+    @Order(18)
     void deleteFilter_isIdempotent() {
         ses.deleteReceiptFilter(b -> b.filterName(allowFilter));
         ses.deleteReceiptFilter(b -> b.filterName(allowFilter));

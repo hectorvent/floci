@@ -75,6 +75,13 @@ public class ReceiptAction {
         return getProperties().get(name);
     }
 
+    /** Deep copy; the property map is mutable. */
+    public ReceiptAction copy() {
+        ReceiptAction copy = new ReceiptAction(type);
+        copy.properties = new LinkedHashMap<>(getProperties());
+        return copy;
+    }
+
     public boolean is(String actionType) {
         return actionType.equals(type);
     }

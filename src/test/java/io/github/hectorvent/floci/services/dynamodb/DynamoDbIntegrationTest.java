@@ -440,6 +440,35 @@ class DynamoDbIntegrationTest {
             .body("Items[0].total", nullValue());
     }
 
+    // Checked against real DynamoDB (us-east-1, 2026-09-07). A reversed BETWEEN in a
+    // ConditionExpression is a 400 ValidationException, not a ConditionalCheckFailedException,
+    // and AWS wraps the ConditionExpression form in its validation-error envelope.
+    @Test
+    @Order(10)
+    void putItemWithReversedBetweenBoundsReturnsValidationException() {
+        given()
+            .header("X-Amz-Target", "DynamoDB_20120810.PutItem")
+            .contentType(DYNAMODB_CONTENT_TYPE)
+            .body("""
+                {
+                    "TableName": "TestTable",
+                    "Item": {"pk": {"S": "between-1"}, "sk": {"S": "a"}},
+                    "ConditionExpression": "#n BETWEEN :hi AND :lo",
+                    "ExpressionAttributeNames": {"#n": "n"},
+                    "ExpressionAttributeValues": {":hi": {"N": "10"}, ":lo": {"N": "1"}}
+                }
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("ValidationException"))
+            .body("message", equalTo("1 validation error detected: Invalid ConditionExpression: "
+                    + "The BETWEEN operator requires upper bound to be greater than or equal to lower "
+                    + "bound; lower bound operand: AttributeValue: {N:10}, upper bound operand: "
+                    + "AttributeValue: {N:1}"));
+    }
+
     @Test
     @Order(10)
     void queryWithSelectSpecificAttributesRequiresProjectionParameters() {
@@ -3464,6 +3493,57 @@ given()
 
         // Cleanup
         deleteTable(tableName);
+    }
+
+    @Test
+    void transactWriteFailureIsAtomicThroughAwsProtocol() {
+        String firstTable = "TxAtomicPublicOne";
+        String secondTable = "TxAtomicPublicTwo";
+        String createTable = """
+                {
+                  "TableName":"%s",
+                  "KeySchema":[{"AttributeName":"pk","KeyType":"HASH"}],
+                  "AttributeDefinitions":[{"AttributeName":"pk","AttributeType":"S"}],
+                  "BillingMode":"PAY_PER_REQUEST"
+                }
+                """;
+
+        for (String table : new String[]{firstTable, secondTable}) {
+            given().header("X-Amz-Target", "DynamoDB_20120810.CreateTable")
+                    .contentType(DYNAMODB_CONTENT_TYPE)
+                    .body(createTable.formatted(table))
+                    .when().post("/")
+                    .then().statusCode(200);
+        }
+
+        String transaction = """
+                {
+                  "TransactItems":[
+                    {"Put":{"TableName":"%s","Item":{"pk":{"S":"new"}}}},
+                    {"ConditionCheck":{"TableName":"%s","Key":{"pk":{"S":"bad"}},
+                      "ConditionExpression":"attribute_exists(pk)"}}
+                  ]
+                }
+                """.formatted(firstTable, secondTable);
+
+        given().header("X-Amz-Target", "DynamoDB_20120810.TransactWriteItems")
+                .contentType(DYNAMODB_CONTENT_TYPE)
+                .body(transaction)
+                .when().post("/")
+                .then().statusCode(400)
+                .body("__type", equalTo("TransactionCanceledException"));
+
+        for (String table : new String[]{firstTable, secondTable}) {
+            given().header("X-Amz-Target", "DynamoDB_20120810.GetItem")
+                    .contentType(DYNAMODB_CONTENT_TYPE)
+                    .body("{\"TableName\":\"%s\",\"Key\":{\"pk\":{\"S\":\"new\"}}}".formatted(table))
+                    .when().post("/")
+                    .then().statusCode(200)
+                    .body("Item", nullValue());
+        }
+
+        deleteTable(firstTable);
+        deleteTable(secondTable);
     }
 
     @Test

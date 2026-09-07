@@ -6,13 +6,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.config.FlociCertificateAuthority;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.services.cloudwatch.logs.CloudWatchLogsService;
+import io.github.hectorvent.floci.services.iam.IamPolicyEvaluator;
+import io.github.hectorvent.floci.services.iam.model.CallerContext;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.iot.model.IotCertificate;
 import io.github.hectorvent.floci.services.iot.model.IotJob;
@@ -46,6 +50,8 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -55,13 +61,17 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 @ApplicationScoped
@@ -74,10 +84,15 @@ public class IotService {
     private static final Pattern THING_NAME_PATTERN = Pattern.compile("[a-zA-Z0-9:_-]{1,128}");
     /** The {@code FirehoseSeparator} shape of the IoT API model. */
     private static final Pattern FIREHOSE_SEPARATOR = Pattern.compile("([\\n\\t])|(\\r\\n)|(,)");
+    /** An AWS policy variable such as {@code ${iot:ClientId}}. */
+    private static final Pattern POLICY_VARIABLE = Pattern.compile("\\$\\{[^}]*\\}");
     public static final int MAX_POLICY_VERSIONS = 5;
 
     /** One lock for every policy version write and the policy delete, so a cap check, an append and a delete cannot interleave. */
     private final Object policyWriteLock = new Object();
+
+    /** certificateId to the partition and key it was last found under; see {@link #findRegisteredCertificate}. */
+    private final Map<String, CertificateLocation> certificateLocations = new ConcurrentHashMap<>();
 
     private final StorageBackend<String, Thing> thingStore;
     private final StorageBackend<String, IotCertificate> certificateStore;
@@ -106,6 +121,7 @@ public class IotService {
     private final FirehoseService firehoseService;
     private final CloudWatchLogsService cloudWatchLogsService;
     private final FlociCertificateAuthority certificateAuthority;
+    private final IamPolicyEvaluator policyEvaluator;
     private final RuleSqlEvaluator ruleSqlEvaluator;
 
     @Inject
@@ -123,7 +139,8 @@ public class IotService {
                         LambdaService lambdaService,
                         FirehoseService firehoseService,
                         CloudWatchLogsService cloudWatchLogsService,
-                        FlociCertificateAuthority certificateAuthority) {
+                        FlociCertificateAuthority certificateAuthority,
+                        IamPolicyEvaluator policyEvaluator) {
         this(storageFactory.create("iot", "iot-things.json", new TypeReference<Map<String, Thing>>() {}),
                 storageFactory.create("iot", "iot-certificates.json", new TypeReference<Map<String, IotCertificate>>() {}),
                 storageFactory.create("iot", "iot-policies.json", new TypeReference<Map<String, IotPolicy>>() {}),
@@ -138,7 +155,8 @@ public class IotService {
                 storageFactory.create("iot", "iot-thing-groups.json", new TypeReference<Map<String, IotThingGroup>>() {}),
                 storageFactory.create("iot", "iot-thing-group-memberships.json", new TypeReference<Map<String, Set<String>>>() {}),
                 config, regionResolver, objectMapper, publishEventRecorder, mqttBrokerService, sqsService, snsService,
-                s3Service, kinesisService, dynamoDbService, lambdaService, firehoseService, cloudWatchLogsService, certificateAuthority);
+                s3Service, kinesisService, dynamoDbService, lambdaService, firehoseService, cloudWatchLogsService, certificateAuthority,
+                policyEvaluator);
     }
 
     IotService(StorageBackend<String, Thing> thingStore,
@@ -167,7 +185,8 @@ public class IotService {
                   LambdaService lambdaService,
                   FirehoseService firehoseService,
                   CloudWatchLogsService cloudWatchLogsService,
-                  FlociCertificateAuthority certificateAuthority) {
+                  FlociCertificateAuthority certificateAuthority,
+                  IamPolicyEvaluator policyEvaluator) {
         this.thingStore = thingStore;
         this.certificateStore = certificateStore;
         this.policyStore = policyStore;
@@ -195,6 +214,7 @@ public class IotService {
         this.firehoseService = firehoseService;
         this.cloudWatchLogsService = cloudWatchLogsService;
         this.certificateAuthority = certificateAuthority;
+        this.policyEvaluator = policyEvaluator;
         this.ruleSqlEvaluator = new RuleSqlEvaluator(objectMapper);
     }
 
@@ -370,14 +390,18 @@ public class IotService {
         }
     }
 
-    /** AWS IoT's certificateId is the lowercase hex SHA-256 of the certificate's DER encoding. */
     private static void fill(IotCertificate certificate, X509Certificate x509) throws Exception {
         CertificateGenerator pem = new CertificateGenerator();
-        certificate.setCertificateId(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(x509.getEncoded())));
+        certificate.setCertificateId(certificateIdOf(x509));
         certificate.setCertificatePem(pem.toPem(x509));
         certificate.setPublicKey(pem.toPem(x509.getPublicKey()));
         certificate.setNotBefore(x509.getNotBefore().toInstant());
         certificate.setNotAfter(x509.getNotAfter().toInstant());
+    }
+
+    /** AWS IoT's certificateId is the lowercase hex SHA-256 of the certificate's DER encoding. */
+    private static String certificateIdOf(X509Certificate x509) throws CertificateEncodingException, NoSuchAlgorithmException {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(x509.getEncoded()));
     }
 
     public IotCertificate describeCertificate(String certificateId, String region) {
@@ -408,6 +432,205 @@ public class IotService {
             throw new AwsException("InvalidRequestException", "Cannot delete attached certificate", 400);
         }
         certificateStore.delete(certificateKey(region, certificateId));
+        certificateLocations.remove(certificateId);
+    }
+
+    /** A device certificate the registry holds, with the account partition and region it was registered in. */
+    public record RegisteredDevice(String accountId, String region, IotCertificate certificate) {
+    }
+
+    private record CertificateLocation(String accountId, String key) {
+    }
+
+    /**
+     * AWS IoT trusts a device certificate because it is registered, not because of who signed it.
+     * The lookup key is the certificateId, which is the SHA-256 of the DER encoding, searched
+     * across every account partition: a connecting device carries no request context. The
+     * partition and key a certificate was found under are remembered, so a device's next connect
+     * is one keyed read; a remembered location that no longer resolves is dropped and the scan
+     * runs again.
+     */
+    public Optional<RegisteredDevice> findRegisteredCertificate(X509Certificate presented) {
+        String certificateId;
+        try {
+            certificateId = certificateIdOf(presented);
+        } catch (CertificateEncodingException | NoSuchAlgorithmException e) {
+            LOG.debugv("Could not fingerprint the presented device certificate: {0}", e.getMessage());
+            return Optional.empty();
+        }
+        CertificateLocation known = certificateLocations.get(certificateId);
+        if (known != null) {
+            Optional<IotCertificate> current = getForAccount(certificateStore, known.accountId(), known.key());
+            if (current.isPresent()) {
+                return Optional.of(new RegisteredDevice(known.accountId(), regionOfCertificateKey(known.key()), current.get()));
+            }
+            certificateLocations.remove(certificateId, known);
+        }
+        String suffix = ":" + certificateId;
+        Optional<AccountAwareStorageBackend.AccountEntry<IotCertificate>> found =
+                registeredCertificates(key -> key.startsWith("cert:") && key.endsWith(suffix)).stream()
+                        .sorted(Comparator.comparing((AccountAwareStorageBackend.AccountEntry<IotCertificate> entry) -> entry.accountId())
+                                .thenComparing(AccountAwareStorageBackend.AccountEntry::key))
+                        .findFirst();
+        found.ifPresent(entry -> certificateLocations.put(certificateId, new CertificateLocation(entry.accountId(), entry.key())));
+        return found.map(entry -> new RegisteredDevice(entry.accountId(), regionOfCertificateKey(entry.key()), entry.value()));
+    }
+
+    private static String regionOfCertificateKey(String key) {
+        return key.split(":", 3)[1];
+    }
+
+    /**
+     * Decides {@code iot:Connect} for a client id the way AWS IoT does on a CONNECT: the certificate
+     * must be ACTIVE and within its validity dates, the policies are the default versions attached
+     * to the certificate in its own account and region, and the connection's policy variables are
+     * substituted and offered as condition keys. No policy means deny; an explicit deny wins.
+     */
+    public boolean isConnectAllowed(RegisteredDevice device, String clientId, String sourceIp, String domainName) {
+        IotCertificate certificate = device.certificate();
+        if (clientId == null || clientId.isBlank() || !"ACTIVE".equals(certificate.getStatus()) || !isWithinValidity(certificate)) {
+            return false;
+        }
+        List<String> documents = attachedPolicyDocuments(certificate.getCertificateArn(), device.region(), device.accountId());
+        if (documents.isEmpty()) {
+            return false;
+        }
+        Map<String, String> variables = connectionVariables(device, clientId, sourceIp, domainName);
+        List<String> resolved = documents.stream().map(document -> resolvePolicyVariables(document, variables)).toList();
+        Map<String, List<String>> conditionContext = new LinkedHashMap<>();
+        variables.forEach((key, value) -> conditionContext.put(key, List.of(value)));
+        String clientArn = AwsArnUtils.Arn.of("iot", device.region(), device.accountId(), "client/" + clientId).toString();
+        return policyEvaluator.evaluate(CallerContext.of(resolved), null, "iot:Connect", clientArn, conditionContext)
+                == IamPolicyEvaluator.Decision.ALLOW;
+    }
+
+    private static boolean isWithinValidity(IotCertificate certificate) {
+        Instant now = Instant.now();
+        return (certificate.getNotBefore() == null || !now.isBefore(certificate.getNotBefore()))
+                && (certificate.getNotAfter() == null || now.isBefore(certificate.getNotAfter()));
+    }
+
+    private List<String> attachedPolicyDocuments(String certificateArn, String region, String accountId) {
+        String prefix = "policy-attachment:" + region + ":";
+        return keysForAccount(policyAttachmentStore, accountId).stream()
+                .filter(key -> key.startsWith(prefix))
+                .filter(key -> getForAccount(policyAttachmentStore, accountId, key).orElse(Set.of()).contains(certificateArn))
+                .map(key -> key.substring(prefix.length()))
+                .sorted()
+                .map(policyName -> getForAccount(policyStore, accountId, policyKey(region, policyName)))
+                .flatMap(Optional::stream)
+                .map(IotPolicy::getPolicyDocument)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    /**
+     * The policy variables AWS IoT defines for a connection: the basic ones (client id, source
+     * address, the domain name the client connected to) and the thing ones, which resolve only when
+     * the client id names a thing attached to the certificate, as on AWS.
+     */
+    private Map<String, String> connectionVariables(RegisteredDevice device, String clientId, String sourceIp, String domainName) {
+        Map<String, String> variables = new LinkedHashMap<>();
+        variables.put("iot:ClientId", clientId);
+        if (sourceIp != null) {
+            variables.put("aws:SourceIp", sourceIp);
+        }
+        if (domainName != null) {
+            variables.put("iot:DomainName", domainName);
+        }
+        Optional<Thing> thing = getForAccount(thingStore, device.accountId(), thingKey(device.region(), clientId));
+        boolean attached = thing.isPresent()
+                && getForAccount(thingPrincipalStore, device.accountId(), thingPrincipalKey(device.region(), clientId))
+                        .orElse(Set.of()).contains(device.certificate().getCertificateArn());
+        variables.put("iot:Connection.Thing.IsAttached", Boolean.toString(attached));
+        if (attached) {
+            variables.put("iot:Connection.Thing.ThingName", clientId);
+            if (thing.get().getThingTypeName() != null) {
+                variables.put("iot:Connection.Thing.ThingTypeName", thing.get().getThingTypeName());
+            }
+            thing.get().getAttributes().forEach((name, value) -> variables.put("iot:Connection.Thing.Attributes[" + name + "]", value));
+        }
+        return variables;
+    }
+
+    /**
+     * Substitutes the connection's variables into every string of the document on the parsed tree,
+     * so a client id is never read as JSON. A statement still holding a variable Floci cannot
+     * resolve matches nothing, as an unresolvable variable does on AWS, and is dropped. A document
+     * that does not parse is returned as is: the evaluator logs it and skips it.
+     */
+    private String resolvePolicyVariables(String document, Map<String, String> variables) {
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(document);
+        } catch (JsonProcessingException e) {
+            return document;
+        }
+        if (!(root instanceof ObjectNode policy)) {
+            return document;
+        }
+        JsonNode statements = policy.get("Statement");
+        Iterable<JsonNode> each = statements == null ? List.of() : statements.isArray() ? statements : List.of(statements);
+        ArrayNode resolved = objectMapper.createArrayNode();
+        for (JsonNode statement : each) {
+            JsonNode substituted = substituteVariables(statement.deepCopy(), variables);
+            if (!hasUnresolvedVariable(substituted)) {
+                resolved.add(substituted);
+            }
+        }
+        policy.set("Statement", resolved);
+        return policy.toString();
+    }
+
+    private static JsonNode substituteVariables(JsonNode node, Map<String, String> variables) {
+        if (node.isTextual()) {
+            String text = node.asText();
+            for (Map.Entry<String, String> variable : variables.entrySet()) {
+                text = text.replace("${" + variable.getKey() + "}", variable.getValue());
+            }
+            return TextNode.valueOf(text);
+        }
+        if (node instanceof ObjectNode object) {
+            for (Map.Entry<String, JsonNode> property : object.properties()) {
+                property.setValue(substituteVariables(property.getValue(), variables));
+            }
+        } else if (node instanceof ArrayNode array) {
+            for (int i = 0; i < array.size(); i++) {
+                array.set(i, substituteVariables(array.get(i), variables));
+            }
+        }
+        return node;
+    }
+
+    private static boolean hasUnresolvedVariable(JsonNode node) {
+        if (node.isTextual()) {
+            return POLICY_VARIABLE.matcher(node.asText()).find();
+        }
+        for (JsonNode child : node) {
+            if (hasUnresolvedVariable(child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<AccountAwareStorageBackend.AccountEntry<IotCertificate>> registeredCertificates(Predicate<String> keyFilter) {
+        if (certificateStore instanceof AccountAwareStorageBackend<IotCertificate> aware) {
+            return aware.scanAllAccountEntries(keyFilter);
+        }
+        return certificateStore.keys().stream()
+                .filter(keyFilter)
+                .flatMap(key -> certificateStore.get(key).stream()
+                        .map(value -> new AccountAwareStorageBackend.AccountEntry<>(regionResolver.getDefaultAccountId(), key, value)))
+                .toList();
+    }
+
+    private static <V> Optional<V> getForAccount(StorageBackend<String, V> store, String accountId, String key) {
+        return store instanceof AccountAwareStorageBackend<V> aware ? aware.getForAccount(accountId, key) : store.get(key);
+    }
+
+    private static <V> Set<String> keysForAccount(StorageBackend<String, V> store, String accountId) {
+        return store instanceof AccountAwareStorageBackend<V> aware ? aware.keysForAccount(accountId) : store.keys();
     }
 
     public IotPolicy createPolicy(String policyName, String policyDocument, String region) {

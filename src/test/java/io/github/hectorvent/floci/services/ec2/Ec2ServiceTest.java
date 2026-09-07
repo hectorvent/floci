@@ -257,6 +257,75 @@ class Ec2ServiceTest {
     }
 
     @Test
+    void createSubnetRejectsCidrThatConflictsWithAnExistingSubnetInTheSameVpc() {
+        // CreateSubnet has no idempotency token, so an SDK transport retry after a lost response
+        // resends the identical request. AWS's CIDR conflict check is what turns that resend into
+        // an error instead of a second, unrecorded subnet.
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpc = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        AwsException error = assertThrows(AwsException.class, () -> service.createSubnet(
+                "us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a"));
+
+        assertEquals("InvalidSubnet.Conflict", error.getErrorCode());
+        assertEquals("The CIDR '10.0.1.0/24' conflicts with another subnet", error.getMessage());
+        assertEquals(400, error.getHttpStatus());
+        assertEquals(1, service.describeSubnets("us-east-1", List.of(), Map.of()).stream()
+                .filter(s -> vpc.getVpcId().equals(s.getVpcId())).count());
+    }
+
+    @Test
+    void createSubnetRejectsCidrThatPartiallyOverlapsAnExistingSubnet() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpc = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        // 10.0.1.128/25 lies inside 10.0.1.0/24, an overlap rather than a duplicate.
+        AwsException error = assertThrows(AwsException.class, () -> service.createSubnet(
+                "us-east-1", vpc.getVpcId(), "10.0.1.128/25", "us-east-1a"));
+
+        assertEquals("InvalidSubnet.Conflict", error.getErrorCode());
+    }
+
+    @Test
+    void createSubnetAllowsNonOverlappingCidrsInTheSameVpc() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpc = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        Subnet second = service.createSubnet("us-east-1", vpc.getVpcId(), "10.0.2.0/24", "us-east-1b");
+
+        assertEquals("10.0.2.0/24", second.getCidrBlock());
+        assertEquals(2, service.describeSubnets("us-east-1", List.of(), Map.of()).stream()
+                .filter(s -> vpc.getVpcId().equals(s.getVpcId())).count());
+    }
+
+    @Test
+    void createSubnetAllowsConflictingCidrsInDifferentVpcs() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        Vpc vpcA = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        Vpc vpcB = service.createVpc("us-east-1", "10.0.0.0/16", false);
+        service.createSubnet("us-east-1", vpcA.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        Subnet subnetB = service.createSubnet("us-east-1", vpcB.getVpcId(), "10.0.1.0/24", "us-east-1a");
+
+        assertEquals("10.0.1.0/24", subnetB.getCidrBlock());
+    }
+
+    @Test
     void runInstancesStoresArchitectureFromImageCatalog() {
         Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
                 mock(Ec2PortForwardManager.class),
@@ -419,6 +488,30 @@ class Ec2ServiceTest {
         ResolvedAmiImage resolved = amiImageResolver.resolveImage("ami-ubuntu2404-cloud");
         assertEquals("floci/ami-ubuntu:24.04-arm64", resolved.dockerImage());
         assertTrue(resolved.systemd());
+    }
+
+    @Test
+    void describeImagesResolvesUnknownLaunchableAmiId() {
+        Ec2ImageCatalog imageCatalog = new Ec2ImageCatalog();
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                new AmiImageResolver(imageCatalog), imageCatalog, new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+
+        // RunInstances launches an unknown id via the catalog-default fallback, so DescribeImages has to
+        // resolve it too: the aws provider reads the AMI root device before RunInstances and aborts the
+        // create with "collecting instance settings: empty result" when the describe comes back empty.
+        List<Image> unknown = service.describeImages(
+                "us-east-1", List.of("ami-0c02fb55956c7d316"), List.of(), Map.of());
+        assertEquals(1, unknown.size());
+        assertEquals("ami-0c02fb55956c7d316", unknown.getFirst().getImageId());
+        assertEquals("/dev/xvda", unknown.getFirst().getRootDeviceName());
+
+        // A real catalog id resolves to exactly the catalog image, never a duplicate fallback.
+        List<Image> catalog = service.describeImages(
+                "us-east-1", List.of("ami-0abcdef1234567891"), List.of(), Map.of());
+        assertEquals(1, catalog.size());
+        assertEquals("al2023-ami-2023.0.20230315.0-kernel-6.1-x86_64", catalog.getFirst().getName());
     }
 
     @Test

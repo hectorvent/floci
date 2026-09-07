@@ -20,6 +20,7 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
     private static final String SUBSCRIPTION = "AWS::SNS::Subscription";
     private static final String TOPIC_POLICY = "AWS::SNS::TopicPolicy";
     private static final int TOPIC_NAME_MAX_LENGTH = 256;
+    private static final String FIFO_SUFFIX = ".fifo";
 
     private final SnsService snsService;
 
@@ -46,22 +47,55 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
     private void provisionTopic(StackResource r, JsonNode props, ProvisionContext ctx) {
         String topicName = ctx.resolveOptional(props, "TopicName");
         String contentBasedDedupFlag = ctx.resolveOptional(props, "ContentBasedDeduplication");
+        String throughputScope = ctx.resolveOptional(props, "FifoThroughputScope");
+        // The .fifo suffix is what makes SnsService treat a topic as FIFO, so an explicitly named
+        // one is FIFO with or without the flag, which only has to steer a generated name.
+        boolean fifo = "true".equalsIgnoreCase(ctx.resolveOptional(props, "FifoTopic"))
+                || (topicName != null && topicName.endsWith(FIFO_SUFFIX));
+        String priorName = r.getAttributes().get("TopicName");
+        // FifoTopic is createOnly and carried by the name, so a flip needs a replacement. Nothing
+        // cleans up the displaced topic or its subscriptions, so refuse it, as SqsCfnProvisioner
+        // does for FifoQueue.
+        if (ctx.isUpdate() && priorName != null && !priorName.isBlank()
+                && priorName.endsWith(FIFO_SUFFIX) != fifo) {
+            throw new AwsException("ValidationError",
+                    "Updating FifoTopic requires resource replacement, which is not supported.", 400);
+        }
         if (topicName == null || topicName.isBlank()) {
             // ctx.stablePhysicalName does not fit here: the physical id is the topic ARN, so the
             // prior name comes from the attribute recorded at create time. Reusing it keeps an
             // unnamed topic (and its subscriptions) across updates instead of orphaning it.
-            String priorName = r.getAttributes().get("TopicName");
-            topicName = priorName != null && !priorName.isBlank()
-                    ? priorName
-                    : ctx.generatePhysicalName(r.getLogicalId(), TOPIC_NAME_MAX_LENGTH, false);
+            if (priorName != null && !priorName.isBlank()) {
+                topicName = priorName;
+            } else if (fifo) {
+                // Like real CloudFormation, a generated FIFO name ends in .fifo.
+                topicName = ctx.generatePhysicalName(r.getLogicalId(),
+                        TOPIC_NAME_MAX_LENGTH - FIFO_SUFFIX.length(), false) + FIFO_SUFFIX;
+            } else {
+                topicName = ctx.generatePhysicalName(r.getLogicalId(), TOPIC_NAME_MAX_LENGTH, false);
+            }
         }
 
         Map<String, String> attributes = new HashMap<>();
         if (contentBasedDedupFlag != null && !contentBasedDedupFlag.isBlank()) {
             attributes.put("ContentBasedDeduplication", contentBasedDedupFlag);
         }
+        if (throughputScope != null && !throughputScope.isBlank()) {
+            attributes.put("FifoThroughputScope", throughputScope);
+        }
 
         var topic = snsService.createTopic(topicName, attributes, Map.of(), ctx.region());
+        // createTopic leaves an existing topic untouched, so an update writes the mutable
+        // attributes itself. A property the template dropped is reset, not left standing.
+        if (ctx.isUpdate()) {
+            Map<String, String> desired = new HashMap<>(attributes);
+            if (fifo) {
+                desired.putIfAbsent("ContentBasedDeduplication", "false");
+                desired.putIfAbsent("FifoThroughputScope", "Topic");
+            }
+            desired.forEach((name, value) ->
+                    snsService.setTopicAttributes(topic.getTopicArn(), name, value, ctx.region()));
+        }
         // Ref returns the topic ARN, which is why the physical id is the ARN and not the name.
         r.setPhysicalId(topic.getTopicArn());
         // TopicArn is the attribute aws-sns-topic.json declares read-only. Arn is kept alongside it

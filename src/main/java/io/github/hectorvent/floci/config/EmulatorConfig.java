@@ -714,6 +714,7 @@ public interface EmulatorConfig {
         AccountServiceConfig account();
         AccessAnalyzerServiceConfig accessanalyzer();
         IdentityStoreServiceConfig identitystore();
+        BudgetsServiceConfig budgets();
         ServiceQuotasServiceConfig servicequotas();
         RamServiceConfig ram();
         ControlTowerServiceConfig controltower();
@@ -758,6 +759,11 @@ public interface EmulatorConfig {
     }
 
     interface IdentityStoreServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface BudgetsServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
@@ -2192,6 +2198,25 @@ public interface EmulatorConfig {
     interface PipesServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        KafkaRestBridgeConfig kafkaRestBridge();
+    }
+
+    /**
+     * The Karapace sidecar Pipes launches, on demand, to poll a Kafka source over REST instead of
+     * embedding kafka-clients in Floci itself. One container is started per distinct target
+     * {@code bootstrap.servers} (a self-managed cluster, or an MSK cluster's Redpanda backing), and
+     * reused across pipes that share the same source.
+     */
+    interface KafkaRestBridgeConfig {
+        @WithDefault("ghcr.io/aiven-open/karapace:latest")
+        String defaultImage();
+
+        @WithDefault("9500")
+        int hostPortBase();
+
+        @WithDefault("9599")
+        int hostPortMax();
     }
 
     interface BedrockAgentCoreControlServiceConfig {

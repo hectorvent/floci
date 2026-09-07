@@ -661,3 +661,17 @@ output "guardduty_detector_id" {
 output "large_object_checksum_sha256" {
   value = aws_s3_object.large.checksum_sha256
 }
+
+# -- Transfer Family Server (issue #2802) --------------------------------------
+# Never stopped, so destroy exercises DeleteServer against an ONLINE server.
+resource "aws_transfer_server" "compat" {
+  protocols = ["SFTP"]
+
+  tags = {
+    Environment = "compat-test"
+  }
+}
+
+output "transfer_server_id" {
+  value = aws_transfer_server.compat.id
+}

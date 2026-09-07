@@ -5,6 +5,7 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.docker.ContainerReachableEndpoint;
 import io.github.hectorvent.floci.services.acm.AcmService;
 import io.github.hectorvent.floci.services.apigateway.ApiGatewayService;
+import io.github.hectorvent.floci.services.backup.BackupService;
 import io.github.hectorvent.floci.services.apigatewayv2.ApiGatewayV2Service;
 import io.github.hectorvent.floci.services.autoscaling.AutoScalingService;
 import io.github.hectorvent.floci.services.batch.BatchService;
@@ -24,9 +25,11 @@ import io.github.hectorvent.floci.services.wafv2.WafV2Service;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.AcmCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.ApiGatewayAccountCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.ApiGatewayApiKeyCfnProvisioner;
+import io.github.hectorvent.floci.services.cloudformation.provisioners.ApiGatewayUsagePlanCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.ApiGatewayDomainCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.AutoScalingLifecycleHookCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.AutoScalingScalingPolicyCfnProvisioner;
+import io.github.hectorvent.floci.services.cloudformation.provisioners.BackupVaultCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.CdkMetadataCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.CloudWatchCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.CognitoCfnProvisioner;
@@ -39,6 +42,7 @@ import io.github.hectorvent.floci.services.cloudformation.provisioners.Ec2VpcGat
 import io.github.hectorvent.floci.services.cloudformation.provisioners.EcrCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.EcsCapacityCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.EcsCfnProvisioner;
+import io.github.hectorvent.floci.services.cloudformation.provisioners.ElbV2CfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.FirehoseCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.IamRoleCfnProvisioner;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.IamUserCfnProvisioner;
@@ -162,6 +166,7 @@ final class CfnProvisionerFixture {
         private OrganizationsService organizationsService;
         private SqsService sqsService;
         private WafV2Service wafV2Service;
+        private BackupService backupService;
         private CloudFormationResourceRegistry resourceRegistry;
         private boolean registryChosenByTest;
         private CfnDynamicReferences dynamicReferences;
@@ -238,6 +243,9 @@ final class CfnProvisionerFixture {
                 discovered.add(new IamRoleCfnProvisioner(iamService));
                 discovered.add(new IamUserCfnProvisioner(iamService));
             }
+            if (elbV2Service != null) {
+                discovered.add(new ElbV2CfnProvisioner(elbV2Service));
+            }
             if (ecsService != null) {
                 discovered.add(new EcsCapacityCfnProvisioner(ecsService));
                 discovered.add(new EcsCfnProvisioner(ecsService));
@@ -245,6 +253,7 @@ final class CfnProvisionerFixture {
             if (apiGatewayService != null) {
                 discovered.add(new ApiGatewayAccountCfnProvisioner(apiGatewayService));
                 discovered.add(new ApiGatewayApiKeyCfnProvisioner(apiGatewayService));
+                discovered.add(new ApiGatewayUsagePlanCfnProvisioner(apiGatewayService));
                 discovered.add(new ApiGatewayDomainCfnProvisioner(apiGatewayService));
             }
             if (autoScalingService != null) {
@@ -279,6 +288,9 @@ final class CfnProvisionerFixture {
             }
             if (sqsService != null) {
                 discovered.add(new SqsCfnProvisioner(sqsService));
+            }
+            if (backupService != null) {
+                discovered.add(new BackupVaultCfnProvisioner(backupService));
             }
             if (wafV2Service != null) {
                 discovered.add(new WafV2CfnProvisioner(wafV2Service));
@@ -515,6 +527,11 @@ final class CfnProvisionerFixture {
             return this;
         }
 
+        public Builder backup(BackupService v) {
+            this.backupService = v;
+            return this;
+        }
+
         public Builder registry(CloudFormationResourceRegistry v) {
             this.resourceRegistry = v;
             this.registryChosenByTest = true;
@@ -563,12 +580,10 @@ final class CfnProvisionerFixture {
                     apiGatewayV2Service,
                     ecrService,
                     pipesService,
-                    cognitoService,
                     lambdaLayerService,
                     objectMapper,
                     customResourceResponseStore,
                     reachableEndpoint,
-                    elbV2Service,
                     stepFunctionsService,
                     batchService,
                     ec2Service,
