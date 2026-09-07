@@ -168,7 +168,7 @@ public class ResolvedServiceCatalog {
                         Set.of(), Set.of("redshift"), Set.of(), Set.of()),
                 descriptor("redshift-data", "redshift-data",
                         config.services().redshift().enabled() && config.services().redshiftData().enabled(), true,
-                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        "redshift-data", config.storage().mode(), 5000L, null, ServiceProtocol.JSON,
                         protocols(ServiceProtocol.JSON),
                         Set.of("RedshiftData."), Set.of("redshift-data"), Set.of(), Set.of()),
 
