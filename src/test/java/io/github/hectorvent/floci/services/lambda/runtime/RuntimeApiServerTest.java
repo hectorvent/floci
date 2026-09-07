@@ -109,6 +109,29 @@ class RuntimeApiServerTest {
         assertTrue(response.body().contains("key"));
     }
 
+    @Test
+    @Timeout(10)
+    void nextEndpoint_startsDeadlineWhenInvocationIsDispatched() throws Exception {
+        long queuedDeadline = System.currentTimeMillis() + 1_000;
+        PendingInvocation invocation = new PendingInvocation(
+                "req-deadline", "{}".getBytes(), queuedDeadline,
+                "arn:aws:lambda:us-east-1:000000000000:function:test",
+                new CompletableFuture<>());
+        server.enqueue(invocation);
+
+        Thread.sleep(300);
+        HttpResponse<String> response = httpClient.send(HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:" + port
+                                + "/2018-06-01/runtime/invocation/next"))
+                        .GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        long advertisedDeadline = Long.parseLong(response.headers()
+                .firstValue("Lambda-Runtime-Deadline-Ms").orElseThrow());
+        assertTrue(advertisedDeadline >= queuedDeadline + 200,
+                "queueing and cold-start time must not consume the handler timeout");
+    }
+
     /**
      * Regression: an Invoke with no body (e.g. {@code aws lambda invoke} without
      * {@code --payload}) reaches the /next handler as a {@code byte[0]}, not
