@@ -29,6 +29,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 /**
  * Polls SQS queues on behalf of Lambda Event Source Mappings.
@@ -211,7 +212,7 @@ public class SqsEventSourcePoller implements Resettable {
                 if (result.getFunctionError() == null) {
                     // Only the delivered (matched) messages are subject to delete/return here; filtered-out
                     // messages were already deleted above, so a batchItemFailure id that names one is inert.
-                    Set<String> failedIds = extractBatchItemFailures(esm, result);
+                    Set<String> failedIds = extractBatchItemFailures(esm, result, messages);
                     List<Message> toDelete = failedIds.isEmpty()
                             ? matched
                             : matched.stream().filter(m -> !failedIds.contains(m.getMessageId())).toList();
@@ -293,29 +294,51 @@ public class SqsEventSourcePoller implements Resettable {
         return DEFAULT_RETRY_VISIBILITY_SECONDS;
     }
 
-    private Set<String> extractBatchItemFailures(EventSourceMapping esm, InvokeResult result) {
+    /**
+     * Message IDs the function reported as failed via {@code ReportBatchItemFailures}, following
+     * the AWS success/failure conditions: an empty or null list, or an empty or null response, is
+     * a complete success, while invalid JSON, a non-array list, an entry without
+     * {@code itemIdentifier}, or an empty, null or unknown identifier fails the whole batch, so
+     * every received message is reported as failed and the delivered ones are returned to the
+     * queue. Identifiers are validated against the received batch, so a filtered-out message's
+     * id stays inert rather than failing the batch.
+     */
+    private Set<String> extractBatchItemFailures(EventSourceMapping esm, InvokeResult result,
+                                                 List<Message> received) {
         if (!esm.isReportBatchItemFailures() || result.getPayload() == null || result.getPayload().length == 0) {
             return Set.of();
         }
+        Set<String> receivedIds = received.stream().map(Message::getMessageId).collect(Collectors.toSet());
         try {
-            var root = objectMapper.readTree(result.getPayload());
-            var failures = root.get("batchItemFailures");
-            if (failures == null || !failures.isArray()) {
+            var failures = objectMapper.readTree(result.getPayload()).get("batchItemFailures");
+            if (failures == null || failures.isNull()) {
                 return Set.of();
+            }
+            if (!failures.isArray()) {
+                return failWholeBatch(esm, receivedIds, "batchItemFailures is not an array");
             }
             Set<String> failedIds = new HashSet<>();
             for (var item : failures) {
                 var id = item.get("itemIdentifier");
-                if (id != null && !id.isNull()) {
-                    failedIds.add(id.asText());
+                if (id == null || id.isNull() || id.asText().isEmpty()) {
+                    return failWholeBatch(esm, receivedIds, "entry has a missing, null or empty itemIdentifier");
                 }
+                if (!receivedIds.contains(id.asText())) {
+                    return failWholeBatch(esm, receivedIds,
+                            "itemIdentifier " + id.asText() + " is not in the received batch");
+                }
+                failedIds.add(id.asText());
             }
             return failedIds;
         } catch (Exception e) {
-            LOG.warnv("ESM {0}: failed to parse batchItemFailures from Lambda response: {1}",
-                    esm.getUuid(), e.getMessage());
-            return Set.of();
+            return failWholeBatch(esm, receivedIds, "response is not valid JSON: " + e.getMessage());
         }
+    }
+
+    private Set<String> failWholeBatch(EventSourceMapping esm, Set<String> receivedIds, String reason) {
+        LOG.warnv("ESM {0}: malformed batchItemFailures response ({1}), failing the whole batch",
+                esm.getUuid(), reason);
+        return receivedIds;
     }
 
     String buildSqsEvent(List<Message> messages, EventSourceMapping esm) {

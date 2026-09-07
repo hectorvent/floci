@@ -13,6 +13,8 @@ import io.github.hectorvent.floci.services.sqs.model.Message;
 import io.vertx.core.Vertx;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
@@ -588,5 +590,72 @@ class SqsEventSourcePollerTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    // ───────────────────────── ReportBatchItemFailures ─────────────────────────
+
+    /** Delivers m1 and m2 to a ReportBatchItemFailures mapping whose function returns {@code payload}. */
+    private EventSourceMapping pollReportingBatch(String payload) {
+        LambdaFunction fn = stubThrowFn();
+        EventSourceMapping esm = esm();
+        esm.setBatchSize(2);
+        esm.setFunctionResponseTypes(List.of("ReportBatchItemFailures"));
+        stubReceive(esm, List.of(message("m1"), message("m2")));
+        when(sqsService.getQueueAttributes(eq(esm.getQueueUrl()), any(), eq("us-east-1")))
+                .thenReturn(Map.of("VisibilityTimeout", "2"));
+        InvokeResult result = new InvokeResult();
+        result.setPayload(payload.getBytes());
+        when(executorService.invoke(eq(fn), any(byte[].class), eq(InvocationType.RequestResponse)))
+                .thenReturn(result);
+
+        poller.pollAndInvoke(esm);
+        return esm;
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"batchItemFailures\":[{\"itemIdentifier\":\"\"}]}",
+            "{\"batchItemFailures\":[{\"itemIdentifier\":null}]}",
+            "{\"batchItemFailures\":[{\"itemIdentifier\":\"unknown\"}]}",
+            "{\"batchItemFailures\":[{\"wrongKey\":\"m1\"}]}",
+            "{\"batchItemFailures\":\"invalid\"}",
+            "not json",
+    })
+    void malformedBatchItemFailuresResponseFailsWholeBatch(String payload) {
+        EventSourceMapping esm = pollReportingBatch(payload);
+
+        // AWS treats these as a complete failure: nothing is deleted, every delivered
+        // message goes back to the queue for retry/redrive.
+        verify(sqsService, timeout(2000)).changeMessageVisibility(esm.getQueueUrl(), "rh-m1", 2, "us-east-1");
+        verify(sqsService, timeout(2000)).changeMessageVisibility(esm.getQueueUrl(), "rh-m2", 2, "us-east-1");
+        awaitPollCompleted(esm);
+        verify(sqsService, never()).deleteMessage(any(), any(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"batchItemFailures\":[]}",
+            "{\"batchItemFailures\":null}",
+            "{}",
+            "null",
+    })
+    void emptyOrNullBatchItemFailuresResponseDeletesWholeBatch(String payload) {
+        EventSourceMapping esm = pollReportingBatch(payload);
+
+        verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m1", "us-east-1");
+        verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m2", "us-east-1");
+        awaitPollCompleted(esm);
+        verify(sqsService, never()).changeMessageVisibility(any(), any(), anyInt(), any());
+    }
+
+    @Test
+    void validPartialBatchFailureRetriesOnlyReportedMessage() {
+        EventSourceMapping esm = pollReportingBatch("{\"batchItemFailures\":[{\"itemIdentifier\":\"m2\"}]}");
+
+        verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m1", "us-east-1");
+        verify(sqsService, timeout(2000)).changeMessageVisibility(esm.getQueueUrl(), "rh-m2", 2, "us-east-1");
+        awaitPollCompleted(esm);
+        verify(sqsService, never()).deleteMessage(esm.getQueueUrl(), "rh-m2", "us-east-1");
+        verify(sqsService, never()).changeMessageVisibility(eq(esm.getQueueUrl()), eq("rh-m1"), anyInt(), any());
     }
 }
