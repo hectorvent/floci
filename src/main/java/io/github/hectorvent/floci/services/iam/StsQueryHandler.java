@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.iam;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
+import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.AwsQueryController;
 import io.github.hectorvent.floci.core.common.AwsQueryResponse;
@@ -48,6 +49,8 @@ public class StsQueryHandler {
     private final WebIdentityTrustPolicyEvaluator webIdentityTrustEvaluator;
     private final WebIdentityTokenVerifier tokenVerifier;
     private final OidcIssuerKeyLookup oidcIssuerKeys;
+    private final SAMLProviderService samlProviderService;
+    private final SAMLTrustPolicyEvaluator samlTrustEvaluator;
 
     @Context
     HttpHeaders headers;
@@ -57,7 +60,9 @@ public class StsQueryHandler {
                            EmulatorConfig config, AssumeRolePolicyEvaluator trustPolicyEvaluator,
                            WebIdentityTrustPolicyEvaluator webIdentityTrustEvaluator,
                            WebIdentityTokenVerifier tokenVerifier,
-                           OidcIssuerKeyLookup oidcIssuerKeys) {
+                           OidcIssuerKeyLookup oidcIssuerKeys,
+                           SAMLProviderService samlProviderService,
+                           SAMLTrustPolicyEvaluator samlTrustEvaluator) {
         this.iamService = iamService;
         this.accountResolver = accountResolver;
         this.regionResolver = regionResolver;
@@ -66,6 +71,8 @@ public class StsQueryHandler {
         this.webIdentityTrustEvaluator = webIdentityTrustEvaluator;
         this.tokenVerifier = tokenVerifier;
         this.oidcIssuerKeys = oidcIssuerKeys;
+        this.samlProviderService = samlProviderService;
+        this.samlTrustEvaluator = samlTrustEvaluator;
     }
 
     public Response handle(String action, MultivaluedMap<String, String> params) {
@@ -327,39 +334,55 @@ public class StsQueryHandler {
 
     private Response handleAssumeRoleWithSAML(MultivaluedMap<String, String> params) {
         Response validation = validateRequired(params, "RoleArn", "PrincipalArn", "SAMLAssertion");
-        if (validation != null) {
-            return validation;
-        }
+        if (validation != null) return validation;
         String roleArn = getParam(params, "RoleArn");
-        String sessionName = "saml-session";
+        String principalArn = getParam(params, "PrincipalArn");
         int durationSeconds = getIntParam(params, "DurationSeconds", 3600);
 
+        var provider = samlProviderService.find(principalArn).orElseThrow(() ->
+                new AwsException("InvalidIdentityToken", "The SAML provider is not trusted.", 400));
+        SAMLAssertionVerifier.Verified verified;
+        try {
+            verified = SAMLAssertionVerifier.verify(getParam(params, "SAMLAssertion"), provider, Instant.now());
+        } catch (SAMLAssertionVerifier.InvalidAssertionException e) {
+            throw new AwsException("InvalidIdentityToken", "The SAML assertion is invalid.", 400);
+        }
+        boolean rolePair = verified.roles().stream().anyMatch(pair ->
+                roleArn.equals(pair.roleArn()) && principalArn.equals(pair.principalArn()));
+        if (!rolePair) throw new AwsException("InvalidIdentityToken",
+                "The SAML assertion does not contain the requested role and principal.", 400);
+
+        String callerAccountId = regionResolver.getAccountId();
+        String accountId = AwsArnUtils.accountOrDefault(roleArn, callerAccountId);
+        String roleName = roleArn.contains("/") ? roleArn.substring(roleArn.lastIndexOf('/') + 1) : "UnknownRole";
+        IamRole role = iamService.findRole(accountId, roleName).orElseThrow(() ->
+                new AwsException("AccessDenied", "Not authorized to perform sts:AssumeRoleWithSAML on resource: " + roleArn, 403));
+        if (!samlTrustEvaluator.allows(role.getAssumeRolePolicyDocument(), principalArn, Map.of(
+                "aud", List.of(STS_AUDIENCE),
+                "iss", List.of(verified.issuer()),
+                "sub", List.of(verified.subject()),
+                "namequalifier", List.of(verified.nameQualifier())))) {
+            throw new AwsException("AccessDenied", "Not authorized to perform sts:AssumeRoleWithSAML on resource: " + roleArn, 403);
+        }
+
+        String sessionName = verified.subject().replaceAll("[^A-Za-z0-9+=,.@_-]", "_");
+        if (sessionName.length() > 64) sessionName = sessionName.substring(0, 64);
+        Instant requestedExpiration = Instant.now().plusSeconds(durationSeconds);
+        Instant roleExpiration = Instant.now().plusSeconds(role.getMaxSessionDuration());
+        Instant expiration = verified.expiration().isBefore(requestedExpiration) ? verified.expiration() : requestedExpiration;
+        if (roleExpiration.isBefore(expiration)) expiration = roleExpiration;
         String accessKeyId = "ASIA" + randomId(16);
         String secretKey = randomSecret(40);
         String sessionToken = randomSecret(200);
-        Instant expiration = Instant.now().plusSeconds(durationSeconds);
-
-        String roleName = roleArn.contains("/") ? roleArn.substring(roleArn.lastIndexOf('/') + 1) : "UnknownRole";
-        String callerAccountId = regionResolver.getAccountId();
-        String accountId = AwsArnUtils.accountOrDefault(roleArn, callerAccountId);
         String assumedRoleArn = AwsArnUtils.Arn.of("sts", "", accountId, "assumed-role/" + roleName + "/" + sessionName).toString();
         String assumedRoleId = "AROA" + randomId(16) + ":" + sessionName;
 
         iamService.registerSession(accessKeyId, secretKey, sessionToken, roleArn, expiration, null, callerAccountId);
-
         String result = new XmlBuilder()
                 .raw(credentialsXml(accessKeyId, secretKey, sessionToken, expiration))
-                .start("AssumedRoleUser")
-                  .elem("Arn", assumedRoleArn)
-                  .elem("AssumedRoleId", assumedRoleId)
-                .end("AssumedRoleUser")
-                .elem("PackedPolicySize", "0")
-                .elem("Issuer", "https://saml.example.com")
-                .elem("Audience", "urn:amazon:webservices")
-                .elem("NameQualifier", "saml-qualifier")
-                .elem("SubjectType", "persistent")
-                .elem("Subject", "saml-subject")
-                .build();
+                .start("AssumedRoleUser").elem("Arn", assumedRoleArn).elem("AssumedRoleId", assumedRoleId).end("AssumedRoleUser")
+                .elem("PackedPolicySize", "0").elem("Issuer", verified.issuer()).elem("Audience", "urn:amazon:webservices")
+                .elem("NameQualifier", verified.nameQualifier()).elem("SubjectType", verified.subjectType()).elem("Subject", verified.subject()).build();
         return Response.ok(AwsQueryResponse.envelope("AssumeRoleWithSAML", AwsNamespaces.STS, result)).build();
     }
 

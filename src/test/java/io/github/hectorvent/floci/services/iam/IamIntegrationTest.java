@@ -458,7 +458,7 @@ class IamIntegrationTest {
 
     @Test
     @Order(53)
-    void listSamlProvidersReturnsEmptyList() {
+    void listSamlProvidersReturnsWireCompatibleResult() {
         given()
             .formParam("Action", "ListSAMLProviders")
             .header("Authorization",
@@ -468,7 +468,7 @@ class IamIntegrationTest {
         .then()
             .statusCode(200)
             .contentType("application/xml")
-            .body("ListSAMLProvidersResponse.ListSAMLProvidersResult.SAMLProviderList", isEmptyOrNullString());
+            .body("ListSAMLProvidersResponse.ListSAMLProvidersResult.SAMLProviderList", notNullValue());
     }
 
     @Test
