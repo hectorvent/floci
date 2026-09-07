@@ -69,10 +69,17 @@ to the AVP token type.
 
 ## Cedar evaluation
 
-Floci uses `com.cedarpolicy:cedar-java` for parsing, schema validation, and authorization. The
-emulator stores the same static-policy and template-link concepts that AVP exposes and constructs
-a Cedar `PolicySet` for authorization calls. A matching `forbid` policy overrides matching
-`permit` policies through Cedar's normal decision semantics.
+Cedar parsing, schema validation, and authorization run in a lazily started Cedar 4 sidecar. The
+main Floci JVM and native images do not include Cedar Java or its multi-platform native runtime.
+This follows the same isolation pattern as `floci-duck`: Floci starts the sidecar on the first
+Cedar-dependent AVP operation, probes its health endpoint, and reuses it until shutdown. A
+pre-configured sidecar URL can be supplied when Docker Compose or another supervisor owns the
+sidecar lifecycle.
+
+The sidecar is stateless. Each authorization request includes the relevant policies, templates,
+entities, and context, so policy-store isolation does not depend on mutable shared sidecar state.
+It uses Cedar Java 4.10.0 to preserve the `CEDAR_4` behavior advertised by AVP. A matching
+`forbid` policy overrides matching `permit` policies through Cedar's normal decision semantics.
 
 `entities.cedarJson` is passed directly to Cedar. `entities.entityList` is translated to Cedar
 JSON and supports booleans, longs, strings, entity references, IP addresses, decimals,
@@ -115,6 +122,8 @@ aliases, identity sources, and idempotency records with other resettable service
 | Environment variable | Default | Description |
 | --- | --- | --- |
 | `FLOCI_SERVICES_VERIFIEDPERMISSIONS_ENABLED` | `true` | Enables Amazon Verified Permissions |
+| `FLOCI_SERVICES_VERIFIEDPERMISSIONS_CEDAR_URL` | unset | Uses an externally managed Cedar sidecar URL and skips container management |
+| `FLOCI_SERVICES_VERIFIEDPERMISSIONS_CEDAR_IMAGE` | `floci/floci:latest-cedar` | Image used for the lazily managed Cedar 4 sidecar |
 
 ## Examples
 

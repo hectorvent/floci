@@ -901,6 +901,12 @@ public interface EmulatorConfig {
     interface VerifiedPermissionsServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        /** When set, Floci uses this URL and skips Cedar sidecar container management. */
+        Optional<String> cedarUrl();
+
+        @WithDefault("floci/floci:latest-cedar")
+        String cedarImage();
     }
 
     interface RamServiceConfig {

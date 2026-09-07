@@ -1,26 +1,5 @@
 package io.github.hectorvent.floci.services.verifiedpermissions;
 
-import com.cedarpolicy.BasicAuthorizationEngine;
-import com.cedarpolicy.model.AuthorizationRequest;
-import com.cedarpolicy.model.AuthorizationSuccessResponse;
-import com.cedarpolicy.model.Context;
-import com.cedarpolicy.model.entity.Entities;
-import com.cedarpolicy.model.entity.Entity;
-import com.cedarpolicy.model.policy.LinkValue;
-import com.cedarpolicy.model.policy.PolicySet;
-import com.cedarpolicy.model.policy.TemplateLink;
-import com.cedarpolicy.value.CedarList;
-import com.cedarpolicy.value.CedarMap;
-import com.cedarpolicy.value.DateTime;
-import com.cedarpolicy.value.Decimal;
-import com.cedarpolicy.value.Duration;
-import com.cedarpolicy.value.EntityTypeName;
-import com.cedarpolicy.value.EntityUID;
-import com.cedarpolicy.value.IpAddress;
-import com.cedarpolicy.value.PrimBool;
-import com.cedarpolicy.value.PrimLong;
-import com.cedarpolicy.value.PrimString;
-import com.cedarpolicy.value.Value;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,24 +11,27 @@ import io.github.hectorvent.floci.services.verifiedpermissions.model.PolicyTempl
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
+/**
+ * AVP request adapter for the Cedar sidecar.
+ *
+ * Cedar parsing and authorization run outside the Floci process. This class only performs
+ * AWS-request normalization that does not require the Cedar runtime and delegates evaluation
+ * to {@link CedarSidecarClient}.
+ */
 @ApplicationScoped
 public class CedarAuthorizationEvaluator {
     private final ObjectMapper objectMapper;
-    private final BasicAuthorizationEngine engine = new BasicAuthorizationEngine();
+    private final CedarSidecarClient cedarClient;
 
     @Inject
-    public CedarAuthorizationEvaluator(ObjectMapper objectMapper) {
+    public CedarAuthorizationEvaluator(ObjectMapper objectMapper, CedarSidecarClient cedarClient) {
         this.objectMapper = objectMapper;
+        this.cedarClient = cedarClient;
     }
-
 
     public ObjectNode appendTokenPrincipal(JsonNode entitiesDefinition, EntityIdentifier principal,
                                            JsonNode identityClaims, List<EntityIdentifier> parents) {
@@ -72,9 +54,9 @@ public class CedarAuthorizationEvaluator {
             entity.set("uid", cedarEntity(principal));
             ObjectNode attrs = entity.putObject("attrs");
             if (identityClaims != null && identityClaims.isObject()) {
-                identityClaims.fields().forEachRemaining(e -> {
-                    if (!isGroupClaim(e.getKey()) && claimCanBeCedar(e.getValue())) {
-                        attrs.set(e.getKey(), e.getValue().deepCopy());
+                identityClaims.fields().forEachRemaining(entry -> {
+                    if (!isGroupClaim(entry.getKey()) && claimCanBeCedar(entry.getValue())) {
+                        attrs.set(entry.getKey(), entry.getValue().deepCopy());
                     }
                 });
             }
@@ -87,6 +69,12 @@ public class CedarAuthorizationEvaluator {
         } catch (JsonProcessingException e) {
             throw VerifiedPermissionsService.validation("entities.cedarJson is invalid JSON.");
         }
+    }
+
+    public EvaluationResult evaluate(JsonNode request, List<Policy> storedPolicies,
+                                     Map<String, PolicyTemplate> templates) {
+        CedarSidecarClient.EvaluationResult result = cedarClient.authorize(request, storedPolicies, templates);
+        return new EvaluationResult(result.decision(), result.determiningPolicyIds(), result.errors());
     }
 
     private static boolean isGroupClaim(String name) {
@@ -109,128 +97,15 @@ public class CedarAuthorizationEvaluator {
             return true;
         }
         if (value.isObject()) {
-            var it = value.elements();
-            while (it.hasNext()) {
-                if (!claimCanBeCedar(it.next())) {
+            var iterator = value.elements();
+            while (iterator.hasNext()) {
+                if (!claimCanBeCedar(iterator.next())) {
                     return false;
                 }
             }
             return true;
         }
         return false;
-    }
-
-    public EvaluationResult evaluate(JsonNode request, List<Policy> storedPolicies,
-                                     Map<String, PolicyTemplate> templates) {
-        try {
-            EntityUID principal = euid(request.get("principal"), "principal");
-            EntityUID action = actionEuid(request.get("action"));
-            EntityUID resource = euid(request.get("resource"), "resource");
-            Entities entities = entities(request.get("entities"));
-            Context context = context(request.get("context"));
-            PolicySet policySet = policySet(storedPolicies, templates);
-            AuthorizationRequest authorizationRequest = new AuthorizationRequest(principal, action, resource, context);
-            com.cedarpolicy.model.AuthorizationResponse authorizationResponse = engine.isAuthorized(authorizationRequest, policySet, entities);
-            AuthorizationSuccessResponse response = authorizationResponse.success.orElseThrow(() ->
-                    VerifiedPermissionsService.validation("Cedar authorization failed: " + authorizationResponse.errors.orElse(com.google.common.collect.ImmutableList.of())));
-            List<String> errors = response.getErrors().stream().map(Object::toString).toList();
-            return new EvaluationResult(response.isAllowed() ? "ALLOW" : "DENY",
-                    response.getReason().stream().sorted().toList(), errors);
-        } catch (io.github.hectorvent.floci.core.common.AwsException e) {
-            throw e;
-        } catch (Exception e) {
-            throw VerifiedPermissionsService.validation("Authorization request isn't valid Cedar input: " + safeMessage(e));
-        }
-    }
-
-    private PolicySet policySet(List<Policy> storedPolicies, Map<String, PolicyTemplate> templates) {
-        Set<com.cedarpolicy.model.policy.Policy> staticPolicies = new LinkedHashSet<>();
-        Set<com.cedarpolicy.model.policy.Policy> cedarTemplates = new LinkedHashSet<>();
-        List<TemplateLink> links = new ArrayList<>();
-        for (PolicyTemplate template : templates.values()) {
-            cedarTemplates.add(new com.cedarpolicy.model.policy.Policy(template.statement(), template.policyTemplateId()));
-        }
-        for (Policy policy : storedPolicies) {
-            if ("STATIC".equals(policy.policyType())) {
-                staticPolicies.add(new com.cedarpolicy.model.policy.Policy(policy.statement(), policy.policyId()));
-                continue;
-            }
-            List<LinkValue> values = new ArrayList<>();
-            if (policy.principal() != null) {
-                values.add(new LinkValue("?principal", euid(policy.principal())));
-            }
-            if (policy.resource() != null) {
-                values.add(new LinkValue("?resource", euid(policy.resource())));
-            }
-            links.add(new TemplateLink(policy.policyTemplateId(), policy.policyId(), values));
-        }
-        return new PolicySet(staticPolicies, cedarTemplates, links);
-    }
-
-    private Entities entities(JsonNode definition) throws JsonProcessingException {
-        if (definition == null || definition.isNull()) {
-            return new Entities();
-        }
-        if (!definition.isObject() || definition.size() != 1) {
-            throw VerifiedPermissionsService.validation("entities must contain exactly one union member.");
-        }
-        if (definition.has("cedarJson")) {
-            if (!definition.get("cedarJson").isTextual()) {
-                throw VerifiedPermissionsService.validation("entities.cedarJson must be a string.");
-            }
-            JsonNode raw = objectMapper.readTree(definition.get("cedarJson").asText());
-            return entitiesFromCedarJson(raw);
-        }
-        if (definition.has("entityList")) {
-            JsonNode entityList = definition.get("entityList");
-            if (!entityList.isArray()) {
-                throw VerifiedPermissionsService.validation("entities.entityList must be an array.");
-            }
-            return entitiesFromCedarJson(toCedarEntities((ArrayNode) entityList));
-        }
-        throw VerifiedPermissionsService.validation("entities must contain cedarJson or entityList.");
-    }
-
-    private Entities entitiesFromCedarJson(JsonNode raw) {
-        if (!raw.isArray()) {
-            throw VerifiedPermissionsService.validation("entities.cedarJson must encode an array.");
-        }
-        Set<Entity> entities = new LinkedHashSet<>();
-        for (JsonNode node : raw) {
-            if (!node.isObject()) {
-                throw VerifiedPermissionsService.validation("Each Cedar entity must be an object.");
-            }
-            EntityUID uid = euid(node.get("uid"), "uid");
-            Map<String, Value> attrs = cedarValueMap(node.get("attrs"), "attrs");
-            Set<EntityUID> parents = cedarParents(node.get("parents"));
-            Map<String, Value> tags = cedarValueMap(node.get("tags"), "tags");
-            entities.add(new Entity(uid, attrs, parents, tags));
-        }
-        return new Entities(entities);
-    }
-
-    private Map<String, Value> cedarValueMap(JsonNode node, String field) {
-        if (node == null || node.isNull()) {
-            return Map.of();
-        }
-        if (!node.isObject()) {
-            throw VerifiedPermissionsService.validation("Entity " + field + " must be an object.");
-        }
-        Map<String, Value> values = new LinkedHashMap<>();
-        node.fields().forEachRemaining(e -> values.put(e.getKey(), valueFromCedarJson(e.getValue())));
-        return values;
-    }
-
-    private Set<EntityUID> cedarParents(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return Set.of();
-        }
-        if (!node.isArray()) {
-            throw VerifiedPermissionsService.validation("Entity parents must be an array.");
-        }
-        Set<EntityUID> parents = new LinkedHashSet<>();
-        node.forEach(parent -> parents.add(euid(parent, "parent")));
-        return parents;
     }
 
     private ArrayNode toCedarEntities(ArrayNode input) {
@@ -249,7 +124,7 @@ public class CedarAuthorizationEvaluator {
                 if (!attributes.isObject()) {
                     throw VerifiedPermissionsService.validation("entity attributes must be an object.");
                 }
-                attributes.fields().forEachRemaining(e -> attrs.set(e.getKey(), cedarAttribute(e.getValue())));
+                attributes.fields().forEachRemaining(entry -> attrs.set(entry.getKey(), cedarAttribute(entry.getValue())));
             }
             ArrayNode parents = cedar.putArray("parents");
             JsonNode parentInput = entity.get("parents");
@@ -257,7 +132,7 @@ public class CedarAuthorizationEvaluator {
                 if (!parentInput.isArray()) {
                     throw VerifiedPermissionsService.validation("entity parents must be an array.");
                 }
-                parentInput.forEach(p -> parents.add(cedarEntity(identifier(p, "parent"))));
+                parentInput.forEach(parent -> parents.add(cedarEntity(identifier(parent, "parent"))));
             }
             ObjectNode tags = cedar.putObject("tags");
             JsonNode tagInput = entity.get("tags");
@@ -265,7 +140,7 @@ public class CedarAuthorizationEvaluator {
                 if (!tagInput.isObject()) {
                     throw VerifiedPermissionsService.validation("entity tags must be an object.");
                 }
-                tagInput.fields().forEachRemaining(e -> tags.set(e.getKey(), cedarAttribute(e.getValue())));
+                tagInput.fields().forEachRemaining(entry -> tags.set(entry.getKey(), cedarAttribute(entry.getValue())));
             }
             lastByUid.put(id.entityType() + "\u0000" + id.entityId(), cedar);
         }
@@ -292,7 +167,7 @@ public class CedarAuthorizationEvaluator {
                     throw VerifiedPermissionsService.validation("set must be an array.");
                 }
                 ArrayNode set = objectMapper.createArrayNode();
-                member.getValue().forEach(v -> set.add(cedarAttribute(v)));
+                member.getValue().forEach(value -> set.add(cedarAttribute(value)));
                 yield set;
             }
             case "record" -> {
@@ -300,118 +175,10 @@ public class CedarAuthorizationEvaluator {
                     throw VerifiedPermissionsService.validation("record must be an object.");
                 }
                 ObjectNode record = objectMapper.createObjectNode();
-                member.getValue().fields().forEachRemaining(e -> record.set(e.getKey(), cedarAttribute(e.getValue())));
+                member.getValue().fields().forEachRemaining(entry -> record.set(entry.getKey(), cedarAttribute(entry.getValue())));
                 yield record;
             }
             default -> throw VerifiedPermissionsService.validation("Unsupported attribute union member: " + member.getKey());
-        };
-    }
-
-    private Context context(JsonNode definition) throws JsonProcessingException {
-        if (definition == null || definition.isNull()) {
-            return new Context();
-        }
-        if (!definition.isObject() || definition.size() != 1) {
-            throw VerifiedPermissionsService.validation("context must contain exactly one union member.");
-        }
-        JsonNode raw;
-        if (definition.has("cedarJson")) {
-            if (!definition.get("cedarJson").isTextual()) {
-                throw VerifiedPermissionsService.validation("context.cedarJson must be a string.");
-            }
-            raw = objectMapper.readTree(definition.get("cedarJson").asText());
-            if (!raw.isObject()) {
-                throw VerifiedPermissionsService.validation("context.cedarJson must encode an object.");
-            }
-            return new Context(valueMapFromCedarJson(raw));
-        }
-        if (definition.has("contextMap")) {
-            raw = definition.get("contextMap");
-            if (!raw.isObject()) {
-                throw VerifiedPermissionsService.validation("context.contextMap must be an object.");
-            }
-            Map<String, Value> values = new LinkedHashMap<>();
-            raw.fields().forEachRemaining(e -> values.put(e.getKey(), valueFromUnion(e.getValue())));
-            return new Context(values);
-        }
-        throw VerifiedPermissionsService.validation("context must contain cedarJson or contextMap.");
-    }
-
-    private Map<String, Value> valueMapFromCedarJson(JsonNode object) {
-        Map<String, Value> result = new LinkedHashMap<>();
-        object.fields().forEachRemaining(e -> result.put(e.getKey(), valueFromCedarJson(e.getValue())));
-        return result;
-    }
-
-    private Value valueFromCedarJson(JsonNode value) {
-        if (value.isBoolean()) {
-            return new PrimBool(value.asBoolean());
-        }
-        if (value.isIntegralNumber()) {
-            return new PrimLong(value.asLong());
-        }
-        if (value.isTextual()) {
-            return new PrimString(value.asText());
-        }
-        if (value.isArray()) {
-            List<Value> values = new ArrayList<>();
-            value.forEach(v -> values.add(valueFromCedarJson(v)));
-            return new CedarList(values);
-        }
-        if (value.isObject()) {
-            if (value.has("__entity")) {
-                return euid(value.get("__entity"), "__entity");
-            }
-            if (value.has("__extn")) {
-                JsonNode ext = value.get("__extn");
-                return extensionValue(ext.path("fn").asText(), ext.path("arg").asText());
-            }
-            return new CedarMap(valueMapFromCedarJson(value));
-        }
-        throw VerifiedPermissionsService.validation("Unsupported Cedar JSON value.");
-    }
-
-    private Value valueFromUnion(JsonNode union) {
-        if (union == null || !union.isObject() || union.size() != 1) {
-            throw VerifiedPermissionsService.validation("Context attribute values must contain exactly one union member.");
-        }
-        Map.Entry<String, JsonNode> member = union.fields().next();
-        return switch (member.getKey()) {
-            case "boolean" -> new PrimBool(member.getValue().asBoolean());
-            case "long" -> new PrimLong(member.getValue().asLong());
-            case "string" -> new PrimString(member.getValue().asText());
-            case "entityIdentifier" -> euid(member.getValue(), "entityIdentifier");
-            case "ipaddr" -> new IpAddress(member.getValue().asText());
-            case "decimal" -> new Decimal(member.getValue().asText());
-            case "datetime" -> new DateTime(member.getValue().asText());
-            case "duration" -> new Duration(member.getValue().asText());
-            case "set" -> {
-                List<Value> list = new ArrayList<>();
-                if (!member.getValue().isArray()) {
-                    throw VerifiedPermissionsService.validation("set must be an array.");
-                }
-                member.getValue().forEach(v -> list.add(valueFromUnion(v)));
-                yield new CedarList(list);
-            }
-            case "record" -> {
-                if (!member.getValue().isObject()) {
-                    throw VerifiedPermissionsService.validation("record must be an object.");
-                }
-                Map<String, Value> map = new LinkedHashMap<>();
-                member.getValue().fields().forEachRemaining(e -> map.put(e.getKey(), valueFromUnion(e.getValue())));
-                yield new CedarMap(map);
-            }
-            default -> throw VerifiedPermissionsService.validation("Unsupported attribute union member: " + member.getKey());
-        };
-    }
-
-    private static Value extensionValue(String function, String arg) {
-        return switch (function) {
-            case "ip" -> new IpAddress(arg);
-            case "decimal" -> new Decimal(arg);
-            case "datetime" -> new DateTime(arg);
-            case "duration" -> new Duration(arg);
-            default -> throw VerifiedPermissionsService.validation("Unsupported Cedar extension: " + function);
         };
     }
 
@@ -436,27 +203,6 @@ public class CedarAuthorizationEvaluator {
         return root;
     }
 
-    private static EntityUID actionEuid(JsonNode node) {
-        if (node == null || !node.isObject()) {
-            throw VerifiedPermissionsService.validation("action is required.");
-        }
-        EntityIdentifier id = new EntityIdentifier(
-                VerifiedPermissionsService.requiredText(node, "actionType"),
-                VerifiedPermissionsService.requiredText(node, "actionId"));
-        return euid(id);
-    }
-
-    private static EntityUID euid(JsonNode node, String field) {
-        EntityIdentifier id = identifier(node, field);
-        return euid(id);
-    }
-
-    private static EntityUID euid(EntityIdentifier id) {
-        EntityTypeName type = EntityTypeName.parse(id.entityType())
-                .orElseThrow(() -> VerifiedPermissionsService.validation("Invalid Cedar entity type: " + id.entityType()));
-        return type.of(id.entityId());
-    }
-
     private static EntityIdentifier identifier(JsonNode node, String field) {
         if (node == null || !node.isObject()) {
             throw VerifiedPermissionsService.validation(field + " is required.");
@@ -464,11 +210,6 @@ public class CedarAuthorizationEvaluator {
         String type = VerifiedPermissionsService.requiredText(node, node.has("entityType") ? "entityType" : "type");
         String id = VerifiedPermissionsService.requiredText(node, node.has("entityId") ? "entityId" : "id");
         return new EntityIdentifier(type, id);
-    }
-
-    private static String safeMessage(Exception e) {
-        String message = e.getMessage();
-        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
     }
 
     public record EvaluationResult(String decision, List<String> determiningPolicyIds, List<String> errors) {}

@@ -2,6 +2,8 @@ package io.github.hectorvent.floci.services.verifiedpermissions;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
+import io.github.hectorvent.floci.cedar.CedarSidecarServer;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
@@ -13,6 +15,8 @@ import io.github.hectorvent.floci.services.verifiedpermissions.model.Policy;
 import io.github.hectorvent.floci.services.verifiedpermissions.model.PolicyStore;
 import io.github.hectorvent.floci.services.verifiedpermissions.model.PolicyStoreAlias;
 import io.github.hectorvent.floci.services.verifiedpermissions.model.PolicyTemplate;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,13 +24,25 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class VerifiedPermissionsServiceTest {
     private static final String ACCOUNT = "000000000000";
     private static final String REGION = "us-east-1";
 
+    private static HttpServer cedarServer;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private VerifiedPermissionsService service;
+
+    @BeforeAll
+    static void startCedarSidecar() throws Exception {
+        cedarServer = CedarSidecarServer.start(18181);
+    }
+
+    @AfterAll
+    static void stopCedarSidecar() {
+        cedarServer.stop(0);
+    }
 
     @BeforeEach
     void setUp() {
@@ -36,8 +52,11 @@ class VerifiedPermissionsServiceTest {
         StorageBackend<String, PolicyTemplate> templates = AccountAwareStorageBackend.inMemory(ACCOUNT);
         StorageBackend<String, IdempotencyRecord> idempotency = AccountAwareStorageBackend.inMemory(ACCOUNT);
         StorageBackend<String, IdentitySource> identitySources = AccountAwareStorageBackend.inMemory(ACCOUNT);
+        CedarSidecarManager manager = mock(CedarSidecarManager.class);
+        when(manager.ensureReady()).thenReturn("http://127.0.0.1:18181");
+        CedarSidecarClient cedarClient = new CedarSidecarClient(manager, objectMapper);
         service = new VerifiedPermissionsService(policyStores, aliases, policies, templates, idempotency,
-                identitySources, new RegionResolver(REGION, ACCOUNT), objectMapper, mock(KmsService.class));
+                identitySources, new RegionResolver(REGION, ACCOUNT), objectMapper, mock(KmsService.class), cedarClient);
     }
 
     @Test

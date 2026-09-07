@@ -2,6 +2,9 @@ package io.github.hectorvent.floci.services.verifiedpermissions;
 
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
+import com.sun.net.httpserver.HttpServer;
+import io.github.hectorvent.floci.cedar.CedarSidecarServer;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -15,12 +18,19 @@ import static org.hamcrest.Matchers.matchesPattern;
 
 @QuarkusTest
 class VerifiedPermissionsIntegrationTest {
+    private static HttpServer cedarServer;
     private static final String CONTENT_TYPE = "application/x-amz-json-1.0";
     private static final String AUTH = "AWS4-HMAC-SHA256 Credential=111122223333/20260101/us-east-1/verifiedpermissions/aws4_request";
 
     @BeforeAll
-    static void configureRestAssured() {
+    static void configureRestAssured() throws Exception {
+        cedarServer = CedarSidecarServer.start(18180);
         RestAssuredJsonUtils.configureAwsContentTypes();
+    }
+
+    @AfterAll
+    static void stopCedarSidecar() {
+        cedarServer.stop(0);
     }
 
     @Test

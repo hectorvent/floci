@@ -20,7 +20,6 @@ import io.github.hectorvent.floci.services.verifiedpermissions.model.Policy;
 import io.github.hectorvent.floci.services.verifiedpermissions.model.PolicyStore;
 import io.github.hectorvent.floci.services.verifiedpermissions.model.PolicyStoreAlias;
 import io.github.hectorvent.floci.services.verifiedpermissions.model.PolicyTemplate;
-import com.cedarpolicy.model.policy.PolicySet;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -53,10 +52,12 @@ public class VerifiedPermissionsService implements Resettable {
     private final RegionResolver regionResolver;
     private final KmsService kmsService;
     private final ObjectMapper objectMapper;
+    private final CedarSidecarClient cedarClient;
 
     @Inject
     public VerifiedPermissionsService(StorageFactory storageFactory, RegionResolver regionResolver,
-                                      ObjectMapper objectMapper, KmsService kmsService) {
+                                      ObjectMapper objectMapper, KmsService kmsService,
+                                      CedarSidecarClient cedarClient) {
         this(storageFactory.create("verifiedpermissions", "verifiedpermissions-policy-stores.json",
                         new TypeReference<Map<String, PolicyStore>>() {}),
                 storageFactory.create("verifiedpermissions", "verifiedpermissions-policy-store-aliases.json",
@@ -69,7 +70,7 @@ public class VerifiedPermissionsService implements Resettable {
                         new TypeReference<Map<String, IdempotencyRecord>>() {}),
                 storageFactory.create("verifiedpermissions", "verifiedpermissions-identity-sources.json",
                         new TypeReference<Map<String, IdentitySource>>() {}),
-                regionResolver, objectMapper, kmsService);
+                regionResolver, objectMapper, kmsService, cedarClient);
     }
 
     VerifiedPermissionsService(StorageBackend<String, PolicyStore> policyStores,
@@ -78,7 +79,8 @@ public class VerifiedPermissionsService implements Resettable {
                                StorageBackend<String, PolicyTemplate> policyTemplates,
                                StorageBackend<String, IdempotencyRecord> idempotency,
                                StorageBackend<String, IdentitySource> identitySources,
-                               RegionResolver regionResolver, ObjectMapper objectMapper, KmsService kmsService) {
+                               RegionResolver regionResolver, ObjectMapper objectMapper, KmsService kmsService,
+                               CedarSidecarClient cedarClient) {
         this.policyStores = policyStores;
         this.aliases = aliases;
         this.policies = policies;
@@ -88,6 +90,7 @@ public class VerifiedPermissionsService implements Resettable {
         this.regionResolver = regionResolver;
         this.kmsService = kmsService;
         this.objectMapper = objectMapper;
+        this.cedarClient = cedarClient;
     }
 
     public synchronized PolicyStore createPolicyStore(JsonNode request, String region) {
@@ -276,7 +279,7 @@ public class VerifiedPermissionsService implements Resettable {
         String statement = requiredText(request, "statement");
         validatePolicyStatement(statement);
         validateTemplate(statement);
-        validateStrictPolicy(store, parseTemplate(statement, "validation-template"), true);
+        validateStrictPolicy(store, statement, true);
         String name = optionalName(request, "name");
         ensureTemplateNameAvailable(region, store.policyStoreId(), name, null);
         String description = text(request, "description", null);
@@ -305,7 +308,7 @@ public class VerifiedPermissionsService implements Resettable {
         validateTemplate(statement);
         ensureProtectedScopeUnchanged(current.statement(), statement, true);
         PolicyStore store = getPolicyStore(current.policyStoreId(), region);
-        validateStrictPolicy(store, parseTemplate(statement, current.policyTemplateId()), true);
+        validateStrictPolicy(store, statement, true);
         String name = request.has("name") ? normalizeOptionalName(request.get("name").asText()) : current.name();
         ensureTemplateNameAvailable(region, current.policyStoreId(), name, current.policyTemplateId());
         String description = request.has("description") ? request.path("description").asText() : current.description();
@@ -351,7 +354,7 @@ public class VerifiedPermissionsService implements Resettable {
             String description = text(body, "description", null);
             validateDescription(description);
             String effect = validateStaticPolicy(statement);
-            validateStrictPolicy(store, parseStatic(statement, "validation-policy"), false);
+            validateStrictPolicy(store, statement, false);
             policy = new Policy(store.policyStoreId(), "SP" + compactId(), name, "STATIC", statement,
                     description, null, null, null, effect, now, now);
         } else if (definition.has("templateLinked") && definition.get("templateLinked").isObject() && definition.size() == 1) {
@@ -400,7 +403,7 @@ public class VerifiedPermissionsService implements Resettable {
             }
             ensureProtectedScopeUnchanged(current.statement(), statement, false);
             PolicyStore store = getPolicyStore(current.policyStoreId(), region);
-            validateStrictPolicy(store, parseStatic(statement, current.policyId()), false);
+            validateStrictPolicy(store, statement, false);
             if (body.has("description")) {
                 description = body.path("description").asText();
             }
@@ -645,7 +648,7 @@ public class VerifiedPermissionsService implements Resettable {
         return body.path("issuer").asText();
     }
 
-    private static void validateIdentityFilters(JsonNode filters) {
+    private void validateIdentityFilters(JsonNode filters) {
         if (filters == null || filters.isNull()) {
             return;
         }
@@ -675,13 +678,11 @@ public class VerifiedPermissionsService implements Resettable {
         return true;
     }
 
-    private static void validateEntityType(String value, String field) {
+    private void validateEntityType(String value, String field) {
         if (value == null || value.isBlank() || value.length() > 200) {
             throw validation(field + " does not satisfy the required constraints.");
         }
-        if (com.cedarpolicy.value.EntityTypeName.parse(value).isEmpty()) {
-            throw validation(field + " is not a valid Cedar entity type.");
-        }
+        cedarClient.validateEntityType(value);
     }
 
     private static void validateStringArray(JsonNode node, String field, int min, int max) {
@@ -800,15 +801,6 @@ public class VerifiedPermissionsService implements Resettable {
         return new Encryption(keyArn, context);
     }
 
-    private static com.cedarpolicy.model.policy.Policy parseStatic(String statement, String id) {
-        try { return new com.cedarpolicy.model.policy.Policy(statement, id); }
-        catch (Exception e) { throw validation("The Cedar policy statement is invalid: " + safeMessage(e)); }
-    }
-
-    private static com.cedarpolicy.model.policy.Policy parseTemplate(String statement, String id) {
-        try { return new com.cedarpolicy.model.policy.Policy(statement, id); }
-        catch (Exception e) { throw validation("The Cedar policy template is invalid: " + safeMessage(e)); }
-    }
 
     private static String idempotencyKey(String region, String operation, String token) {
         return region + ":" + operation + ":" + token;
@@ -906,30 +898,16 @@ public class VerifiedPermissionsService implements Resettable {
         return new EntityIdentifier(requiredText(node, "entityType"), requiredText(node, "entityId"));
     }
 
-    private static String validateStaticPolicy(String statement) {
-        try {
-            com.cedarpolicy.model.policy.Policy parsed = com.cedarpolicy.model.policy.Policy.parseStaticPolicy(statement);
-            return parsed.effect().name().equalsIgnoreCase("PERMIT") ? "Permit" : "Forbid";
-        } catch (Exception e) {
-            throw validation("The Cedar policy statement is invalid: " + safeMessage(e));
-        }
+    private String validateStaticPolicy(String statement) {
+        return cedarClient.parsePolicy(statement, false).effect();
     }
 
-    private static void validateTemplate(String statement) {
-        try {
-            com.cedarpolicy.model.policy.Policy.parsePolicyTemplate(statement);
-        } catch (Exception e) {
-            throw validation("The Cedar policy template is invalid: " + safeMessage(e));
-        }
+    private void validateTemplate(String statement) {
+        cedarClient.parsePolicy(statement, true);
     }
 
-    private static String templateEffect(String statement) {
-        try {
-            return com.cedarpolicy.model.policy.Policy.parsePolicyTemplate(statement).effect().name().equalsIgnoreCase("PERMIT")
-                    ? "Permit" : "Forbid";
-        } catch (Exception e) {
-            throw validation("The Cedar policy template is invalid: " + safeMessage(e));
-        }
+    private String templateEffect(String statement) {
+        return cedarClient.parsePolicy(statement, true).effect();
     }
 
     private static void validateTemplateSlots(String statement, EntityIdentifier principal, EntityIdentifier resource) {
@@ -975,27 +953,11 @@ public class VerifiedPermissionsService implements Resettable {
     }
 
     private JsonNode staticPolicyAst(String statement) {
-        try {
-            String json = com.cedarpolicy.model.policy.Policy.parseStaticPolicy(statement).toJson();
-            return objectMapper.readTree(json);
-        } catch (Exception e) {
-            throw validation("The Cedar policy statement is invalid: " + safeMessage(e));
-        }
+        return cedarClient.parsePolicy(statement, false).ast();
     }
 
     private JsonNode templatePolicyAst(String statement) {
-        try {
-            com.cedarpolicy.model.policy.Policy template = com.cedarpolicy.model.policy.Policy.parsePolicyTemplate(statement);
-            PolicySet set = new PolicySet(Set.of(), Set.of(template));
-            JsonNode root = objectMapper.readTree(set.toJson());
-            JsonNode templates = root.path("templates");
-            if (!templates.isObject() || templates.isEmpty()) {
-                throw new IllegalStateException("Cedar template AST is empty");
-            }
-            return templates.elements().next();
-        } catch (Exception e) {
-            throw validation("The Cedar policy template is invalid: " + safeMessage(e));
-        }
+        return cedarClient.parsePolicy(statement, true).ast();
     }
 
     private static List<EntityIdentifier> actionEntities(JsonNode scope) {
@@ -1067,27 +1029,12 @@ public class VerifiedPermissionsService implements Resettable {
         }
     }
 
-    private void validateStrictPolicy(PolicyStore store, com.cedarpolicy.model.policy.Policy policy, boolean template) {
+    private void validateStrictPolicy(PolicyStore store, String statement, boolean template) {
         ensureStrictSchemaPresent(store);
         if (!"STRICT".equals(store.validationMode())) {
             return;
         }
-        try {
-            com.cedarpolicy.model.schema.Schema schema = com.cedarpolicy.model.schema.Schema.parse(
-                    com.cedarpolicy.model.schema.Schema.JsonOrCedar.Json, store.schema());
-            PolicySet set = template
-                    ? new PolicySet(java.util.Set.of(), java.util.Set.of(policy))
-                    : new PolicySet(java.util.Set.of(policy));
-            com.cedarpolicy.model.ValidationResponse response = new com.cedarpolicy.BasicAuthorizationEngine()
-                    .validate(new com.cedarpolicy.model.ValidationRequest(schema, set));
-            if (!response.validationPassed()) {
-                throw validation("The Cedar policy failed STRICT schema validation: " + response);
-            }
-        } catch (io.github.hectorvent.floci.core.common.AwsException e) {
-            throw e;
-        } catch (Exception e) {
-            throw validation("The Cedar policy failed STRICT schema validation: " + safeMessage(e));
-        }
+        cedarClient.validatePolicy(store.schema(), statement, template);
     }
 
     private static String safeMessage(Exception e) {
@@ -1128,13 +1075,12 @@ public class VerifiedPermissionsService implements Resettable {
             if (node == null || !node.isObject()) {
                 throw validation("The Cedar schema must be a JSON object.");
             }
-            com.cedarpolicy.model.schema.Schema.parse(
-                    com.cedarpolicy.model.schema.Schema.JsonOrCedar.Json, schema);
         } catch (io.github.hectorvent.floci.core.common.AwsException e) {
             throw e;
         } catch (Exception e) {
             throw validation("The Cedar schema is invalid: " + safeMessage(e));
         }
+        cedarClient.validateSchema(schema);
     }
 
     private static Map<String, String> stringMap(JsonNode node) {
