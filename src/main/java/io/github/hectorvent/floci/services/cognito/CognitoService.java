@@ -1655,20 +1655,9 @@ public class CognitoService implements ResourceProvider {
                     "1 validation error detected: Value at 'accessToken' failed to satisfy constraint: Member must not be null", 400);
         }
 
-        String username = extractUsernameFromToken(accessToken);
-        String poolId = extractPoolIdFromToken(accessToken);
-        String jti = extractJtiFromToken(accessToken);
-
-        if (username == null || poolId == null || jti == null) {
-            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
-        }
-
-        // A token that was already revoked (or issued before an earlier sign-out) cannot
-        // authorize a fresh sign-out.
-        validateTokenNotRevoked(jti, poolId, "access");
-        Long iat = extractIatFromToken(accessToken);
-        validateUserNotGloballySignedOut(username, poolId, "access", iat != null ? iat : 0L);
-
+        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        String username = token.username();
+        String poolId = token.poolId();
         CognitoUser user;
         try {
             user = adminGetUser(poolId, username);
@@ -2455,18 +2444,9 @@ public class CognitoService implements ResourceProvider {
     }
 
     public void changePassword(String accessToken, String previousPassword, String proposedPassword) {
-        String username = extractUsernameFromToken(accessToken);
-        String poolId = extractPoolIdFromToken(accessToken);
-        String jti = extractJtiFromToken(accessToken);
-
-        if (username == null || poolId == null) {
-            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
-        }
-
-        validateTokenNotRevoked(jti, poolId, "access");
-        validateOriginJtiNotRevoked(accessToken, poolId);
-        Long iat = extractIatFromToken(accessToken);
-        validateUserNotGloballySignedOut(username, poolId, "access", iat != null ? iat : 0L);
+        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        String username = token.username();
+        String poolId = token.poolId();
 
         CognitoUser user = adminGetUser(poolId, username);
         if (user.getPasswordHash() != null && !user.getPasswordHash().equals(hashPassword(previousPassword))) {
@@ -2521,18 +2501,9 @@ public class CognitoService implements ResourceProvider {
     }
 
     public Map<String, Object> getUser(String accessToken) {
-        String username = extractUsernameFromToken(accessToken);
-        String poolId = extractPoolIdFromToken(accessToken);
-        String jti = extractJtiFromToken(accessToken);
-
-        if (username == null || poolId == null || jti == null) {
-            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
-        }
-
-        validateTokenNotRevoked(jti, poolId, "access");
-        validateOriginJtiNotRevoked(accessToken, poolId);
-        Long iat = extractIatFromToken(accessToken);
-        validateUserNotGloballySignedOut(username, poolId, "access", iat != null ? iat : 0L);
+        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        String username = token.username();
+        String poolId = token.poolId();
 
         CognitoUser user = adminGetUser(poolId, username);
         Map<String, Object> result = new HashMap<>();
@@ -2544,18 +2515,9 @@ public class CognitoService implements ResourceProvider {
     }
 
     public Map<String, Object> getUserAttributeVerificationCode(String accessToken, String attributeName) {
-        String username = extractUsernameFromToken(accessToken);
-        String poolId = extractPoolIdFromToken(accessToken);
-        String jti = extractJtiFromToken(accessToken);
-
-        if (username == null || poolId == null || jti == null) {
-            throw new AwsException("NotAuthorizedException", "Invalid Access Token", 400);
-        }
-
-        validateTokenNotRevoked(jti, poolId, "access");
-        validateOriginJtiNotRevoked(accessToken, poolId);
-        Long iat = extractIatFromToken(accessToken);
-        validateUserNotGloballySignedOut(username, poolId, "access", iat != null ? iat : 0L);
+        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        String username = token.username();
+        String poolId = token.poolId();
 
         if (!"email".equals(attributeName) && !"phone_number".equals(attributeName)) {
             throw new AwsException("InvalidParameterException",
@@ -2595,18 +2557,9 @@ public class CognitoService implements ResourceProvider {
     }
 
     public void updateUserAttributes(String accessToken, Map<String, String> attributes) {
-        String username = extractUsernameFromToken(accessToken);
-        String poolId = extractPoolIdFromToken(accessToken);
-        String jti = extractJtiFromToken(accessToken);
-
-        if (username == null || poolId == null) {
-            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
-        }
-
-        validateTokenNotRevoked(jti, poolId, "access");
-        validateOriginJtiNotRevoked(accessToken, poolId);
-        Long iat = extractIatFromToken(accessToken);
-        validateUserNotGloballySignedOut(username, poolId, "access", iat != null ? iat : 0L);
+        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        String username = token.username();
+        String poolId = token.poolId();
 
         String verificationStatusAttribute = attributes.containsKey("email_verified")
                 ? "email_verified"
@@ -2622,18 +2575,9 @@ public class CognitoService implements ResourceProvider {
     }
 
     public void deleteUserAttributes(String accessToken, List<String> attributeNames) {
-        String username = extractUsernameFromToken(accessToken);
-        String poolId = extractPoolIdFromToken(accessToken);
-        String jti = extractJtiFromToken(accessToken);
-
-        if (username == null || poolId == null) {
-            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
-        }
-
-        validateTokenNotRevoked(jti, poolId, "access");
-        validateOriginJtiNotRevoked(accessToken, poolId);
-        Long iat = extractIatFromToken(accessToken);
-        validateUserNotGloballySignedOut(username, poolId, "access", iat != null ? iat : 0L);
+        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        String username = token.username();
+        String poolId = token.poolId();
 
         adminDeleteUserAttributes(poolId, username, attributeNames);
     }
@@ -3600,31 +3544,90 @@ public class CognitoService implements ResourceProvider {
         return null;
     }
 
-    private String extractUsernameFromToken(String token) {
+    record VerifiedAccessToken(String username, String poolId, String subject) {}
+
+    /**
+     * Verifies the Cognito access-token contract before any self-service operation uses its claims.
+     * The pool's persisted public key is the trust anchor; claims are never trusted before the
+     * signature, issuer, client, token-use, and lifetime checks succeed.
+     */
+    VerifiedAccessToken verifyAccessToken(String token) {
         try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) return null;
-            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-            // Simple extraction without full JSON parsing
-            return extractJsonField(payloadJson, "username");
+            if (token == null || token.isBlank()) {
+                throw new IllegalArgumentException("missing token");
+            }
+            String[] parts = token.split("\\.", -1);
+            if (parts.length != 3 || parts[0].isEmpty() || parts[1].isEmpty() || parts[2].isEmpty()) {
+                throw new IllegalArgumentException("malformed JWT");
+            }
+
+            JsonNode header = MAPPER.readTree(Base64.getUrlDecoder().decode(parts[0]));
+            JsonNode claims = MAPPER.readTree(Base64.getUrlDecoder().decode(parts[1]));
+            if (!"RS256".equals(header.path("alg").asText())
+                    || !"JWT".equalsIgnoreCase(header.path("typ").asText())) {
+                throw new IllegalArgumentException("unsupported JWT algorithm");
+            }
+
+            String issuer = textClaim(claims, "iss");
+            String poolId = null;
+            if (issuer != null && issuer.startsWith(baseUrl + "/")) {
+                poolId = issuer.substring((baseUrl + "/").length());
+            }
+            UserPool pool = poolId == null ? null : poolStore.get(poolId).orElse(null);
+            if (pool == null || !getIssuer(poolId).equals(issuer)
+                    || !getSigningKeyId(pool).equals(textClaim(header, "kid"))) {
+                throw new IllegalArgumentException("invalid issuer or key");
+            }
+
+            Signature verifier = Signature.getInstance("SHA256withRSA");
+            verifier.initVerify(getSigningPublicKey(pool));
+            verifier.update((parts[0] + "." + parts[1]).getBytes(StandardCharsets.UTF_8));
+            if (!verifier.verify(Base64.getUrlDecoder().decode(parts[2]))) {
+                throw new IllegalArgumentException("invalid signature");
+            }
+
+            String verifiedPoolId = poolId;
+            String username = textClaim(claims, "username");
+            String subject = textClaim(claims, "sub");
+            String jti = textClaim(claims, "jti");
+            String clientId = textClaim(claims, "client_id");
+            long issuedAt = requiredNumericClaim(claims, "iat");
+            long expiresAt = requiredNumericClaim(claims, "exp");
+            if (username == null || subject == null || jti == null || clientId == null
+                    || !"access".equals(textClaim(claims, "token_use"))
+                    || clientStore.get(clientId).filter(c -> verifiedPoolId.equals(c.getUserPoolId())).isEmpty()
+                    || expiresAt <= System.currentTimeMillis() / 1000L) {
+                throw new IllegalArgumentException("invalid access-token claims");
+            }
+
+            String originJti = textClaim(claims, "origin_jti");
+            validateTokenNotRevoked(jti, poolId, "access");
+            if (originJti != null) {
+                validateTokenNotRevoked(originJti, poolId, "access");
+            }
+            validateUserNotGloballySignedOut(username, poolId, "access", issuedAt);
+            return new VerifiedAccessToken(username, poolId, subject);
+        } catch (AwsException e) {
+            throw e;
         } catch (Exception e) {
-            return null;
+            LOG.debug("Access token verification failed", e);
+            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
         }
     }
 
-    private String extractPoolIdFromToken(String token) {
-        try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) return null;
-            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-            String iss = extractJsonField(payloadJson, "iss");
-            if (iss == null) return null;
-            int lastSlash = iss.lastIndexOf('/');
-            return lastSlash >= 0 ? iss.substring(lastSlash + 1) : null;
-        } catch (Exception e) {
-            return null;
-        }
+    private static String textClaim(JsonNode claims, String name) {
+        JsonNode value = claims.path(name);
+        return value.isTextual() && !value.asText().isBlank() ? value.asText() : null;
     }
+
+    private static long requiredNumericClaim(JsonNode claims, String name) {
+        JsonNode value = claims.path(name);
+        if (!value.isIntegralNumber()) {
+            throw new IllegalArgumentException("missing numeric claim");
+        }
+        return value.asLong();
+    }
+
 
     private void validateGroupName(String groupName) {
         if (groupName == null || groupName.isBlank()) {
@@ -3632,16 +3635,6 @@ public class CognitoService implements ResourceProvider {
         }
     }
 
-
-    private String extractJsonField(String json, String field) {
-        String search = "\"" + field + "\":\"";
-        int start = json.indexOf(search);
-        if (start < 0) return null;
-        start += search.length();
-        int end = json.indexOf('"', start);
-        if (end < 0) return null;
-        return json.substring(start, end);
-    }
 
     private String userKey(String poolId, String username) {
         return poolId + "::" + username;
@@ -3682,52 +3675,7 @@ public class CognitoService implements ResourceProvider {
         return updated;
     }
 
-    /**
-     * Extract JWT ID (jti) claim from a JWT token.
-     */
-    private String extractJtiFromToken(String token) {
-        try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) return null;
-            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-            return extractJsonField(payloadJson, "jti");
-        } catch (Exception e) {
-            return null;
-        }
-    }
 
-    private String extractOriginJtiFromToken(String token) {
-        try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) return null;
-            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-            return extractJsonField(payloadJson, "origin_jti");
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private Long extractIatFromToken(String token) {
-        try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) return null;
-            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-            String iatStr = extractJsonField(payloadJson, "iat");
-            if (iatStr != null) {
-                return Long.parseLong(iatStr);
-            }
-            // In case the simple extractor doesn't work for numbers (it extracts strings between quotes usually)
-            // let's use MAPPER for this specific field
-            Map<String, Object> payload = MAPPER.readValue(payloadJson, new TypeReference<>() {});
-            Object iat = payload.get("iat");
-            if (iat instanceof Number n) {
-                return n.longValue();
-            }
-        } catch (Exception e) {
-            return null;
-        }
-        return null;
-    }
 
     /**
      * Validate that a refresh token has not been revoked, including global user sign-out.
@@ -3774,12 +3722,6 @@ public class CognitoService implements ResourceProvider {
         }
     }
 
-    private void validateOriginJtiNotRevoked(String accessToken, String poolId) {
-        String originJti = extractOriginJtiFromToken(accessToken);
-        if (originJti != null) {
-            validateTokenNotRevoked(originJti, poolId, "access");
-        }
-    }
 
     /**
      * Check if a user has been globally signed out (affects all their tokens).
@@ -4098,37 +4040,14 @@ public class CognitoService implements ResourceProvider {
             Boolean emailEnabled,
             Boolean emailPreferred) {
 
-        String username = extractUsernameFromToken(accessToken);
-        String poolId = extractPoolIdFromToken(accessToken);
-        String jti = extractJtiFromToken(accessToken);
-
-        if (username == null || poolId == null || jti == null) {
-            throw new AwsException(
-                    "NotAuthorizedException",
-                    "Invalid access token",
-                    400
-            );
-        }
-
-        validateTokenNotRevoked(jti, poolId, "access");
-        validateOriginJtiNotRevoked(accessToken, poolId);
-
-        Long iat = extractIatFromToken(accessToken);
-
-        validateUserNotGloballySignedOut(
-                username,
-                poolId,
-                "access",
-                iat != null ? iat : 0L
-        );
-
-        CognitoUser user = adminGetUser(poolId, username);
+        VerifiedAccessToken token = verifyAccessToken(accessToken);
+        CognitoUser user = adminGetUser(token.poolId(), token.username());
 
         updateEmailMfaPreference(user, emailEnabled, emailPreferred);
 
         user.setLastModifiedDate(System.currentTimeMillis() / 1000L);
 
-        userStore.put(userKey(poolId, user.getUsername()), user);
+        userStore.put(userKey(token.poolId(), user.getUsername()), user);
     }
 
     private void updateEmailMfaPreference(
