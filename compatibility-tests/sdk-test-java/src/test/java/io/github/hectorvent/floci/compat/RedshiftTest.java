@@ -5,6 +5,7 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.services.redshift.RedshiftClient;
 import software.amazon.awssdk.services.redshift.model.Cluster;
 import software.amazon.awssdk.services.redshift.model.CreateClusterRequest;
@@ -24,6 +25,10 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.function.Supplier;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -35,23 +40,43 @@ public class RedshiftTest {
         return TestFixtures.redshiftClient();
     }
 
+    // github.com/floci-io/floci/issues/2789: this class's first request intermittently hits
+    // "Connection refused" even after the AWS SDK's own 4 built-in attempts (whose backoff totals
+    // under a second) and even after CI's "wait for floci to be ready" step reports success - a
+    // brief port-publish/network-alias hiccup between the test runner and floci containers that
+    // self-resolves almost immediately. Retrying the whole call, not just relying on the SDK's
+    // built-in attempts, gives it long enough to clear.
+    private static <T> T withRetry(Supplier<T> action) throws InterruptedException {
+        Instant deadline = Instant.now().plus(Duration.ofSeconds(30));
+        SdkClientException last = null;
+        while (Instant.now().isBefore(deadline)) {
+            try {
+                return action.get();
+            } catch (SdkClientException e) {
+                last = e;
+                Thread.sleep(1000);
+            }
+        }
+        throw last;
+    }
+
     @Test
     @Order(1)
     public void testCreateCluster() throws Exception {
         RedshiftClient client = getClient();
-        CreateClusterResponse res = client.createCluster(CreateClusterRequest.builder()
+        CreateClusterResponse res = withRetry(() -> client.createCluster(CreateClusterRequest.builder()
                 .clusterIdentifier("test-cluster")
                 .nodeType("dc2.large")
                 .masterUsername("admin")
                 .masterUserPassword("Password123")
-                .build());
-        
+                .build()));
+
         assertEquals("test-cluster", res.cluster().clusterIdentifier());
-        
-        DescribeClustersResponse describeRes = client.describeClusters(DescribeClustersRequest.builder()
+
+        DescribeClustersResponse describeRes = withRetry(() -> client.describeClusters(DescribeClustersRequest.builder()
                 .clusterIdentifier("test-cluster")
-                .build());
-                
+                .build()));
+
         Cluster cluster = describeRes.clusters().get(0);
         assertEquals("test-cluster", cluster.clusterIdentifier());
         // Terraform's AWS provider polls these two on create and validates them on read (issue #3098).
@@ -108,11 +133,11 @@ public class RedshiftTest {
 
     @Test
     @Order(3)
-    public void testDeleteCluster() {
+    public void testDeleteCluster() throws Exception {
         RedshiftClient client = getClient();
-        DeleteClusterResponse res = client.deleteCluster(DeleteClusterRequest.builder()
+        DeleteClusterResponse res = withRetry(() -> client.deleteCluster(DeleteClusterRequest.builder()
                 .clusterIdentifier("test-cluster")
-                .build());
+                .build()));
         assertEquals("test-cluster", res.cluster().clusterIdentifier());
         assertEquals("deleting", res.cluster().clusterStatus());
     }
