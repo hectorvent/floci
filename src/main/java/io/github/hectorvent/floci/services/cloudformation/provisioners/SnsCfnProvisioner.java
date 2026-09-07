@@ -20,6 +20,7 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
     private static final String SUBSCRIPTION = "AWS::SNS::Subscription";
     private static final String TOPIC_POLICY = "AWS::SNS::TopicPolicy";
     private static final int TOPIC_NAME_MAX_LENGTH = 256;
+    private static final String FIFO_SUFFIX = ".fifo";
 
     private final SnsService snsService;
 
@@ -46,22 +47,44 @@ public class SnsCfnProvisioner implements CfnResourceProvisioner {
     private void provisionTopic(StackResource r, JsonNode props, ProvisionContext ctx) {
         String topicName = ctx.resolveOptional(props, "TopicName");
         String contentBasedDedupFlag = ctx.resolveOptional(props, "ContentBasedDeduplication");
+        String throughputScope = ctx.resolveOptional(props, "FifoThroughputScope");
+        // SnsService reads FifoTopic off the .fifo suffix, so the flag only has to steer the
+        // generated name. It is createOnly, which is why a prior name whose suffix no longer
+        // matches belongs to a replacing update and gives way to a fresh name.
+        boolean fifo = "true".equalsIgnoreCase(ctx.resolveOptional(props, "FifoTopic"));
         if (topicName == null || topicName.isBlank()) {
             // ctx.stablePhysicalName does not fit here: the physical id is the topic ARN, so the
             // prior name comes from the attribute recorded at create time. Reusing it keeps an
             // unnamed topic (and its subscriptions) across updates instead of orphaning it.
             String priorName = r.getAttributes().get("TopicName");
-            topicName = priorName != null && !priorName.isBlank()
-                    ? priorName
-                    : ctx.generatePhysicalName(r.getLogicalId(), TOPIC_NAME_MAX_LENGTH, false);
+            if (priorName != null && !priorName.isBlank() && priorName.endsWith(FIFO_SUFFIX) == fifo) {
+                topicName = priorName;
+            } else if (fifo) {
+                // Like real CloudFormation, a generated FIFO topic name ends in .fifo, which is
+                // also what makes SnsService treat the topic as FIFO at all.
+                topicName = ctx.generatePhysicalName(r.getLogicalId(),
+                        TOPIC_NAME_MAX_LENGTH - FIFO_SUFFIX.length(), false) + FIFO_SUFFIX;
+            } else {
+                topicName = ctx.generatePhysicalName(r.getLogicalId(), TOPIC_NAME_MAX_LENGTH, false);
+            }
         }
 
         Map<String, String> attributes = new HashMap<>();
         if (contentBasedDedupFlag != null && !contentBasedDedupFlag.isBlank()) {
             attributes.put("ContentBasedDeduplication", contentBasedDedupFlag);
         }
+        if (throughputScope != null && !throughputScope.isBlank()) {
+            attributes.put("FifoThroughputScope", throughputScope);
+        }
 
         var topic = snsService.createTopic(topicName, attributes, Map.of(), ctx.region());
+        // createTopic hands an existing topic back untouched, so on UpdateStack the mutable
+        // attributes have to be written explicitly. The createOnly ones, TopicName and FifoTopic,
+        // are settled by the naming above.
+        if (ctx.isUpdate()) {
+            attributes.forEach((name, value) ->
+                    snsService.setTopicAttributes(topic.getTopicArn(), name, value, ctx.region()));
+        }
         // Ref returns the topic ARN, which is why the physical id is the ARN and not the name.
         r.setPhysicalId(topic.getTopicArn());
         // TopicArn is the attribute aws-sns-topic.json declares read-only. Arn is kept alongside it

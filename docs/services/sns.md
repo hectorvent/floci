@@ -114,6 +114,9 @@ When the topic forwards to an SQS FIFO queue, set the matching queue attributes
 (`DeduplicationScope=messageGroup` and `FifoThroughputLimit=perMessageGroupId`), otherwise the
 queue deduplicates topic-wide on the way in.
 
+CloudFormation carries both settings through: `AWS::SNS::Topic` forwards `FifoThroughputScope` and
+`ContentBasedDeduplication`, and a FIFO topic left unnamed gets a generated name ending in `.fifo`.
+
 ## Control Tower managed topic
 
 AWS Control Tower creates the regional

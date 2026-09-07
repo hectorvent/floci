@@ -169,6 +169,90 @@ class SnsCfnProvisionerTest {
     }
 
     @Test
+    void fifoThroughputScopeIsForwardedOnlyWhenSet() {
+        ArgumentCaptor<Map<String, String>> attrs = ArgumentCaptor.forClass(Map.class);
+        when(sns.createTopic(anyString(), attrs.capture(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));
+
+        provision("AWS::SNS::Topic", """
+                {"TopicName": "events.fifo", "FifoTopic": true, "FifoThroughputScope": "MessageGroup"}
+                """);
+        assertEquals("MessageGroup", attrs.getValue().get("FifoThroughputScope"));
+        verify(sns, never()).setTopicAttributes(anyString(), anyString(), anyString(), anyString());
+
+        setUp();
+        ArgumentCaptor<Map<String, String>> plain = ArgumentCaptor.forClass(Map.class);
+        when(sns.createTopic(anyString(), plain.capture(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));
+        provision("AWS::SNS::Topic", """
+                {"TopicName": "events.fifo", "FifoTopic": true}
+                """);
+        assertFalse(plain.getValue().containsKey("FifoThroughputScope"),
+                "an absent scope must not be sent as an empty attribute");
+    }
+
+    @Test
+    void anUnnamedFifoTopicGetsAGeneratedNameEndingInFifo() {
+        ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
+        when(sns.createTopic(name.capture(), anyMap(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));
+
+        provision("AWS::SNS::Topic", """
+                {"FifoTopic": true, "FifoThroughputScope": "MessageGroup"}
+                """);
+        assertTrue(name.getValue().startsWith("my-stack-Topic-"));
+        assertTrue(name.getValue().endsWith(".fifo"),
+                "SnsService reads FifoTopic off the name, so a generated one must carry the suffix");
+
+        setUp();
+        ArgumentCaptor<String> standard = ArgumentCaptor.forClass(String.class);
+        when(sns.createTopic(standard.capture(), anyMap(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));
+        provision("AWS::SNS::Topic", "{}");
+        assertFalse(standard.getValue().endsWith(".fifo"),
+                "a standard topic must not be renamed into a FIFO one");
+    }
+
+    /**
+     * FifoTopic is createOnly and, in Floci as in CloudFormation, encoded in the name. A prior
+     * generated name that no longer matches the flag therefore belongs to the resource being
+     * replaced, so reusing it would leave the new topic standard.
+     */
+    @Test
+    void aTopicTurningFifoDropsItsPriorStandardName() {
+        ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
+        when(sns.createTopic(name.capture(), anyMap(), anyMap(), anyString())).thenReturn(topic(TOPIC_ARN));
+
+        StackResource r = new StackResource();
+        r.setLogicalId("Topic");
+        r.setResourceType("AWS::SNS::Topic");
+        r.setAttributes(new HashMap<>(Map.of("TopicName", "my-stack-Topic-abc123def456")));
+        r.setPhysicalId(TOPIC_ARN);
+        provisioner.provision(r, props("""
+                {"FifoTopic": true}
+                """), new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack", TOPIC_ARN));
+
+        assertTrue(name.getValue().endsWith(".fifo"));
+        assertFalse(name.getValue().startsWith("my-stack-Topic-abc123def456"));
+    }
+
+    @Test
+    void mutableTopicAttributesAreWrittenOnUpdate() {
+        when(sns.createTopic(eq("events.fifo"), anyMap(), anyMap(), eq(REGION))).thenReturn(topic(TOPIC_ARN));
+
+        StackResource r = new StackResource();
+        r.setLogicalId("Topic");
+        r.setResourceType("AWS::SNS::Topic");
+        r.setAttributes(new HashMap<>(Map.of("TopicName", "events.fifo")));
+        r.setPhysicalId(TOPIC_ARN);
+        provisioner.provision(r, props("""
+                {"TopicName": "events.fifo", "FifoTopic": true, "FifoThroughputScope": "MessageGroup",
+                 "ContentBasedDeduplication": "true"}
+                """), new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack", TOPIC_ARN));
+
+        // createTopic hands back the existing topic untouched, so without this an UpdateStack that
+        // changes the scope would be silently dropped.
+        verify(sns).setTopicAttributes(TOPIC_ARN, "FifoThroughputScope", "MessageGroup", REGION);
+        verify(sns).setTopicAttributes(TOPIC_ARN, "ContentBasedDeduplication", "true", REGION);
+    }
+
+    @Test
     void subscriptionRefIsTheSubscriptionArn() {
         when(sns.subscribe(eq(TOPIC_ARN), eq("sqs"), eq("arn:queue"), eq(REGION), anyMap()))
                 .thenReturn(subscription("arn:sub"));
