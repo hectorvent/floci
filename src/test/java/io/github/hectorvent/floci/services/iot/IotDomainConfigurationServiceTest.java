@@ -343,7 +343,10 @@ class IotDomainConfigurationServiceTest {
                 arns.add(seen.getDomainConfigurationArn());
             }
             assertEquals(1, arns.size(), "seeded once, whichever address the callers raced with: " + arns);
-            assertEquals(endpointAddress.get(), service.describeDomainConfiguration("iot:Jobs", "eu-north-1").getDomainName());
+            endpointAddress.set("iot.example.localhost.floci.io");
+            assertEquals("iot.example.localhost.floci.io",
+                    service.describeDomainConfiguration("iot:Jobs", "eu-north-1").getDomainName(),
+                    "the next describe brings the seeded record to the current address");
         } finally {
             pool.shutdownNow();
         }
