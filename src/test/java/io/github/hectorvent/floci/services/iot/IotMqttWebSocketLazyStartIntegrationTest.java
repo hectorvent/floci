@@ -110,7 +110,9 @@ class IotMqttWebSocketLazyStartIntegrationTest {
         broker.stop();
         awaitPortClosed();
         assertFalse(broker.isRunning());
-        first.close();
+        // Paho may not have noticed the drop yet and refuses a plain close while it thinks it is
+        // connected; the forced close does not wait for that.
+        first.close(true);
 
         MqttClient second = new MqttClient(ws(), "lazy-second-" + System.nanoTime(), new MemoryPersistence());
         second.connect();
