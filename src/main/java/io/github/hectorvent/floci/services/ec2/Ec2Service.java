@@ -3956,7 +3956,45 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
                 .collect(Collectors.toList());
         List<Image> images = new ArrayList<>(catalogImages);
         images.addAll(createdImages);
+        addFallbackLaunchableImages(region, images, imageIds, owners, filters);
         return images;
+    }
+
+    // RunInstances launches an unrecognised AMI id by falling back to the catalog default image (see
+    // AmiImageResolver), so an explicitly requested but unknown id is still launchable. IaC providers read
+    // the AMI's root device via DescribeImages before RunInstances, so an empty result there aborts the
+    // create (the aws provider reports "collecting instance settings: empty result"). Mirror the launch-time
+    // fallback so a describe of a launchable id returns a matching image instead of nothing.
+    private void addFallbackLaunchableImages(String region, List<Image> images, List<String> imageIds,
+                                             List<String> owners, Map<String, List<String>> filters) {
+        if (imageIds == null || imageIds.isEmpty()) {
+            return;
+        }
+        Set<String> present = images.stream().map(Image::getImageId).collect(Collectors.toSet());
+        for (String imageId : imageIds) {
+            if (imageId == null || !imageId.startsWith("ami-") || present.contains(imageId)
+                    || imageCatalog.findByIdOrAlias(imageId).isPresent()
+                    || registeredImages.get(key(region, imageId)).isPresent()) {
+                continue;
+            }
+            Image fallback = fallbackLaunchableImage(imageId);
+            if (matchesImageOwners(fallback, owners) && matchesRegisteredImageFilters(fallback, filters)) {
+                images.add(fallback);
+                present.add(imageId);
+            }
+        }
+    }
+
+    private Image fallbackLaunchableImage(String imageId) {
+        Image image = new Image();
+        image.setImageId(imageId);
+        image.setName(imageId);
+        image.setDescription("Floci fallback image for launchable AMI " + imageId);
+        image.setArchitecture("x86_64");
+        image.setOwnerId(AMAZON_OWNER_ID);
+        image.setImageOwnerAlias("amazon");
+        image.setCreationDate("2026-01-01T00:00:00.000Z");
+        return image;
     }
 
     public Image createImage(String region, String instanceId, String name, String description,

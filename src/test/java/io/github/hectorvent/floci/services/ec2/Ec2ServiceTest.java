@@ -422,6 +422,30 @@ class Ec2ServiceTest {
     }
 
     @Test
+    void describeImagesResolvesUnknownLaunchableAmiId() {
+        Ec2ImageCatalog imageCatalog = new Ec2ImageCatalog();
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                new AmiImageResolver(imageCatalog), imageCatalog, new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+
+        // RunInstances launches an unknown id via the catalog-default fallback, so DescribeImages has to
+        // resolve it too: the aws provider reads the AMI root device before RunInstances and aborts the
+        // create with "collecting instance settings: empty result" when the describe comes back empty.
+        List<Image> unknown = service.describeImages(
+                "us-east-1", List.of("ami-0c02fb55956c7d316"), List.of(), Map.of());
+        assertEquals(1, unknown.size());
+        assertEquals("ami-0c02fb55956c7d316", unknown.getFirst().getImageId());
+        assertEquals("/dev/xvda", unknown.getFirst().getRootDeviceName());
+
+        // A real catalog id resolves to exactly the catalog image, never a duplicate fallback.
+        List<Image> catalog = service.describeImages(
+                "us-east-1", List.of("ami-0abcdef1234567891"), List.of(), Map.of());
+        assertEquals(1, catalog.size());
+        assertEquals("al2023-ami-2023.0.20230315.0-kernel-6.1-x86_64", catalog.getFirst().getName());
+    }
+
+    @Test
     void describeInstanceTypesUsesExactCatalogMatches() {
         Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
                 mock(Ec2PortForwardManager.class),
