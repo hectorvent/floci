@@ -80,6 +80,10 @@ services:
     doc: docs/services/translate.md
     sources:
       - { path: src/main/java/io/github/hectorvent/floci/services/translate/TranslateJsonHandler.java, mode: switch }
+  - service: detective
+    doc: docs/services/detective.md
+    sources:
+      - { path: src/main/java/io/github/hectorvent/floci/services/detective/DetectiveController.java, mode: rest }
   - service: docdb
     doc: docs/services/docdb.md
     sources:

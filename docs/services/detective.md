@@ -2,12 +2,25 @@
 
 Floci implements the REST JSON Detective organization and behavior-graph operations used by local security-governance workflows.
 
-## Supported behavior
+## Supported Actions
 
-Enabling an organization administrator makes the organization behavior graph available in the delegated account. Member creation returns `ACCEPTED_BUT_DISABLED`, and `StartMonitoringMember` moves that member to `ENABLED`, which is the state transition consumed by Cloud Launchpad and the AWS SDK.
+<!-- floci:actions:start -->
+| Action | Description |
+| --- | --- |
+| `ListOrganizationAdminAccounts` | Lists the Detective administrator account configured for the organization. |
+| `EnableOrganizationAdminAccount` | Designates a Detective administrator account and enables its organization behavior graph. |
+| `ListGraphs` | Lists behavior graphs for the current account and Region. |
+| `DescribeOrganizationConfiguration` | Returns the organization auto-enable setting for a behavior graph. |
+| `UpdateOrganizationConfiguration` | Updates the organization auto-enable setting for a behavior graph. |
+| `ListMembers` | Lists enabled organization member accounts in a behavior graph. |
+| `CreateMembers` | Enables organization accounts as behavior-graph members. |
+| `StartMonitoringMember` | Starts data contribution for an accepted but disabled member account. |
+<!-- floci:actions:end -->
 
-The supported surface includes administrator management, graph listing, organization configuration, member creation/listing, and member monitoring state. All eight operations use the POST JSON wire methods defined by the AWS service model.
+For organization behavior graphs, member accounts can be created without an email address. Duplicate member requests are returned through `UnprocessedAccounts`, while successfully processed accounts are returned through `Members`. `ListMembers` accepts the AWS-documented `MaxResults` range of 1 through 200.
 
-Invalid graph/account/member data returns `ValidationException` or `ResourceNotFoundException`; duplicate or incompatible member transitions return `ConflictException`; locally enforced member limits return `ServiceQuotaExceededException`. AWS provider-side internal and rate-limit errors are not injected artificially.
+Organization configuration accepts an optional `AutoEnable` field and requires the behavior graph ARN. Successful `EnableOrganizationAdminAccount`, `UpdateOrganizationConfiguration`, and `StartMonitoringMember` operations return an empty HTTP 200 response body, matching the AWS API contract.
+
+Invalid graph, account, member, and pagination data returns modeled `ValidationException` or `ResourceNotFoundException` responses. Incompatible member transitions return `ConflictException`, and the 1,200-member behavior-graph quota is enforced with `ServiceQuotaExceededException`. Provider-side internal and throttling errors are not injected artificially.
 
 See the [Amazon Detective API Reference](https://docs.aws.amazon.com/detective/latest/APIReference/Welcome.html).

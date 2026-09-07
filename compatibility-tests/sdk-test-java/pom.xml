@@ -253,6 +253,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>macie2</artifactId>
         </dependency>
+        <!-- Amazon Detective client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>detective</artifactId>
+        </dependency>
         <!-- AWS Account Management client -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

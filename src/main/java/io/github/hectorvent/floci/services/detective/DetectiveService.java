@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.detective;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.common.Resettable;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.detective.model.DetectiveMember;
@@ -14,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 @ApplicationScoped
-public class DetectiveService {
+public class DetectiveService implements Resettable {
     private static final int MAX_MEMBERS = 1200;
     private static final String ACCEPTED_BUT_DISABLED = "ACCEPTED_BUT_DISABLED";
     private static final String ENABLED = "ENABLED";
@@ -24,8 +25,12 @@ public class DetectiveService {
 
     @Inject
     public DetectiveService(StorageFactory storageFactory, RegionResolver regionResolver) {
-        this.states = storageFactory.create("detective", "detective-state.json",
-                new TypeReference<Map<String, DetectiveState>>() {});
+        this(storageFactory.create("detective", "detective-state.json",
+                new TypeReference<Map<String, DetectiveState>>() {}), regionResolver);
+    }
+
+    DetectiveService(AccountAwareStorageBackend<DetectiveState> states, RegionResolver regionResolver) {
+        this.states = states;
         this.regionResolver = regionResolver;
     }
 
@@ -53,20 +58,19 @@ public class DetectiveService {
         states.putForAccount(accountId, region, delegated);
     }
 
-    public synchronized void updateOrganizationConfiguration(String region, String graphArn, boolean autoEnable) {
+    public synchronized void updateOrganizationConfiguration(String region, String graphArn, Boolean autoEnable) {
         requireGraphArn(region, graphArn);
         DetectiveState state = requireGraph(region);
-        state.setAutoEnable(autoEnable);
-        states.put(region, state);
+        if (autoEnable != null) {
+            state.setAutoEnable(autoEnable);
+            states.put(region, state);
+        }
     }
 
     public synchronized DetectiveMember createMember(String region, String graphArn,
                                                       String accountId, String emailAddress) {
         requireGraphArn(region, graphArn);
         requireAccountId(accountId);
-        if (emailAddress == null || emailAddress.isBlank()) {
-            throw new AwsException("ValidationException", "EmailAddress is required.", 400);
-        }
         DetectiveState state = requireGraph(region);
         if (state.getMembers().containsKey(accountId)) {
             throw new AwsException("ConflictException",
@@ -108,6 +112,11 @@ public class DetectiveService {
         return requireGraph(region).getMembers().values().stream()
                 .sorted(java.util.Comparator.comparing(DetectiveMember::getAccountId))
                 .toList();
+    }
+
+    @Override
+    public void clear() {
+        states.clear();
     }
 
     public DetectiveState requireGraph(String region) {

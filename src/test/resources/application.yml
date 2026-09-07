@@ -385,6 +385,8 @@ floci:
       enabled: true
     budgets:
       enabled: true
+    detective:
+      enabled: true
     controltower:
       enabled: true
       seed-landing-zone: true

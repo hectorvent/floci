@@ -38,6 +38,8 @@ public class DetectiveController {
     @POST
     @Path("/orgs/adminAccountslist")
     public Response listOrganizationAdminAccounts(@Context HttpHeaders headers, String body) {
+        JsonNode request = parse(body);
+        validatePageRequest(request);
         DetectiveState state = service.state(region(headers));
         var response = objectMapper.createObjectNode();
         var administrators = response.putArray("Administrators");
@@ -51,13 +53,14 @@ public class DetectiveController {
     @Path("/orgs/enableAdminAccount")
     public Response enableOrganizationAdminAccount(@Context HttpHeaders headers, String body) {
         service.enableAdmin(region(headers), parse(body).path("AccountId").asText(null));
-        return empty();
+        return Response.ok().build();
     }
 
     @POST
     @Path("/graphs/list")
     public Response listGraphs(@Context HttpHeaders headers, String body) {
         String region = region(headers);
+        validatePageRequest(parse(body));
         DetectiveState state = service.state(region);
         var response = objectMapper.createObjectNode();
         var graphs = response.putArray("GraphList");
@@ -83,12 +86,15 @@ public class DetectiveController {
     @Path("/orgs/updateOrganizationConfiguration")
     public Response updateOrganizationConfiguration(@Context HttpHeaders headers, String body) {
         JsonNode request = parse(body);
-        if (!request.has("AutoEnable") || !request.get("AutoEnable").isBoolean()) {
-            throw new AwsException("ValidationException", "AutoEnable is required.", 400);
+        Boolean autoEnable = null;
+        if (request.has("AutoEnable") && !request.get("AutoEnable").isNull()) {
+            if (!request.get("AutoEnable").isBoolean()) {
+                throw new AwsException("ValidationException", "AutoEnable must be a boolean.", 400);
+            }
+            autoEnable = request.get("AutoEnable").booleanValue();
         }
-        service.updateOrganizationConfiguration(region(headers), request.path("GraphArn").asText(null),
-                request.path("AutoEnable").asBoolean());
-        return empty();
+        service.updateOrganizationConfiguration(region(headers), request.path("GraphArn").asText(null), autoEnable);
+        return Response.ok().build();
     }
 
     @POST
@@ -98,9 +104,9 @@ public class DetectiveController {
         JsonNode request = parse(body);
         List<DetectiveMember> all = service.listMembers(region, request.path("GraphArn").asText(null));
         Integer maxResults = integer(request, "MaxResults");
-        int limit = maxResults == null ? 50 : maxResults;
-        if (limit < 1 || limit > 50) {
-            throw new AwsException("ValidationException", "MaxResults must be between 1 and 50.", 400);
+        int limit = maxResults == null ? 200 : maxResults;
+        if (limit < 1 || limit > 200) {
+            throw new AwsException("ValidationException", "MaxResults must be between 1 and 200.", 400);
         }
         int offset = offset(request.path("NextToken").asText(null), all.size());
         int end = Math.min(all.size(), offset + limit);
@@ -127,12 +133,22 @@ public class DetectiveController {
         }
         var response = objectMapper.createObjectNode();
         var members = response.putArray("Members");
+        var unprocessed = response.putArray("UnprocessedAccounts");
         for (JsonNode account : accounts) {
-            DetectiveMember member = service.createMember(region, graphArn,
-                    account.path("AccountId").asText(null), account.path("EmailAddress").asText(null));
-            members.add(memberNode(region, member));
+            String accountId = account.path("AccountId").asText(null);
+            try {
+                DetectiveMember member = service.createMember(region, graphArn,
+                        accountId, account.path("EmailAddress").asText(null));
+                members.add(memberNode(region, member));
+            } catch (AwsException e) {
+                if (!"ConflictException".equals(e.getErrorCode())) {
+                    throw e;
+                }
+                unprocessed.addObject()
+                        .put("AccountId", accountId)
+                        .put("Reason", "The account is already a member of the behavior graph.");
+            }
         }
-        response.putArray("UnprocessedAccounts");
         return Response.ok(response).build();
     }
 
@@ -182,12 +198,21 @@ public class DetectiveController {
         }
     }
 
-    private String region(HttpHeaders headers) {
-        return regionResolver.resolveRegion(headers);
+    private static void validatePageRequest(JsonNode request) {
+        Integer maxResults = integer(request, "MaxResults");
+        if (maxResults != null && (maxResults < 1 || maxResults > 200)) {
+            throw new AwsException("ValidationException", "MaxResults must be between 1 and 200.", 400);
+        }
+        JsonNode token = request.get("NextToken");
+        if (token != null && !token.isNull()) {
+            if (!token.isTextual() || token.textValue().isEmpty() || token.textValue().length() > 1024) {
+                throw new AwsException("ValidationException", "NextToken is invalid.", 400);
+            }
+        }
     }
 
-    private Response empty() {
-        return Response.ok(objectMapper.createObjectNode()).build();
+    private String region(HttpHeaders headers) {
+        return regionResolver.resolveRegion(headers);
     }
 
     private JsonNode parse(String body) {
