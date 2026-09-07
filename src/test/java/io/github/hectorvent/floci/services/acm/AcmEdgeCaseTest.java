@@ -422,7 +422,7 @@ class AcmEdgeCaseTest {
     @Test
     void unsupportedKeyAlgorithmsRejected() {
         // Real ACM rejects these on RequestCertificate. The RSA_4096 message carries the
-        // account id where the region goes — an AWS quirk replicated verbatim.
+        // account id where the region goes, an AWS quirk replicated verbatim.
         Map<String, String> expected = Map.of(
             "RSA_1024", "Encryption Algorithm RSA_1024 is not supported in us-east-1 region",
             "RSA_3072", "Encryption Algorithm RSA_3072 is not supported in us-east-1 region",
