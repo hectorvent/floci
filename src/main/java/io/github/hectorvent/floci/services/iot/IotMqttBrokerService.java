@@ -382,9 +382,14 @@ public class IotMqttBrokerService {
         return session.getRequestedServerNames().stream()
                 .filter(SNIHostName.class::isInstance)
                 .map(name -> ((SNIHostName) name).getAsciiName())
-                .filter(name -> !IPV4_LITERAL.matcher(name).matches())
+                .filter(name -> !isAddressLiteral(name))
                 .findFirst()
                 .orElse(null);
+    }
+
+    /** An IPv4 dotted quad, or anything carrying a colon, which only an IPv6 literal does. */
+    static boolean isAddressLiteral(String name) {
+        return name.indexOf(':') >= 0 || IPV4_LITERAL.matcher(name).matches();
     }
 
     private void handleSubscribe(ClientSession session, MqttSubscribeMessage message) {

@@ -239,6 +239,17 @@ class IotMqttBrokerDeviceVerificationTest {
     }
 
     @Test
+    void addressLiteralsAreNeverADomainName() {
+        assertTrue(IotMqttBrokerService.isAddressLiteral("127.0.0.1"));
+        assertTrue(IotMqttBrokerService.isAddressLiteral("::1"));
+        assertTrue(IotMqttBrokerService.isAddressLiteral("[fe80::1]"));
+        assertTrue(IotMqttBrokerService.isAddressLiteral("2001:db8::1"));
+        assertFalse(IotMqttBrokerService.isAddressLiteral("localhost"));
+        assertFalse(IotMqttBrokerService.isAddressLiteral("iot.dev.localhost.floci.io"));
+        assertFalse(IotMqttBrokerService.isAddressLiteral("device1.example"));
+    }
+
+    @Test
     void thePlaintextListenerNeverConsultsTheRegistry() throws Exception {
         MqttClient client = new MqttClient("tcp://127.0.0.1:" + plainPort, "plain", new MemoryPersistence());
         try {
