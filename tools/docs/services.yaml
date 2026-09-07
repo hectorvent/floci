@@ -181,6 +181,13 @@ services:
     # SubnetIds / VpcSecurityGroupIds / TagKeys are labels of an inner member-name
     # switch (memberKeyRegex), not actions — same shape as the rds exclusions above.
     exclude_actions: [SubnetIds, VpcSecurityGroupIds, TagKeys]
+  - service: redshiftdata
+    doc: docs/services/redshift-data.md
+    sources:
+      - { path: src/main/java/io/github/hectorvent/floci/services/redshiftdata/RedshiftDataJsonHandler.java, mode: switch }
+    # ExecuteSql / BatchExecuteSql are the deprecated pre-2020 operations: the handler
+    # recognizes them only to return a ValidationException, they are not supported actions.
+    exclude_actions: [ExecuteSql, BatchExecuteSql]
   - service: cognitoidentity
     doc: docs/services/cognitoidentity.md
     sources:

@@ -10,6 +10,8 @@ Floci emulates Amazon Redshift by managing a real [PostgreSQL](https://www.postg
 
 The container has **no persistent volume**: if the physical container survives a Floci restart it is adopted and its data is kept, but if the container itself is gone (host reboot, `docker rm`, a pruned dev box) the cluster comes back empty. Use `CreateClusterSnapshot` / `RestoreFromClusterSnapshot` to preserve data explicitly.
 
+For running SQL without a PostgreSQL wire connection (the way Lambda and Step Functions do), see the [Redshift Data API](redshift-data.md).
+
 ## Supported Actions
 
 <!-- floci:actions:start -->
