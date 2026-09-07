@@ -17,6 +17,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -669,6 +676,71 @@ class CognitoCfnProvisionerTest {
         assertEquals("ValidationError", e.getErrorCode());
         verifyNoClientCreate();
         assertEquals(null, r.getPhysicalId());
+    }
+
+    @Test
+    void aDerivedIdHeldByAClientOfADeletedPoolIsTakenOver() {
+        when(cognito.deterministicClientIdFor(POOL_ID, "web")).thenReturn("web");
+        when(cognito.describeUserPoolClient("web")).thenReturn(client("web", "us-east-1_DeletedPool", "web", null));
+        when(cognito.describeUserPool("us-east-1_DeletedPool"))
+                .thenThrow(new AwsException("ResourceNotFoundException", "User pool does not exist", 400));
+        stubClientCreate(client("web", POOL_ID, "web", null));
+        StackResource r = resource(USER_POOL_CLIENT, "Client");
+
+        provisioner.provision(r, mapper.createObjectNode().put("UserPoolId", POOL_ID).put("ClientName", "web"), ctx());
+
+        assertEquals("web", r.getPhysicalId());
+    }
+
+    @Test
+    void concurrentCreatesOfTheSameDerivedIdLetExactlyOneThrough() throws Exception {
+        when(cognito.deterministicClientIdFor(POOL_ID, "web")).thenReturn("web");
+        AtomicBoolean created = new AtomicBoolean();
+        when(cognito.describeUserPoolClient("web")).thenAnswer(inv -> {
+            if (created.get()) {
+                return client("web", POOL_ID, "web", null);
+            }
+            throw new AwsException("ResourceNotFoundException", "User pool client not found", 400);
+        });
+        AtomicInteger creates = new AtomicInteger();
+        when(cognito.createUserPoolClient(any(), any(), anyBoolean(), anyBoolean(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    creates.incrementAndGet();
+                    Thread.sleep(50);
+                    created.set(true);
+                    return client("web", POOL_ID, "web", null);
+                });
+        CountDownLatch ready = new CountDownLatch(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<Throwable>> outcomes = new java.util.ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                outcomes.add(pool.submit(() -> {
+                    ready.countDown();
+                    ready.await(5, TimeUnit.SECONDS);
+                    try {
+                        provisioner.provision(resource(USER_POOL_CLIENT, "Client"),
+                                mapper.createObjectNode().put("UserPoolId", POOL_ID).put("ClientName", "web"), ctx());
+                        return null;
+                    } catch (Throwable t) {
+                        return t;
+                    }
+                }));
+            }
+            long refused = outcomes.stream().map(f -> {
+                try {
+                    return f.get(10, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    throw new AssertionError(e);
+                }
+            }).filter(t -> t instanceof AwsException a && "ValidationError".equals(a.getErrorCode())).count();
+
+            assertEquals(1, creates.get(), "exactly one create");
+            assertEquals(1, refused, "the other provision is refused, not silently overwriting");
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test

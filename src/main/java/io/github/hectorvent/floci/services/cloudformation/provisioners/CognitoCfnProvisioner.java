@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * Provisions the Cognito user pool types.
@@ -46,6 +47,15 @@ public class CognitoCfnProvisioner implements CfnResourceProvisioner {
     private static final String USER_POOL = "AWS::Cognito::UserPool";
     private static final String USER_POOL_CLIENT = "AWS::Cognito::UserPoolClient";
     private static final String USER_POOL_DOMAIN = "AWS::Cognito::UserPoolDomain";
+
+    /**
+     * Serialises the existence check and the create of a client whose id is derived from its name.
+     * The service's store write is unconditional and the engine runs stack operations on a thread
+     * pool, so two stacks could otherwise both find the id free and the later create would
+     * overwrite the earlier stack's client. Static so every instance, the CDI bean and the test
+     * fixture's, shares it.
+     */
+    private static final Object DETERMINISTIC_CLIENT_ID_LOCK = new Object();
 
     private final CognitoService cognitoService;
 
@@ -192,10 +202,10 @@ public class CognitoCfnProvisioner implements CfnResourceProvisioner {
         if (userPoolId == null || userPoolId.isBlank()) {
             throw new AwsException("ValidationError", "AWS::Cognito::UserPoolClient requires UserPoolId", 400);
         }
-        String clientName = ctx.resolveOptional(props, "ClientName");
-        if (clientName == null || clientName.isBlank()) {
-            clientName = ctx.generatePhysicalName(r.getLogicalId(), 128, false);
-        }
+        String requestedClientName = ctx.resolveOptional(props, "ClientName");
+        String clientName = requestedClientName == null || requestedClientName.isBlank()
+                ? ctx.generatePhysicalName(r.getLogicalId(), 128, false)
+                : requestedClientName;
         boolean generateSecret = Boolean.parseBoolean(resolveOrDefault(props, "GenerateSecret", ctx, "false"));
         boolean allowedOAuthFlowsUserPoolClient =
                 Boolean.parseBoolean(resolveOrDefault(props, "AllowedOAuthFlowsUserPoolClient", ctx, "false"));
@@ -233,24 +243,27 @@ public class CognitoCfnProvisioner implements CfnResourceProvisioner {
                     supportedIdentityProviders, tokenValidityUnits, writeAttributes,
                     refreshTokenRotation, enableTokenRevocation);
         } else {
-            // AWS client ids are random, so a create never collides with an existing client. Under
-            // Floci's floci:override-cognito-client-id tag the id follows the name, and the store
-            // would overwrite whichever client already holds it, the one being replaced or any
-            // other, with no way back; so the create is refused before anything changes.
-            String derivedId = cognitoService.deterministicClientIdFor(userPoolId, clientName);
-            if (derivedId != null && findClient(derivedId) != null) {
-                throw new AwsException("ValidationError", "User pool client id " + derivedId
-                        + ", derived from ClientName under the pool's floci:override-cognito-client-id override,"
-                        + " already belongs to an existing client; give the client a different ClientName"
-                        + " or remove the override.", 400);
-            }
-            client = cognitoService.createUserPoolClient(
+            Supplier<UserPoolClient> create = () -> cognitoService.createUserPoolClient(
                     userPoolId, clientName, generateSecret, allowedOAuthFlowsUserPoolClient,
                     allowedOAuthFlows, allowedOAuthScopes, analyticsConfiguration, callbackURLs,
                     defaultRedirectURI, explicitAuthFlows, accessTokenValidity, idTokenValidity,
                     logoutURLs, preventUserExistenceErrors, readAttributes, refreshTokenValidity,
                     supportedIdentityProviders, tokenValidityUnits, writeAttributes,
                     refreshTokenRotation, enableTokenRevocation);
+            // AWS client ids are random, so a create never collides with an existing client. Under
+            // Floci's floci:override-cognito-client-id tag the id follows the name, and the store
+            // would overwrite whichever client already holds it, the one being replaced or any
+            // other, with no way back; so the create is refused before anything changes, and the
+            // check and the create happen under one lock so a concurrent stack cannot slip between.
+            String derivedId = cognitoService.deterministicClientIdFor(userPoolId, clientName);
+            if (derivedId == null) {
+                client = create.get();
+            } else {
+                synchronized (DETERMINISTIC_CLIENT_ID_LOCK) {
+                    refuseIfALiveClientHolds(derivedId);
+                    client = create.get();
+                }
+            }
         }
 
         r.setPhysicalId(client.getClientId());
@@ -295,6 +308,31 @@ public class CognitoCfnProvisioner implements CfnResourceProvisioner {
         r.getAttributes().put("UserPoolId", userPoolId);
         r.getAttributes().put("CloudFrontDistribution",
                 provisioned.getCloudFrontDistribution() == null ? "" : provisioned.getCloudFrontDistribution());
+    }
+
+    /**
+     * A record whose pool no longer exists is an orphan of a deleted pool (the pool delete does not
+     * cascade to clients yet, see #2949), not a live client: the create may take its id over.
+     */
+    private void refuseIfALiveClientHolds(String derivedId) {
+        UserPoolClient holder = findClient(derivedId);
+        if (holder == null) {
+            return;
+        }
+        try {
+            cognitoService.describeUserPool(holder.getUserPoolId());
+        } catch (AwsException e) {
+            if (!NOT_FOUND.equals(e.getErrorCode())) {
+                throw e;
+            }
+            LOG.debugv("User pool client {0} belongs to deleted pool {1}; treating the record as stale",
+                    derivedId, holder.getUserPoolId());
+            return;
+        }
+        throw new AwsException("ValidationError", "User pool client id " + derivedId
+                + ", derived from ClientName under the pool's floci:override-cognito-client-id override,"
+                + " already belongs to an existing client; give the client a different ClientName"
+                + " or remove the override.", 400);
     }
 
     private UserPoolClient findClient(String clientId) {

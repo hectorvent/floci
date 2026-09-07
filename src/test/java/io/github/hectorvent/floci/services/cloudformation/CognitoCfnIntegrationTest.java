@@ -261,6 +261,32 @@ class CognitoCfnIntegrationTest {
     }
 
     @Test
+    void aDerivedIdLeftBehindByADeletedPoolDoesNotBlockAStackInAnotherPool() throws Exception {
+        // Deleting a pool does not remove its clients yet (#2949 adds that), so the record of
+        // orphan-web lingers under its id; a stack in a live pool must still be able to claim it.
+        String deletedPool = cognitoJson("CreateUserPool", """
+            {"PoolName": "cognito-cfn-orphan-a", "UserPoolTags": {"floci:override-cognito-client-id": "use-name"}}
+            """).path("UserPool").path("Id").asText();
+        cognitoAction("CreateUserPoolClient", "{\"UserPoolId\": \"" + deletedPool + "\", \"ClientName\": \"orphan-web\"}")
+            .then().statusCode(200);
+        cognitoAction("DeleteUserPool", "{\"UserPoolId\": \"" + deletedPool + "\"}").then().statusCode(200);
+        String livePool = cognitoJson("CreateUserPool", """
+            {"PoolName": "cognito-cfn-orphan-b", "UserPoolTags": {"floci:override-cognito-client-id": "use-name"}}
+            """).path("UserPool").path("Id").asText();
+        String stack = "cognito-cfn-orphan-it";
+
+        cloudFormation(stack, "CreateStack", overrideClientTemplate(livePool, false).replace("override-web", "orphan-web"));
+
+        String stacks = describeStacks(stack, "CREATE_COMPLETE");
+        assertEquals("orphan-web", outputValue(stacks, "ClientId"));
+        assertClientInPool(livePool, "orphan-web", "orphan-web");
+
+        cloudFormation(stack, "DeleteStack", null);
+        awaitStackDeleted(stack);
+        cognitoAction("DeleteUserPool", "{\"UserPoolId\": \"" + livePool + "\"}").then().statusCode(200);
+    }
+
+    @Test
     void aReplacementThatWouldReuseADeterministicClientIdRollsTheUpdateBackWithThePriorClientIntact() throws Exception {
         String poolId = cognitoJson("CreateUserPool", """
             {"PoolName": "cognito-cfn-override-it", "UserPoolTags": {"floci:override-cognito-client-id": "use-name"}}
