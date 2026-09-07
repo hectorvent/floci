@@ -5,7 +5,10 @@ import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
+import org.eclipse.paho.client.mqttv3.MqttCallback;
 import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -104,15 +107,29 @@ class IotMqttWebSocketLazyStartIntegrationTest {
     @Test
     void upgradeAfterAStopStartsTheBrokerAgain() throws Exception {
         MqttClient first = new MqttClient(ws(), "lazy-first-" + System.nanoTime(), new MemoryPersistence());
+        CountDownLatch firstLost = new CountDownLatch(1);
+        first.setCallback(new MqttCallback() {
+            @Override
+            public void connectionLost(Throwable cause) {
+                firstLost.countDown();
+            }
+
+            @Override
+            public void messageArrived(String topic, MqttMessage message) {
+            }
+
+            @Override
+            public void deliveryComplete(IMqttDeliveryToken token) {
+            }
+        });
         first.connect();
         assertTrue(broker.isRunning());
 
         broker.stop();
         awaitPortClosed();
         assertFalse(broker.isRunning());
-        // Paho may not have noticed the drop yet and refuses a plain close while it thinks it is
-        // connected; the forced close does not wait for that.
-        first.close(true);
+        assertTrue(firstLost.await(10, TimeUnit.SECONDS), "stopping the broker drops the WebSocket session");
+        first.close();
 
         MqttClient second = new MqttClient(ws(), "lazy-second-" + System.nanoTime(), new MemoryPersistence());
         second.connect();
