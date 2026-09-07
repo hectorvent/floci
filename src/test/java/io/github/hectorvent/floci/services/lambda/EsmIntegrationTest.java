@@ -141,6 +141,62 @@ class EsmIntegrationTest {
     }
 
     @Test
+    void maximumBatchingWindowRoundTripsThroughCreateGetAndUpdate() {
+        String uuid = given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "FunctionName": "%s",
+                    "EventSourceArn": "%s",
+                    "BatchSize": 2,
+                    "MaximumBatchingWindowInSeconds": 5
+                }
+                """.formatted(FUNCTION_NAME, QUEUE_ARN))
+        .when()
+            .post(LAMBDA_BASE + "/event-source-mappings")
+        .then()
+            .statusCode(202)
+            .body("MaximumBatchingWindowInSeconds", equalTo(5))
+        .extract()
+            .path("UUID");
+
+        given()
+        .when()
+            .get(LAMBDA_BASE + "/event-source-mappings/" + uuid)
+        .then()
+            .statusCode(200)
+            .body("MaximumBatchingWindowInSeconds", equalTo(5));
+
+        given()
+            .contentType("application/json")
+            .body("{\"MaximumBatchingWindowInSeconds\": 0}")
+        .when()
+            .put(LAMBDA_BASE + "/event-source-mappings/" + uuid)
+        .then()
+            .statusCode(202)
+            .body("MaximumBatchingWindowInSeconds", equalTo(0));
+
+        given().delete(LAMBDA_BASE + "/event-source-mappings/" + uuid).then().statusCode(202);
+    }
+
+    @Test
+    void createEventSourceMappingRejectsMaximumBatchingWindowAbove300() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                    "FunctionName": "%s",
+                    "EventSourceArn": "%s",
+                    "MaximumBatchingWindowInSeconds": 301
+                }
+                """.formatted(FUNCTION_NAME, QUEUE_ARN))
+        .when()
+            .post(LAMBDA_BASE + "/event-source-mappings")
+        .then()
+            .statusCode(400);
+    }
+
+    @Test
     void updateEventSourceMappingReturnsFailureConfig() {
         String streamArn = "arn:aws:dynamodb:us-east-1:000000000000:table/esm-table/stream/2026-01-01T00:00:00.000";
         String destinationArn = "arn:aws:sqs:us-east-1:000000000000:esm-updated-failure-config-dlq";

@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -471,6 +472,86 @@ class SqsEventSourcePollerTest {
                 }
             }
         }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void pollUntilInvoked(EventSourceMapping esm, LambdaFunction fn) {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (true) {
+            poller.pollAndInvoke(esm);
+            try {
+                verify(executorService, timeout(2000))
+                        .invoke(eq(fn), any(byte[].class), eq(InvocationType.RequestResponse));
+                return;
+            } catch (AssertionError retry) {
+                if (System.currentTimeMillis() > deadline) {
+                    throw retry;
+                }
+                sleep(25);
+            }
+        }
+    }
+
+    @Test
+    void batchingWindowHoldsUnderfilledBatchUntilTheWindowElapses() {
+        LambdaFunction fn = stubThrowFn();
+        EventSourceMapping esm = esm();
+        esm.setBatchSize(2);
+        esm.setMaximumBatchingWindowInSeconds(5);
+
+        AtomicLong now = new AtomicLong(0);
+        poller.setClockForTest(now::get);
+
+        when(sqsService.receiveMessage(eq(esm.getQueueUrl()), anyInt(), anyInt(), anyInt(), eq("us-east-1")))
+                .thenReturn(List.of(message("m1")))
+                .thenReturn(List.of());
+        when(executorService.invoke(eq(fn), any(byte[].class), eq(InvocationType.RequestResponse)))
+                .thenReturn(new InvokeResult());
+
+        // Polls inside the window buffer the record without invoking.
+        for (int i = 0; i < 4; i++) {
+            poller.pollAndInvoke(esm);
+            sleep(25);
+            now.addAndGet(1000); // reaches 4s, short of the 5s window
+        }
+        verify(sqsService, atLeast(1))
+                .receiveMessage(eq(esm.getQueueUrl()), anyInt(), anyInt(), anyInt(), eq("us-east-1"));
+        verify(executorService, never()).invoke(any(), any(), any());
+        verify(sqsService, never()).deleteMessage(any(), any(), any());
+
+        // Once the window elapses the buffered record is delivered.
+        now.set(5000);
+        pollUntilInvoked(esm, fn);
+        verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m1", "us-east-1");
+    }
+
+    @Test
+    void batchingWindowFlushesEarlyOnceTheBatchIsFull() {
+        LambdaFunction fn = stubThrowFn();
+        EventSourceMapping esm = esm();
+        esm.setBatchSize(2);
+        esm.setMaximumBatchingWindowInSeconds(30);
+
+        poller.setClockForTest(() -> 0L); // the window never expires on its own
+
+        when(sqsService.receiveMessage(eq(esm.getQueueUrl()), anyInt(), anyInt(), anyInt(), eq("us-east-1")))
+                .thenReturn(List.of(message("m1")))
+                .thenReturn(List.of(message("m2")))
+                .thenReturn(List.of());
+        when(executorService.invoke(eq(fn), any(byte[].class), eq(InvocationType.RequestResponse)))
+                .thenReturn(new InvokeResult());
+
+        pollUntilInvoked(esm, fn);
+
+        verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m1", "us-east-1");
+        verify(sqsService, timeout(2000)).deleteMessage(esm.getQueueUrl(), "rh-m2", "us-east-1");
     }
 
     private static final String BODY_PATTERN = "{\"body\":{\"type\":[\"order\"]}}";

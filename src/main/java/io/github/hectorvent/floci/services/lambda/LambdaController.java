@@ -349,6 +349,9 @@ public class LambdaController {
             node.put("EventSourceArn", esm.getEventSourceArn());
         }
         node.put("BatchSize", esm.getBatchSize());
+        if (esm.getMaximumBatchingWindowInSeconds() != null) {
+            node.put("MaximumBatchingWindowInSeconds", esm.getMaximumBatchingWindowInSeconds());
+        }
         node.put("State", esm.getState());
         node.put("LastModified", (double) esm.getLastModified() / 1000.0);
         // Omitted rather than nulled when unset, so a mapping created without a starting position

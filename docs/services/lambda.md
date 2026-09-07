@@ -737,6 +737,29 @@ aws lambda create-event-source-mapping \
   --endpoint-url $AWS_ENDPOINT_URL
 ```
 
+### MaximumBatchingWindowInSeconds (SQS)
+
+`CreateEventSourceMapping` and `UpdateEventSourceMapping` accept a
+`MaximumBatchingWindowInSeconds` integer between 0 and 300. `GetEventSourceMapping`
+and `ListEventSourceMappings` echo it back when set; responses omit the field when
+it was never configured. Values outside 0 to 300 are rejected with
+`InvalidParameterValueException`.
+
+When the window is greater than 0, the SQS poller holds an underfilled batch open,
+accumulating messages across polls, and invokes the function once the batch reaches
+`BatchSize` or the window elapses since the first buffered message, whichever comes
+first. A window of 0 (or an unset window) invokes as soon as any message is
+available, which is the previous behaviour.
+
+```bash
+aws lambda create-event-source-mapping \
+  --function-name my-function \
+  --event-source-arn $QUEUE_ARN \
+  --batch-size 10 \
+  --maximum-batching-window-in-seconds 5 \
+  --endpoint-url $AWS_ENDPOINT_URL
+```
+
 ### ScalingConfig (SQS only)
 
 `CreateEventSourceMapping` and `UpdateEventSourceMapping` accept a

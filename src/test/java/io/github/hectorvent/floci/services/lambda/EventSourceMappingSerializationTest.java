@@ -97,6 +97,38 @@ class EventSourceMappingSerializationTest {
     }
 
     @Test
+    void maximumBatchingWindowRoundTripsThroughJacksonAndIsOmittedWhenUnset() throws Exception {
+        EventSourceMapping esm = new EventSourceMapping();
+        esm.setUuid("esm-window-001");
+        esm.setMaximumBatchingWindowInSeconds(5);
+
+        EventSourceMapping deserialized = objectMapper.readValue(
+                objectMapper.writeValueAsString(esm), EventSourceMapping.class);
+        assertEquals(5, deserialized.getMaximumBatchingWindowInSeconds());
+
+        assertNull(new EventSourceMapping().getMaximumBatchingWindowInSeconds());
+    }
+
+    @Test
+    void buildEsmResponseEmitsMaximumBatchingWindowOnlyWhenSet() {
+        EventSourceMapping esm = new EventSourceMapping();
+        esm.setUuid("esm-window-002");
+        esm.setFunctionArn("arn:aws:lambda:us-east-1:123456789012:function:sqsConsumer");
+        esm.setEventSourceArn("arn:aws:sqs:us-east-1:123456789012:my-queue");
+        esm.setBatchSize(2);
+        esm.setState("Enabled");
+        esm.setLastModified(1700000000000L);
+
+        assertFalse(controller.buildEsmResponse(esm).containsKey("MaximumBatchingWindowInSeconds"));
+
+        esm.setMaximumBatchingWindowInSeconds(5);
+        assertEquals(5, controller.buildEsmResponse(esm).get("MaximumBatchingWindowInSeconds"));
+
+        esm.setMaximumBatchingWindowInSeconds(0);
+        assertEquals(0, controller.buildEsmResponse(esm).get("MaximumBatchingWindowInSeconds"));
+    }
+
+    @Test
     void testBuildEsmResponseWithEventSourceArnPresent() {
         EventSourceMapping esm = new EventSourceMapping();
         esm.setUuid("esm-sqs-001");

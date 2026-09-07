@@ -22,6 +22,7 @@ public class EventSourceMapping {
     private String region;
     private boolean enabled = true;
     private int batchSize = 10;
+    private Integer maximumBatchingWindowInSeconds;
     private String state = "Enabled";
     private long lastModified;
     private String startingPosition;
@@ -65,6 +66,12 @@ public class EventSourceMapping {
 
     public int getBatchSize() { return batchSize; }
     public void setBatchSize(int batchSize) { this.batchSize = batchSize; }
+
+    /** Seconds to accumulate an underfilled batch before invoking; {@code null} or 0 means invoke as soon as messages arrive. */
+    public Integer getMaximumBatchingWindowInSeconds() { return maximumBatchingWindowInSeconds; }
+    public void setMaximumBatchingWindowInSeconds(Integer maximumBatchingWindowInSeconds) {
+        this.maximumBatchingWindowInSeconds = maximumBatchingWindowInSeconds;
+    }
 
     public String getState() { return state; }
     public void setState(String state) { this.state = state; }

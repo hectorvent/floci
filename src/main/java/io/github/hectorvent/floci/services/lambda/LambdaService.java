@@ -1236,6 +1236,7 @@ public class LambdaService implements ResourceProvider {
         ResolvedFunctionTarget target = resolveFunctionTarget(resolvedRegion, fnRef);
 
         int batchSize = toInt(request.get("BatchSize"), 10);
+        Integer maximumBatchingWindowInSeconds = parseMaximumBatchingWindow(request);
         boolean enabled = !Boolean.FALSE.equals(request.get("Enabled"));
 
         @SuppressWarnings("unchecked")
@@ -1268,6 +1269,7 @@ public class LambdaService implements ResourceProvider {
         esm.setQueueUrl(queueUrl);
         esm.setRegion(resolvedRegion);
         esm.setBatchSize(batchSize);
+        esm.setMaximumBatchingWindowInSeconds(maximumBatchingWindowInSeconds);
         esm.setEnabled(enabled);
         esm.setState(enabled ? "Enabled" : "Disabled");
         esm.setScalingConfig(scalingConfig);
@@ -1629,6 +1631,33 @@ public class LambdaService implements ResourceProvider {
         return new ScalingConfig((int) longValue);
     }
 
+    /**
+     * Parses {@code MaximumBatchingWindowInSeconds} out of a create/update request and applies
+     * AWS-level validation: it must be an integer in [0, 300]. Returns {@code null} when the field
+     * is absent so a create leaves it unset and an update leaves the stored value untouched.
+     */
+    private Integer parseMaximumBatchingWindow(Map<String, Object> request) {
+        Object raw = request.get("MaximumBatchingWindowInSeconds");
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof Number)) {
+            throw new AwsException("InvalidParameterValueException",
+                    "MaximumBatchingWindowInSeconds must be a numeric value", 400);
+        }
+        double d = ((Number) raw).doubleValue();
+        if (Double.isNaN(d) || Double.isInfinite(d) || d != Math.floor(d)) {
+            throw new AwsException("InvalidParameterValueException",
+                    "MaximumBatchingWindowInSeconds must be an integer", 400);
+        }
+        long value = ((Number) raw).longValue();
+        if (value < 0 || value > 300) {
+            throw new AwsException("InvalidParameterValueException",
+                    "MaximumBatchingWindowInSeconds must be between 0 and 300 (got " + value + ")", 400);
+        }
+        return (int) value;
+    }
+
     private void startPollingHelper(EventSourceMapping esm) {
         if (esm.getEventSourceArn() == null) {
             return;
@@ -1680,6 +1709,9 @@ public class LambdaService implements ResourceProvider {
 
         if (request.containsKey("BatchSize")) {
             esm.setBatchSize(toInt(request.get("BatchSize"), esm.getBatchSize()));
+        }
+        if (request.containsKey("MaximumBatchingWindowInSeconds")) {
+            esm.setMaximumBatchingWindowInSeconds(parseMaximumBatchingWindow(request));
         }
         if (request.containsKey("Enabled")) {
             boolean nowEnabled = !Boolean.FALSE.equals(request.get("Enabled"));
