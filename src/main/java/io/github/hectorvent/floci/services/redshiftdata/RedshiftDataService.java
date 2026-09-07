@@ -384,22 +384,166 @@ public class RedshiftDataService implements Resettable {
         return response;
     }
 
-    // ── Not yet implemented (Task 5) ───────────────────────────────────────
+    // ── Schema introspection ───────────────────────────────────────────────
 
     public ObjectNode listDatabases(JsonNode request, String region) {
-        throw notImplemented("ListDatabases");
+        RedshiftDataResourceResolver.DatabaseTarget target = resolver.resolve(request, region);
+        List<String> names = new ArrayList<>();
+        try (Connection c = connectionFactory.open(target);
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                names.add(rs.getString(1));
+            }
+        } catch (SQLException e) {
+            throw databaseError(e);
+        }
+        return pageStrings(request, "Databases", names);
     }
 
     public ObjectNode listSchemas(JsonNode request, String region) {
-        throw notImplemented("ListSchemas");
+        RedshiftDataResourceResolver.DatabaseTarget target = resolver.resolve(request, region);
+        String pattern = orLike(textOrNull(request, "SchemaPattern"));
+        List<String> names = new ArrayList<>();
+        try (Connection c = connectionFactory.open(target);
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT schema_name FROM information_schema.schemata "
+                             + "WHERE schema_name LIKE ? ORDER BY schema_name")) {
+            ps.setString(1, pattern);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    names.add(rs.getString(1));
+                }
+            }
+        } catch (SQLException e) {
+            throw databaseError(e);
+        }
+        return pageStrings(request, "Schemas", names);
     }
 
     public ObjectNode listTables(JsonNode request, String region) {
-        throw notImplemented("ListTables");
+        RedshiftDataResourceResolver.DatabaseTarget target = resolver.resolve(request, region);
+        String schemaPattern = orLike(textOrNull(request, "SchemaPattern"));
+        String tablePattern = orLike(textOrNull(request, "TablePattern"));
+        List<ObjectNode> tables = new ArrayList<>();
+        try (Connection c = connectionFactory.open(target);
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT table_schema, table_name, table_type FROM information_schema.tables "
+                             + "WHERE table_schema LIKE ? AND table_name LIKE ? "
+                             + "ORDER BY table_schema, table_name")) {
+            ps.setString(1, schemaPattern);
+            ps.setString(2, tablePattern);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ObjectNode t = objectMapper.createObjectNode();
+                    t.put("schema", rs.getString(1));
+                    t.put("name", rs.getString(2));
+                    t.put("type", "VIEW".equalsIgnoreCase(rs.getString(3)) ? "VIEW" : "TABLE");
+                    tables.add(t);
+                }
+            }
+        } catch (SQLException e) {
+            throw databaseError(e);
+        }
+        return pageObjects(request, "Tables", tables);
     }
 
     public ObjectNode describeTable(JsonNode request, String region) {
-        throw notImplemented("DescribeTable");
+        RedshiftDataResourceResolver.DatabaseTarget target = resolver.resolve(request, region);
+        String schema = textOrNull(request, "Schema");
+        String table = requiredText(request, "Table");
+        boolean withSchema = schema != null && !schema.isBlank();
+        String sql = "SELECT column_name, data_type, character_maximum_length, is_nullable, "
+                + "numeric_precision, numeric_scale, column_default, table_schema, table_name "
+                + "FROM information_schema.columns WHERE table_name LIKE ? "
+                + (withSchema ? "AND table_schema LIKE ? " : "")
+                + "ORDER BY ordinal_position";
+
+        List<ObjectNode> columns = new ArrayList<>();
+        try (Connection c = connectionFactory.open(target);
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, table);
+            if (withSchema) {
+                ps.setString(2, schema);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ObjectNode col = objectMapper.createObjectNode();
+                    String columnName = rs.getString("column_name");
+                    col.put("name", columnName);
+                    col.put("label", columnName);
+                    col.put("typeName", rs.getString("data_type"));
+                    col.put("length", rs.getInt("character_maximum_length"));
+                    col.put("nullable", "YES".equalsIgnoreCase(rs.getString("is_nullable")) ? 1 : 0);
+                    col.put("isCaseSensitive", false);
+                    col.put("isCurrency", false);
+                    col.put("isSigned", true);
+                    col.put("precision", rs.getInt("numeric_precision"));
+                    col.put("scale", rs.getInt("numeric_scale"));
+                    col.put("schemaName", rs.getString("table_schema"));
+                    col.put("tableName", rs.getString("table_name"));
+                    String columnDefault = rs.getString("column_default");
+                    if (columnDefault != null) {
+                        col.put("columnDefault", columnDefault);
+                    } else {
+                        col.putNull("columnDefault");
+                    }
+                    columns.add(col);
+                }
+            }
+        } catch (SQLException e) {
+            throw databaseError(e);
+        }
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("TableName", table);
+        ArrayNode list = response.putArray("ColumnList");
+        columns.forEach(list::add);
+        return response;
+    }
+
+    private ObjectNode pageStrings(JsonNode request, String key, List<String> values) {
+        int max = pageSize(request);
+        int offset = decodeToken(textOrNull(request, "NextToken"));
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode arr = response.putArray(key);
+        int end = Math.min(offset + max, values.size());
+        for (int i = offset; i < end; i++) {
+            arr.add(values.get(i));
+        }
+        if (end < values.size()) {
+            response.put("NextToken", encodeToken(end));
+        }
+        return response;
+    }
+
+    private ObjectNode pageObjects(JsonNode request, String key, List<ObjectNode> values) {
+        int max = pageSize(request);
+        int offset = decodeToken(textOrNull(request, "NextToken"));
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode arr = response.putArray(key);
+        int end = Math.min(offset + max, values.size());
+        for (int i = offset; i < end; i++) {
+            arr.add(values.get(i));
+        }
+        if (end < values.size()) {
+            response.put("NextToken", encodeToken(end));
+        }
+        return response;
+    }
+
+    private static int pageSize(JsonNode request) {
+        int max = request.path("MaxResults").asInt(PAGE_SIZE);
+        return max > 0 ? max : PAGE_SIZE;
+    }
+
+    private static String orLike(String value) {
+        return value == null || value.isBlank() ? "%" : value;
+    }
+
+    private static AwsException databaseError(SQLException e) {
+        return new AwsException("ValidationException", e.getMessage(), 400);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────
@@ -486,9 +630,5 @@ public class RedshiftDataService implements Resettable {
     private static String textOrNull(JsonNode request, String name) {
         JsonNode node = request.get(name);
         return node == null || node.isNull() ? null : node.asText();
-    }
-
-    private static AwsException notImplemented(String op) {
-        return new AwsException("ValidationException", op + " is not implemented yet.", 400);
     }
 }

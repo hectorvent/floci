@@ -195,4 +195,37 @@ class RedshiftDataServiceTest {
         AwsException e = assertThrows(AwsException.class, () -> service.cancelStatement(idOf("missing")));
         assertEquals("ResourceNotFoundException", e.getErrorCode());
     }
+
+    private ObjectNode targetReq() {
+        ObjectNode r = om.createObjectNode();
+        r.put("ClusterIdentifier", "wh");
+        r.put("DbUser", "admin");
+        r.put("Database", "dev");
+        return r;
+    }
+
+    @Test
+    void listTablesAndDescribeTableReadInformationSchema() {
+        service.executeStatement(req("create table cat (id int not null, name varchar(30))"), REGION);
+
+        ObjectNode listReq = targetReq();
+        listReq.put("TablePattern", "cat");
+        ObjectNode tables = service.listTables(listReq, REGION);
+        assertTrue(tables.get("Tables").findValuesAsText("name").stream()
+                .anyMatch(n -> n.equalsIgnoreCase("cat")));
+
+        ObjectNode descReq = targetReq();
+        descReq.put("Table", "cat");
+        ObjectNode described = service.describeTable(descReq, REGION);
+        assertEquals("cat", described.get("TableName").asText());
+        assertEquals(2, described.get("ColumnList").size());
+        assertTrue(described.get("ColumnList").get(0).has("typeName"));
+        assertTrue(described.get("ColumnList").get(0).has("nullable"));
+    }
+
+    @Test
+    void listSchemasReturnsSchemata() {
+        ObjectNode schemas = service.listSchemas(targetReq(), REGION);
+        assertTrue(schemas.get("Schemas").size() >= 1);
+    }
 }
