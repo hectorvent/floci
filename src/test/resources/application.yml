@@ -179,6 +179,9 @@ floci:
     rds-data:
       enabled: true
       transaction-ttl-seconds: 180
+    redshift-data:
+      enabled: true
+      result-ttl-hours: 24
     neptune:
       enabled: true
       proxy-base-port: 8182

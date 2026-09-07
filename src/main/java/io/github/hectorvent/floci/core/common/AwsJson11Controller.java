@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import io.github.hectorvent.floci.services.acm.AcmJsonHandler;
 import io.github.hectorvent.floci.services.athena.AthenaJsonHandler;
+import io.github.hectorvent.floci.services.redshiftdata.RedshiftDataJsonHandler;
 import io.github.hectorvent.floci.services.cloudhsmv2.CloudHsmV2JsonHandler;
 import io.github.hectorvent.floci.services.codebuild.CodeBuildJsonHandler;
 import io.github.hectorvent.floci.services.codedeploy.CodeDeployJsonHandler;
@@ -96,6 +97,7 @@ public class AwsJson11Controller {
     private final EcrJsonHandler ecrJsonHandler;
     private final GlueJsonHandler glueJsonHandler;
     private final AthenaJsonHandler athenaJsonHandler;
+    private final RedshiftDataJsonHandler redshiftDataJsonHandler;
     private final FirehoseJsonHandler firehoseJsonHandler;
     private final ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler;
     private final CodeBuildJsonHandler codeBuildJsonHandler;
@@ -143,6 +145,7 @@ public class AwsJson11Controller {
                                AcmJsonHandler acmJsonHandler, EcsJsonHandler ecsJsonHandler,
                                EcrJsonHandler ecrJsonHandler, GlueJsonHandler glueJsonHandler,
                                AthenaJsonHandler athenaJsonHandler,
+                               RedshiftDataJsonHandler redshiftDataJsonHandler,
                                FirehoseJsonHandler firehoseJsonHandler,
                                ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler,
                                CodeBuildJsonHandler codeBuildJsonHandler,
@@ -194,6 +197,7 @@ public class AwsJson11Controller {
         this.ecrJsonHandler = ecrJsonHandler;
         this.glueJsonHandler = glueJsonHandler;
         this.athenaJsonHandler = athenaJsonHandler;
+        this.redshiftDataJsonHandler = redshiftDataJsonHandler;
         this.firehoseJsonHandler = firehoseJsonHandler;
         this.resourceGroupsTaggingJsonHandler = resourceGroupsTaggingJsonHandler;
         this.codeBuildJsonHandler = codeBuildJsonHandler;
@@ -275,6 +279,7 @@ public class AwsJson11Controller {
                 case "ecr" -> ecrJsonHandler.handle(action, request, region);
                 case "glue" -> glueJsonHandler.handle(action, request, region);
                 case "athena" -> athenaJsonHandler.handle(action, request, region);
+                case "redshift-data" -> redshiftDataJsonHandler.handle(action, request, region);
                 case "firehose" -> firehoseJsonHandler.handle(action, request, region);
                 case "tagging" -> resourceGroupsTaggingJsonHandler.handle(action, request, region);
                 case "codebuild" -> codeBuildJsonHandler.handle(action, request, region, regionResolver.getAccountId());
