@@ -63,6 +63,7 @@ class IotMqttWebSocketIntegrationTest {
     static final Path DATA_DIR = Path.of("target", "floci-iot-mqtt-ws-test").toAbsolutePath();
     static final Path TLS_DIR = DATA_DIR.resolve("tls");
     static final int PLAIN_PORT = 18836;
+    static final int TLS_PORT = 18837;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final short CLOSE_UNSUPPORTED_DATA = 1003;
 
@@ -424,7 +425,8 @@ class IotMqttWebSocketIntegrationTest {
                     Map.entry("floci.services.iot.mqtt.enabled", "true"),
                     Map.entry("floci.services.iot.mqtt.auto-start", "true"),
                     Map.entry("floci.services.iot.mqtt.host", "127.0.0.1"),
-                    Map.entry("floci.services.iot.mqtt.port", Integer.toString(PLAIN_PORT)));
+                    Map.entry("floci.services.iot.mqtt.port", Integer.toString(PLAIN_PORT)),
+                    Map.entry("floci.services.iot.mqtt.tls-port", Integer.toString(TLS_PORT)));
         }
     }
 }

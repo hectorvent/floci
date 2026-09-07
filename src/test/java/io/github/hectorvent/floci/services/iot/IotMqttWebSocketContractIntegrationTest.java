@@ -113,6 +113,33 @@ class IotMqttWebSocketContractIntegrationTest {
     }
 
     @Test
+    void unrelatedSubprotocolOnAnotherPathStillConnects() throws Exception {
+        String apiId = given()
+                .contentType("application/json")
+                .body("{\"name\":\"ws-subprotocol-probe\",\"protocolType\":\"WEBSOCKET\",\"routeSelectionExpression\":\"$request.body.action\"}")
+        .when()
+                .post("/v2/apis")
+        .then()
+                .statusCode(201)
+                .extract().path("apiId");
+        given()
+                .contentType("application/json")
+                .body("{\"stageName\":\"probe\"}")
+        .when()
+                .post("/v2/apis/" + apiId + "/stages")
+        .then()
+                .statusCode(201);
+
+        WebSocket socket = HttpClient.newHttpClient().newWebSocketBuilder()
+                .subprotocols("graphql-ws")
+                .buildAsync(URI.create("ws://127.0.0.1:" + testHttpPort + "/ws/" + apiId + "/probe"), new WebSocket.Listener() { })
+                .get(10, TimeUnit.SECONDS);
+
+        assertEquals("", socket.getSubprotocol(), "the server lists only MQTT names, so it echoes none and still upgrades");
+        socket.abort();
+    }
+
+    @Test
     void webSocketPingIsAnsweredWithPong() throws Exception {
         CompletableFuture<byte[]> pong = new CompletableFuture<>();
         WebSocket socket = HttpClient.newHttpClient().newWebSocketBuilder()
