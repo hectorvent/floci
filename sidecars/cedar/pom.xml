@@ -12,6 +12,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <cedar.version>4.10.0</cedar.version>
     <jackson.version>2.22.1</jackson.version>
+    <jboss.logging.version>3.6.1.Final</jboss.logging.version>
   </properties>
 
   <dependencies>
@@ -25,6 +26,11 @@
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
       <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.jboss.logging</groupId>
+      <artifactId>jboss-logging</artifactId>
+      <version>${jboss.logging.version}</version>
     </dependency>
   </dependencies>
 

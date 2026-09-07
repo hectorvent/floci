@@ -29,6 +29,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -43,6 +44,7 @@ import java.util.concurrent.Executors;
 
 /** Stateless HTTP boundary around Cedar Java 4.x for Floci Verified Permissions. */
 public final class CedarSidecarServer {
+    private static final Logger LOG = Logger.getLogger(CedarSidecarServer.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final BasicAuthorizationEngine ENGINE = new BasicAuthorizationEngine();
 
@@ -64,7 +66,7 @@ public final class CedarSidecarServer {
         server.createContext("/v1/authorize", exchange -> handleJson(exchange, CedarSidecarServer::authorize));
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
-        System.out.println("Floci Cedar sidecar listening on port " + port);
+        LOG.infov("Floci Cedar sidecar listening on port {0}", port);
         return server;
     }
 

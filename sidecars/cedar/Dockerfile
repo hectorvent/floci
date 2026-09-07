@@ -6,8 +6,11 @@ COPY sidecars/cedar/src ./src
 RUN mvn -B -DskipTests package
 
 FROM eclipse-temurin:25-jre
+RUN groupadd --system --gid 10001 floci \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin floci
 WORKDIR /app
-COPY --from=build /build/target/floci-cedar-sidecar-1.0.0.jar /app/sidecar.jar
-COPY --from=build /build/target/dependency /app/lib
+COPY --chown=10001:10001 --from=build /build/target/floci-cedar-sidecar-1.0.0.jar /app/sidecar.jar
+COPY --chown=10001:10001 --from=build /build/target/dependency /app/lib
+USER 10001:10001
 EXPOSE 8180
 ENTRYPOINT ["java", "-cp", "/app/sidecar.jar:/app/lib/*", "io.github.hectorvent.floci.cedar.CedarSidecarServer"]
