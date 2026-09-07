@@ -435,7 +435,8 @@ public class SnsService implements Resettable, ResourceProvider {
             if (dedupId == null && "true".equals(topic.getAttributes().get("ContentBasedDeduplication"))) {
                 dedupId = sha256(message);
             }
-            if (dedupId != null && isDuplicate(effectiveArn, dedupId)) {
+            if (dedupId != null && isDuplicate(effectiveArn, messageGroupId, dedupId,
+                    isGroupScopedDeduplication(topic))) {
                 LOG.debugv("FIFO dedup: skipping duplicate for topic {0}, dedupId {1}", effectiveArn, dedupId);
                 return UUID.randomUUID().toString();
             }
@@ -841,6 +842,7 @@ public class SnsService implements Resettable, ResourceProvider {
         }
 
         boolean isFifo = "true".equals(topic.getAttributes().get("FifoTopic"));
+        boolean groupScopedDedup = isGroupScopedDeduplication(topic);
         List<String[]> successful = new ArrayList<>();
         List<String[]> failed = new ArrayList<>();
         for (Map<String, Object> entry : entries) {
@@ -871,7 +873,8 @@ public class SnsService implements Resettable, ResourceProvider {
             if (isFifo && messageDeduplicationId == null && "true".equals(topic.getAttributes().get("ContentBasedDeduplication"))) {
                 messageDeduplicationId = sha256(message);
             }
-            if (isFifo && messageDeduplicationId != null && isDuplicate(topicArn, messageDeduplicationId)) {
+            if (isFifo && messageDeduplicationId != null && isDuplicate(topicArn, messageGroupId,
+                    messageDeduplicationId, groupScopedDedup)) {
                 successful.add(new String[]{id, UUID.randomUUID().toString()});
                 continue;
             }
@@ -1252,8 +1255,22 @@ public class SnsService implements Resettable, ResourceProvider {
         return true;
     }
 
-    private boolean isDuplicate(String topicArn, String deduplicationId) {
-        String cacheKey = topicArn + ":" + deduplicationId;
+    /**
+     * A FIFO topic with {@code FifoThroughputScope=MessageGroup} deduplicates within each message
+     * group rather than across the whole topic, so the same {@code MessageDeduplicationId} sent
+     * under two different {@code MessageGroupId}s is two distinct messages. {@code Topic} is the
+     * AWS default and keeps the scope topic-wide.
+     */
+    private static boolean isGroupScopedDeduplication(Topic topic) {
+        return "MessageGroup".equalsIgnoreCase(topic.getAttributes().get("FifoThroughputScope"));
+    }
+
+    private boolean isDuplicate(String topicArn, String messageGroupId, String deduplicationId,
+                                boolean groupScoped) {
+        // NUL delimits the group from the dedup id. SNS allows neither to contain it, so a
+        // group-scoped key can never collide with a topic-scoped one.
+        String scopedId = groupScoped ? messageGroupId + "\0" + deduplicationId : deduplicationId;
+        String cacheKey = topicArn + ":" + scopedId;
         Instant now = Instant.now();
         Instant existing = fifoDeduplicationCache.get(cacheKey);
         if (existing != null && existing.plus(FIFO_DEDUP_WINDOW).isAfter(now)) {
