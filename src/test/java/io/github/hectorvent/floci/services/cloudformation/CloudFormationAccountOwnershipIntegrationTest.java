@@ -77,7 +77,7 @@ class CloudFormationAccountOwnershipIntegrationTest {
                 .contentType("application/x-www-form-urlencoded")
                 .formParam("Action", "DeleteStack")
                 .formParam("StackName", "cfn-cross-account-mutation")
-                .when().post("/").then().statusCode(400);
+                .when().post("/").then().statusCode(200);
         given().header("Authorization", auth(ACCOUNT_2, US_EAST_1))
                 .contentType("application/x-www-form-urlencoded")
                 .formParam("Action", "DeleteStack")

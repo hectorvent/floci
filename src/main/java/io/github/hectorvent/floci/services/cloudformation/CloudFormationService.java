@@ -139,13 +139,6 @@ public class CloudFormationService implements ResourceProvider {
         return stack.getAccountId() != null ? stack.getAccountId() : config.defaultAccountId();
     }
 
-    private boolean hasForeignStack(String stackName, String region, String accountId) {
-        return stacks.values().stream().anyMatch(stack ->
-                stackName.equals(stack.getStackName())
-                        && region.equals(stack.getRegion())
-                        && !accountId.equals(ownerAccount(stack)));
-    }
-
     private String currentAccount() {
         return regionResolver.getAccountId();
     }
@@ -332,14 +325,14 @@ public class CloudFormationService implements ResourceProvider {
         // persistStack() stays outside: it is storage I/O, and compute()'s contract is that the
         // remapping function does short, non-blocking work.
         boolean isCreateType = changeSetType == null || "CREATE".equalsIgnoreCase(changeSetType);
-        if (!isCreateType && hasForeignStack(stackName, region, accountId)) {
-            throw new AwsException("ValidationError",
-                    "Stack with id " + stackName + " does not exist", 400);
-        }
         ChangeSet[] created = new ChangeSet[1];
         Stack stack = stacks.compute(stackKey(accountId, stackName, region), (k, existing) -> {
             Stack target;
             if (existing == null) {
+                if (!isCreateType) {
+                    throw new AwsException("ValidationError",
+                            "Stack with id " + stackName + " does not exist", 400);
+                }
                 target = newStack(stackName, region, accountId);
                 if (tags != null) target.getTags().putAll(tags);
                 // A CREATE change set puts a brand-new stack into REVIEW_IN_PROGRESS. Record the
@@ -738,11 +731,6 @@ public class CloudFormationService implements ResourceProvider {
         purgeExpiredDeletedStacks();
         Stack stack = resolveStack(stackName, region, accountId);
         if (stack == null) {
-            if (stackName != null && !stackName.startsWith("arn:")
-                    && hasForeignStack(stackName, region, accountId)) {
-                throw new AwsException("ValidationError",
-                        "Stack with id " + stackName + " does not exist", 400);
-            }
             if (stackName != null && stackName.startsWith("arn:")) {
                 try {
                     AwsArnUtils.Arn arn = AwsArnUtils.parse(stackName);
