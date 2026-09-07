@@ -2871,14 +2871,17 @@ public class AslExecutor {
                     String path = val.asText();
                     if (path.startsWith("$$.")) {
                         // Context reference: $$. → resolve against context as $.
-                        resolved.set(realKey, resolvePath("$." + path.substring(3), context));
+                        String contextPath = "$." + path.substring(3);
+                        resolved.set(realKey, context == null
+                                ? NullNode.getInstance()
+                                : resolvePayloadTemplateReference(contextPath, context, null, key, context));
                     } else if ("$$".equals(path)) {
                         resolved.set(realKey, context);
                     } else {
                         // Pass the Context Object through so a $$. reference nested inside an
                         // intrinsic (e.g. States.Format(..., $$.Map.Item.Value.x)) can resolve it;
                         // for a plain $. or States.* input reference, context is simply ignored.
-                        resolved.set(realKey, resolvePath(path, input, context));
+                        resolved.set(realKey, resolvePayloadTemplateReference(path, input, context, key, input));
                     }
                 } else if (val.isObject() || val.isArray()) {
                     resolved.set(key, resolveParameters(val, input, context));
@@ -2941,6 +2944,117 @@ public class AslExecutor {
             return MissingNode.getInstance();
         }
         return walkPath(splitPathSegments(path), 0, root);
+    }
+
+    /**
+     * Resolves a {@code ".$"} payload template reference (a {@code Parameters}, {@code
+     * ResultSelector}, or {@code ItemSelector} field). AWS keeps one narrow leniency here: an
+     * out-of-range array index resolves to null and the state keeps running (confirmed against
+     * real AWS). Every other unresolvable reference, such as a missing object key at any depth,
+     * fails the state with {@code States.Runtime} naming the path, the field, and the input it
+     * was resolved against, rather than silently continuing with null. Wildcard paths keep the
+     * pre-existing null-collapsing behavior, since a projection already filters out its own
+     * misses rather than failing.
+     *
+     * @param path         the reference path or {@code States.*} intrinsic taken from the field's
+     *                     {@code ".$"} value
+     * @param searchRoot   what the path is resolved against
+     * @param context      the Context Object, for a {@code States.*} intrinsic argument nested in
+     *                     the reference
+     * @param fieldKey     the original template key (including its {@code ".$"} suffix), named in
+     *                     the failure cause
+     * @param reportedInput the value named as "the input" in the failure cause
+     */
+    private JsonNode resolvePayloadTemplateReference(String path, JsonNode searchRoot, JsonNode context,
+                                                       String fieldKey, JsonNode reportedInput) {
+        if (path == null || "$".equals(path)) {
+            return searchRoot;
+        }
+        if (path.startsWith("States.")) {
+            return evaluateIntrinsic(path, searchRoot, context);
+        }
+        if (!path.startsWith("$.") && !path.startsWith("$[")) {
+            return NullNode.getInstance();
+        }
+        String[] parts = splitPathSegments(path);
+        if (containsWildcard(parts)) {
+            JsonNode value = walkPath(parts, 0, searchRoot);
+            return value.isMissingNode() ? NullNode.getInstance() : value;
+        }
+        PathLookup lookup = walkPathTracked(parts, 0, searchRoot);
+        if (!lookup.value.isMissingNode()) {
+            return lookup.value;
+        }
+        if (lookup.outOfRangeArrayIndex) {
+            return NullNode.getInstance();
+        }
+        throw new FailStateException("States.Runtime",
+                "The JSONPath '" + path + "' specified for the field '" + fieldKey
+                        + "' could not be found in the input '" + reportedInput + "'");
+    }
+
+    private static boolean containsWildcard(String[] parts) {
+        for (String part : parts) {
+            if ("*".equals(part)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The result of {@link #walkPathTracked}: the resolved value (or a {@link MissingNode}), and
+     * whether the miss was specifically an out-of-range array index, the one case AWS resolves to
+     * null instead of failing the state.
+     */
+    private static final class PathLookup {
+        final JsonNode value;
+        final boolean outOfRangeArrayIndex;
+
+        PathLookup(JsonNode value, boolean outOfRangeArrayIndex) {
+            this.value = value;
+            this.outOfRangeArrayIndex = outOfRangeArrayIndex;
+        }
+    }
+
+    /**
+     * Walks a wildcard-free reference path like {@link #walkPath}, but also reports whether an
+     * unresolved result came from indexing past the end of an array, which real AWS resolves to
+     * null, as opposed to a missing object key or a step through a non-container value at any
+     * position, which fails the state.
+     */
+    private PathLookup walkPathTracked(String[] parts, int idx, JsonNode current) {
+        for (int i = idx; i < parts.length; i++) {
+            if (current == null || current.isMissingNode() || current.isNull()) {
+                return new PathLookup(MissingNode.getInstance(), false);
+            }
+            String part = parts[i];
+            boolean arrayIndexStep = current.isArray() && isArrayIndex(part);
+            int index = arrayIndexStep ? parseArrayIndex(part) : -1;
+            if (arrayIndexStep && index < 0) {
+                return new PathLookup(MissingNode.getInstance(), true);
+            }
+            JsonNode next = arrayIndexStep ? current.path(index) : current.path(part);
+            if (next.isMissingNode()) {
+                return new PathLookup(MissingNode.getInstance(), arrayIndexStep);
+            }
+            current = next;
+        }
+        return new PathLookup(current, false);
+    }
+
+    /**
+     * Parses an all-digit path segment as an array index, returning -1 for a value that overflows
+     * {@code int} rather than throwing, since AWS treats any index past the end of the array
+     * (including one too large to represent) as an out-of-range miss instead of a parse failure.
+     */
+    private static int parseArrayIndex(String segment) {
+        try {
+            long value = Long.parseLong(segment);
+            return value > Integer.MAX_VALUE ? -1 : (int) value;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     /** Splits dotted, indexed, wildcard, and bracket-quoted AWS reference-path segments. */
