@@ -332,10 +332,10 @@ public class TlsConfigSource implements ConfigSource {
         String iotEndpoint = resolveProperty("floci.services.iot.endpoint-address", "").strip();
         if (!iotEndpoint.isEmpty()) {
             try {
-                // A URL or a path here is a typo: java.net.URI would read "https" as the host.
+                // Anything beyond host[:port] is a typo: java.net.URI would read "https" as the host of a URL.
                 URI uri = new URI("//" + iotEndpoint);
                 String host = uri.getHost();
-                if (host == null || !uri.getPath().isEmpty() || uri.getUserInfo() != null) {
+                if (host == null || uri.getUserInfo() != null || !iotEndpoint.equals(uri.getRawAuthority())) {
                     LOG.warnv("TLS: floci.services.iot.endpoint-address is not a host or host:port, not added to the certificate: {0}",
                             iotEndpoint);
                 } else if (!isDefaultHostname(host)) {

@@ -310,7 +310,8 @@ class TlsConfigSourceHostnameExtractionTest {
     @Test
     void testIotEndpointAddressWithASchemeOrPathIsSkipped() throws Exception {
         for (String typo : List.of("https://iot.example.localhost.floci.io", "iot.example.localhost.floci.io:8443/",
-                "user@iot.example.localhost.floci.io", "iot.example.localhost.floci.io:abc")) {
+                "user@iot.example.localhost.floci.io", "iot.example.localhost.floci.io:abc",
+                "iot.example.localhost.floci.io?x=1", "iot.example.localhost.floci.io#fragment")) {
             System.setProperty("floci.services.iot.endpoint-address", typo);
 
             assertTrue(invokeExtractCustomHostnames().isEmpty(), typo);
