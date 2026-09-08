@@ -334,7 +334,9 @@ public class StsQueryHandler {
 
     private Response handleAssumeRoleWithSAML(MultivaluedMap<String, String> params) {
         Response validation = validateRequired(params, "RoleArn", "PrincipalArn", "SAMLAssertion");
-        if (validation != null) return validation;
+        if (validation != null) {
+            return validation;
+        }
         String roleArn = getParam(params, "RoleArn");
         String principalArn = getParam(params, "PrincipalArn");
         int durationSeconds = getIntParam(params, "DurationSeconds", 3600);
@@ -349,8 +351,10 @@ public class StsQueryHandler {
         }
         boolean rolePair = verified.roles().stream().anyMatch(pair ->
                 roleArn.equals(pair.roleArn()) && principalArn.equals(pair.principalArn()));
-        if (!rolePair) throw new AwsException("InvalidIdentityToken",
-                "The SAML assertion does not contain the requested role and principal.", 400);
+        if (!rolePair) {
+            throw new AwsException("InvalidIdentityToken",
+                    "The SAML assertion does not contain the requested role and principal.", 400);
+        }
 
         String callerAccountId = regionResolver.getAccountId();
         String accountId = AwsArnUtils.accountOrDefault(roleArn, callerAccountId);
@@ -366,11 +370,15 @@ public class StsQueryHandler {
         }
 
         String sessionName = verified.subject().replaceAll("[^A-Za-z0-9+=,.@_-]", "_");
-        if (sessionName.length() > 64) sessionName = sessionName.substring(0, 64);
+        if (sessionName.length() > 64) {
+            sessionName = sessionName.substring(0, 64);
+        }
         Instant requestedExpiration = Instant.now().plusSeconds(durationSeconds);
         Instant roleExpiration = Instant.now().plusSeconds(role.getMaxSessionDuration());
         Instant expiration = verified.expiration().isBefore(requestedExpiration) ? verified.expiration() : requestedExpiration;
-        if (roleExpiration.isBefore(expiration)) expiration = roleExpiration;
+        if (roleExpiration.isBefore(expiration)) {
+            expiration = roleExpiration;
+        }
         String accessKeyId = "ASIA" + randomId(16);
         String secretKey = randomSecret(40);
         String sessionToken = randomSecret(200);

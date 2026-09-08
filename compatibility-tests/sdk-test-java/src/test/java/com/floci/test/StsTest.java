@@ -315,23 +315,33 @@ class StsTest {
         return Base64.getEncoder().encodeToString(certificate.getEncoded());
     }
 
+    private static Document parseDocument(String xml) throws Exception {
+        DocumentBuilderFactory parserFactory = DocumentBuilderFactory.newInstance();
+        parserFactory.setNamespaceAware(true);
+        parserFactory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        parserFactory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        parserFactory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        parserFactory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        parserFactory.setXIncludeAware(false);
+        parserFactory.setExpandEntityReferences(false);
+        return parserFactory.newDocumentBuilder().parse(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+    }
+
     private static String signedAssertion(String roleArn, String principalArn, String issuer) {
         String id = "_" + UUID.randomUUID();
         Instant expiry = Instant.now().plusSeconds(300);
         String xml = "<saml:Assertion xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"" + id
                 + "\" Version=\"2.0\" IssueInstant=\"" + Instant.now() + "\"><saml:Issuer>" + issuer
                 + "</saml:Issuer><saml:Subject><saml:NameID Format=\"persistent\">sdk-test-subject</saml:NameID>"
-                + "<saml:SubjectConfirmation><saml:SubjectConfirmationData Recipient=\"https://signin.aws.amazon.com/saml\" NotOnOrAfter=\""
+                + "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\"><saml:SubjectConfirmationData Recipient=\"https://signin.aws.amazon.com/saml\" NotOnOrAfter=\""
                 + expiry + "\"/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore=\""
                 + Instant.now().minusSeconds(30) + "\" NotOnOrAfter=\"" + expiry
                 + "\"><saml:AudienceRestriction><saml:Audience>urn:amazon:webservices</saml:Audience></saml:AudienceRestriction></saml:Conditions>"
                 + "<saml:AttributeStatement><saml:Attribute Name=\"https://aws.amazon.com/SAML/Attributes/Role\"><saml:AttributeValue>"
                 + roleArn + "," + principalArn + "</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion>";
         try {
-            DocumentBuilderFactory parserFactory = DocumentBuilderFactory.newInstance();
-            parserFactory.setNamespaceAware(true);
-            Document document = parserFactory.newDocumentBuilder().parse(
-                    new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+            Document document = parseDocument(xml);
             Element assertion = document.getDocumentElement();
             assertion.setIdAttribute("ID", true);
             XMLSignatureFactory factory = XMLSignatureFactory.getInstance("DOM");
