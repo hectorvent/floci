@@ -4,7 +4,9 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.cloudwatch.metricstreams.model.MetricStream;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.services.cloudwatch.metricstreams.model.MetricStreamFilter;
+import io.github.hectorvent.floci.services.cloudwatch.metricstreams.model.MetricStreamStatisticsConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +16,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -127,6 +131,77 @@ class CloudWatchMetricStreamsServiceTest {
                 assertThrows(AwsException.class, () -> service.stopMetricStreams(List.of(), REGION)).getErrorCode());
         assertEquals("ResourceNotFoundException",
                 assertThrows(AwsException.class, () -> service.stopMetricStreams(List.of("nope"), REGION)).getErrorCode());
+    }
+
+    @Test
+    void aBatchNamingAMissingStreamChangesNothing() {
+        service.putMetricStream(stream("ops"), REGION);
+
+        AwsException e = assertThrows(AwsException.class,
+                () -> service.stopMetricStreams(List.of("ops", "nope"), REGION));
+
+        assertEquals("ResourceNotFoundException", e.getErrorCode());
+        assertEquals(MetricStream.STATE_RUNNING, service.getMetricStream("ops", REGION).getState());
+    }
+
+    @Test
+    void putRejectsAFilterWithoutANamespace() {
+        MetricStream bad = stream("ops");
+        bad.setExcludeFilters(List.of(new MetricStreamFilter(null, List.of("Errors"))));
+
+        AwsException e = assertThrows(AwsException.class, () -> service.putMetricStream(bad, REGION));
+        assertEquals("MissingParameter", e.getErrorCode());
+        assertThrows(AwsException.class, () -> service.getMetricStream("ops", REGION));
+    }
+
+    @Test
+    void putRejectsAnIncompleteStatisticsConfiguration() {
+        MetricStreamStatisticsConfiguration noMetrics = new MetricStreamStatisticsConfiguration();
+        noMetrics.setAdditionalStatistics(List.of("p99"));
+        MetricStream first = stream("ops");
+        first.setStatisticsConfigurations(List.of(noMetrics));
+        assertEquals("InvalidParameterValue",
+                assertThrows(AwsException.class, () -> service.putMetricStream(first, REGION)).getErrorCode());
+
+        MetricStreamStatisticsConfiguration noStatistics = new MetricStreamStatisticsConfiguration();
+        noStatistics.setIncludeMetrics(List.of(
+                new MetricStreamStatisticsConfiguration.IncludeMetric("AWS/EC2", "CPUUtilization")));
+        MetricStream second = stream("ops");
+        second.setStatisticsConfigurations(List.of(noStatistics));
+        assertEquals("InvalidParameterValue",
+                assertThrows(AwsException.class, () -> service.putMetricStream(second, REGION)).getErrorCode());
+
+        MetricStreamStatisticsConfiguration blankMetric = new MetricStreamStatisticsConfiguration();
+        blankMetric.setIncludeMetrics(List.of(
+                new MetricStreamStatisticsConfiguration.IncludeMetric("AWS/EC2", null)));
+        blankMetric.setAdditionalStatistics(List.of("p99"));
+        MetricStream third = stream("ops");
+        third.setStatisticsConfigurations(List.of(blankMetric));
+        assertEquals("MissingParameter",
+                assertThrows(AwsException.class, () -> service.putMetricStream(third, REGION)).getErrorCode());
+        assertTrue(service.listMetricStreams(REGION).isEmpty());
+    }
+
+    @Test
+    void listPagesInNameOrderWithAnOpaqueToken() {
+        for (String name : List.of("c", "a", "b")) {
+            service.putMetricStream(stream(name), REGION);
+        }
+
+        PaginatedResult<MetricStream> first = service.listMetricStreams(2, null, REGION);
+        assertEquals(List.of("a", "b"), first.items().stream().map(MetricStream::getName).toList());
+        assertNotNull(first.nextToken());
+
+        PaginatedResult<MetricStream> second = service.listMetricStreams(2, first.nextToken(), REGION);
+        assertEquals(List.of("c"), second.items().stream().map(MetricStream::getName).toList());
+        assertNull(second.nextToken());
+
+        assertEquals("InvalidNextToken",
+                assertThrows(AwsException.class,
+                        () -> service.listMetricStreams(2, "not base64!", REGION)).getErrorCode());
+        assertEquals("InvalidNextToken",
+                assertThrows(AwsException.class,
+                        () -> service.listMetricStreams(0, null, REGION)).getErrorCode());
     }
 
     @Test

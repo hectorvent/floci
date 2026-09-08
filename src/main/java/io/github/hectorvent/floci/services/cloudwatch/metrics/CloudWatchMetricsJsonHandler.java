@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
 import io.github.hectorvent.floci.services.cloudwatch.dashboards.CloudWatchDashboardsService;
 import io.github.hectorvent.floci.services.cloudwatch.dashboards.model.Dashboard;
 import io.github.hectorvent.floci.services.cloudwatch.metricstreams.CloudWatchMetricStreamsService;
@@ -472,9 +473,12 @@ public class CloudWatchMetricsJsonHandler {
     }
 
     private Response handleListMetricStreams(JsonNode request, String region) {
+        Integer maxResults = request.hasNonNull("MaxResults") ? request.path("MaxResults").asInt() : null;
+        PaginatedResult<MetricStream> page = metricStreamsService.listMetricStreams(
+                maxResults, request.path("NextToken").asText(null), region);
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode entries = response.putArray("Entries");
-        for (MetricStream stream : metricStreamsService.listMetricStreams(region)) {
+        for (MetricStream stream : page.items()) {
             ObjectNode entry = entries.addObject();
             entry.put("Arn", stream.getArn());
             entry.put("Name", stream.getName());
@@ -483,6 +487,9 @@ public class CloudWatchMetricsJsonHandler {
             entry.put("OutputFormat", stream.getOutputFormat());
             entry.put("CreationDate", stream.getCreationDate());
             entry.put("LastUpdateDate", stream.getLastUpdateDate());
+        }
+        if (page.nextToken() != null) {
+            response.put("NextToken", page.nextToken());
         }
         return Response.ok(response).build();
     }

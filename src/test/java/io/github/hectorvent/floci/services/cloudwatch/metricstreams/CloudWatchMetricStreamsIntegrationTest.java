@@ -13,6 +13,8 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.not;
 
 /**
@@ -175,6 +177,36 @@ class CloudWatchMetricStreamsIntegrationTest {
                 .post("/")
             .then()
                 .statusCode(404);
+    }
+
+    @Test
+    void listPagesOverBothProtocols() {
+        putStream("paged-a");
+        putStream("paged-b");
+
+        String token = query("ListMetricStreams")
+                .formParam("MaxResults", "1")
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body("ListMetricStreamsResponse.ListMetricStreamsResult.NextToken", notNullValue())
+                .extract().path("ListMetricStreamsResponse.ListMetricStreamsResult.NextToken");
+
+        json("ListMetricStreams", "{\"MaxResults\": 1, \"NextToken\": \"" + token + "\"}")
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body("Entries", hasSize(1));
+
+        query("ListMetricStreams")
+                .formParam("NextToken", "not base64!")
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("InvalidNextToken"));
     }
 
     @Test

@@ -2,6 +2,8 @@ package io.github.hectorvent.floci.services.cloudwatch.metrics;
 
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.AwsQueryResponse;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
+import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.common.XmlBuilder;
 import io.github.hectorvent.floci.services.cloudwatch.dashboards.CloudWatchDashboardsService;
 import io.github.hectorvent.floci.services.cloudwatch.dashboards.model.Dashboard;
@@ -435,9 +437,12 @@ public class CloudWatchMetricsQueryHandler {
     }
 
     private Response handleListMetricStreams(MultivaluedMap<String, String> params, String region) {
+        PaginatedResult<MetricStream> page = metricStreamsService.listMetricStreams(
+                Pagination.parseMaxResults(params.getFirst("MaxResults"), "InvalidParameterValue"),
+                params.getFirst("NextToken"), region);
         DateTimeFormatter fmt = DateTimeFormatter.ISO_INSTANT;
         XmlBuilder xml = new XmlBuilder().start("Entries");
-        for (MetricStream stream : metricStreamsService.listMetricStreams(region)) {
+        for (MetricStream stream : page.items()) {
             xml.start("member")
                     .elem("Arn", stream.getArn())
                     .elem("Name", stream.getName())
@@ -449,6 +454,9 @@ public class CloudWatchMetricsQueryHandler {
                     .end("member");
         }
         xml.end("Entries");
+        if (page.nextToken() != null) {
+            xml.elem("NextToken", page.nextToken());
+        }
         return Response.ok(AwsQueryResponse.envelope("ListMetricStreams", null, xml.build())).build();
     }
 

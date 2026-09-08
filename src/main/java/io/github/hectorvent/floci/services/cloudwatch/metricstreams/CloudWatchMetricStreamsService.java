@@ -2,15 +2,20 @@ package io.github.hectorvent.floci.services.cloudwatch.metricstreams;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.PaginatedResult;
+import io.github.hectorvent.floci.core.common.Pagination;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.cloudwatch.metricstreams.model.MetricStream;
+import io.github.hectorvent.floci.services.cloudwatch.metricstreams.model.MetricStreamFilter;
+import io.github.hectorvent.floci.services.cloudwatch.metricstreams.model.MetricStreamStatisticsConfiguration;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,6 +35,9 @@ public class CloudWatchMetricStreamsService {
 
     /** The OutputFormat values PutMetricStream documents. */
     private static final Set<String> OUTPUT_FORMATS = Set.of("json", "opentelemetry0.7", "opentelemetry1.0");
+
+    /** ListMetricStreams documents MaxResults as 1 to 500. */
+    private static final int MAX_PAGE = 500;
 
     private final StorageBackend<String, MetricStream> streamStore;
     private final RegionResolver regionResolver;
@@ -69,6 +77,9 @@ public class CloudWatchMetricStreamsService {
             throw new AwsException("InvalidParameterCombination",
                     "IncludeFilters and ExcludeFilters cannot both be specified.", 400);
         }
+        validateFilters(stream.getIncludeFilters(), "IncludeFilters");
+        validateFilters(stream.getExcludeFilters(), "ExcludeFilters");
+        validateStatisticsConfigurations(stream.getStatisticsConfigurations());
 
         long now = Instant.now().getEpochSecond();
         MetricStream existing = streamStore.get(key(region, stream.getName())).orElse(null);
@@ -105,6 +116,15 @@ public class CloudWatchMetricStreamsService {
                 .toList();
     }
 
+    /**
+     * One page of the region's streams in name order. The token is the shared opaque cursor,
+     * so a page stays resumable when streams are added or removed between requests.
+     */
+    public PaginatedResult<MetricStream> listMetricStreams(Integer maxResults, String nextToken, String region) {
+        return Pagination.paginate(listMetricStreams(region), MetricStream::getName,
+                maxResults, nextToken, MAX_PAGE, "InvalidNextToken");
+    }
+
     public void startMetricStreams(List<String> names, String region) {
         setState(names, MetricStream.STATE_RUNNING, region);
     }
@@ -113,18 +133,54 @@ public class CloudWatchMetricStreamsService {
         setState(names, MetricStream.STATE_STOPPED, region);
     }
 
+    /**
+     * Every named stream is resolved before any is changed, so a batch that names a missing
+     * stream fails as a whole instead of leaving the earlier names already switched.
+     */
     private void setState(List<String> names, String state, String region) {
         if (names == null || names.isEmpty()) {
             throw new AwsException("MissingParameter", "The parameter Names is required.", 400);
         }
-        long now = Instant.now().getEpochSecond();
+        List<MetricStream> streams = new ArrayList<>();
         for (String name : names) {
-            MetricStream stream = getMetricStream(name, region);
+            streams.add(getMetricStream(name, region));
+        }
+        long now = Instant.now().getEpochSecond();
+        for (MetricStream stream : streams) {
             stream.setState(state);
             stream.setLastUpdateDate(now);
-            streamStore.put(key(region, name), stream);
+            streamStore.put(key(region, stream.getName()), stream);
         }
         LOG.debugv("Metric streams {0} in {1} are now {2}", names, region, state);
+    }
+
+    private static void validateFilters(List<MetricStreamFilter> filters, String element) {
+        for (MetricStreamFilter filter : filters) {
+            if (filter.getNamespace() == null || filter.getNamespace().isBlank()) {
+                throw new AwsException("MissingParameter",
+                        "Each member of " + element + " requires a Namespace.", 400);
+            }
+        }
+    }
+
+    private static void validateStatisticsConfigurations(List<MetricStreamStatisticsConfiguration> configurations) {
+        for (MetricStreamStatisticsConfiguration configuration : configurations) {
+            if (configuration.getIncludeMetrics().isEmpty()) {
+                throw new AwsException("InvalidParameterValue",
+                        "Each member of StatisticsConfigurations requires at least one IncludeMetrics entry.", 400);
+            }
+            if (configuration.getAdditionalStatistics().isEmpty()) {
+                throw new AwsException("InvalidParameterValue",
+                        "Each member of StatisticsConfigurations requires at least one AdditionalStatistics entry.", 400);
+            }
+            for (var metric : configuration.getIncludeMetrics()) {
+                if (metric.namespace() == null || metric.namespace().isBlank()
+                        || metric.metricName() == null || metric.metricName().isBlank()) {
+                    throw new AwsException("MissingParameter",
+                            "Each IncludeMetrics entry requires a Namespace and a MetricName.", 400);
+                }
+            }
+        }
     }
 
     /**

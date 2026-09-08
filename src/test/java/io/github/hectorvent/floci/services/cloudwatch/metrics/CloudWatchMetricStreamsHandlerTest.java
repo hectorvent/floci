@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.cloudwatch.metrics;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.cloudwatch.dashboards.CloudWatchDashboardsService;
@@ -17,6 +18,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -119,6 +121,38 @@ class CloudWatchMetricStreamsHandlerTest {
         delete.add("Name", "stream-c");
         assertTrue(query("DeleteMetricStream", delete).contains("<DeleteMetricStreamResult"));
         assertEquals(1, streamsService.listMetricStreams(REGION).size());
+    }
+
+    @Test
+    void bothProtocolsPageTheListWithMaxResultsAndNextToken() throws Exception {
+        query("PutMetricStream", putParams("page-a"));
+        query("PutMetricStream", putParams("page-b"));
+        query("PutMetricStream", putParams("page-c"));
+
+        MultivaluedMap<String, String> first = new MultivaluedHashMap<>();
+        first.add("MaxResults", "2");
+        String xml = query("ListMetricStreams", first);
+        assertTrue(xml.contains("<Name>page-a</Name>"));
+        assertTrue(xml.contains("<Name>page-b</Name>"));
+        assertFalse(xml.contains("<Name>page-c</Name>"));
+        String token = xml.substring(xml.indexOf("<NextToken>") + "<NextToken>".length(), xml.indexOf("</NextToken>"));
+
+        JsonNode second = MAPPER.valueToTree(jsonHandler.handle("ListMetricStreams",
+                MAPPER.readTree("{\"MaxResults\": 2, \"NextToken\": \"" + token + "\"}"), REGION).getEntity());
+        assertEquals(1, second.path("Entries").size());
+        assertEquals("page-c", second.path("Entries").get(0).path("Name").asText());
+        assertFalse(second.has("NextToken"));
+
+        // The Query controller renders AwsException as the XML error envelope.
+        AwsException bad = assertThrows(AwsException.class,
+                () -> queryHandler.handle("ListMetricStreams", withToken("not base64!"), REGION));
+        assertEquals("InvalidNextToken", bad.getErrorCode());
+    }
+
+    private static MultivaluedMap<String, String> withToken(String token) {
+        MultivaluedMap<String, String> params = new MultivaluedHashMap<>();
+        params.add("NextToken", token);
+        return params;
     }
 
     @Test
