@@ -3028,6 +3028,21 @@ class DynamoDbServiceTest {
     }
 
     @Test
+    void batchWriteItemReportsAMissingKeyAsASchemaMismatch() {
+        createUsersTable("us-east-1");
+        var noKey = mapper.createObjectNode();
+        noKey.set("name", attributeValue("S", "x"));
+
+        var putError = assertThrows(AwsException.class, () -> service.batchWriteItem(
+                Map.of("Users", List.of(putRequest(noKey))), "us-east-1"));
+        assertEquals("The provided key element does not match the schema", putError.getMessage());
+
+        var deleteError = assertThrows(AwsException.class, () -> service.batchWriteItem(
+                Map.of("Users", List.of(deleteRequest(noKey))), "us-east-1"));
+        assertEquals("The provided key element does not match the schema", deleteError.getMessage());
+    }
+
+    @Test
     void putItemStillNamesTheMismatchedKeyTypes() {
         createUsersTable("us-east-1");
         var wrongType = mapper.createObjectNode();
@@ -3074,6 +3089,12 @@ class DynamoDbServiceTest {
     private JsonNode putRequest(ObjectNode item) {
         ObjectNode request = mapper.createObjectNode();
         request.set("PutRequest", mapper.createObjectNode().set("Item", item));
+        return request;
+    }
+
+    private JsonNode deleteRequest(ObjectNode key) {
+        ObjectNode request = mapper.createObjectNode();
+        request.set("DeleteRequest", mapper.createObjectNode().set("Key", key));
         return request;
     }
 

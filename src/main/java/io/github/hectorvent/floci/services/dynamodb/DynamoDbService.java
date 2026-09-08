@@ -3089,12 +3089,12 @@ public class DynamoDbService implements ResourceProvider {
     }
 
     private AwsException missingKeyException(KeySurface surface) {
-        if (surface == KeySurface.KEY_ARGUMENT) {
+        if (surface == KeySurface.ITEM_BODY) {
             return new AwsException("ValidationException",
-                    "The provided key element does not match the schema", 400);
+                    "One of the required keys was not given a value", 400);
         }
         return new AwsException("ValidationException",
-                "One of the required keys was not given a value", 400);
+                "The provided key element does not match the schema", 400);
     }
 
     // A wire-format AttributeValue must be a JSON object with exactly one type member.
