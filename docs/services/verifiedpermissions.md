@@ -76,6 +76,14 @@ Cedar-dependent AVP operation, probes its health endpoint, and reuses it until s
 pre-configured sidecar URL can be supplied when Docker Compose or another supervisor owns the
 sidecar lifecycle.
 
+The sidecar is required by operations that parse or validate Cedar, including `PutSchema`,
+identity-source entity-type validation, policy and policy-template create/update paths, and all
+`IsAuthorized*` and `BatchIsAuthorized*` evaluation paths. Read-only control-plane operations that
+do not parse or evaluate Cedar do not start the sidecar. If Docker is unavailable and
+`FLOCI_SERVICES_VERIFIEDPERMISSIONS_CEDAR_URL` is not configured, a sidecar-dependent operation
+returns the modeled `InternalServerException` response with HTTP 500. Configure an externally
+managed sidecar URL when running Floci without access to Docker.
+
 The sidecar is stateless. Each authorization request includes the relevant policies, templates,
 entities, and context, so policy-store isolation does not depend on mutable shared sidecar state.
 It uses Cedar Java 4.10.0 to preserve the `CEDAR_4` behavior advertised by AVP. A matching

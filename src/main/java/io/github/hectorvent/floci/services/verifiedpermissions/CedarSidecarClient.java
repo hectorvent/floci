@@ -87,8 +87,8 @@ public class CedarSidecarClient {
     }
 
     private JsonNode post(String path, JsonNode body, String operation) {
-        String baseUrl = manager.ensureReady();
         try {
+            String baseUrl = manager.ensureReady();
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
                     .timeout(Duration.ofSeconds(30))

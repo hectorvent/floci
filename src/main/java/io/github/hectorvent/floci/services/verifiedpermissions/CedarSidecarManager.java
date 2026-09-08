@@ -44,7 +44,11 @@ public class CedarSidecarManager {
 
     public synchronized boolean isAvailable() {
         if (resolvedUrl != null) {
-            return true;
+            if (containerId == null || probeHealth(resolvedUrl)) {
+                return true;
+            }
+            discardStaleManagedEndpoint();
+            return false;
         }
         Optional<String> configured = config.services().verifiedpermissions().cedarUrl();
         if (configured.isPresent() && !configured.get().isBlank()) {
@@ -60,7 +64,10 @@ public class CedarSidecarManager {
 
     public synchronized String ensureReady() {
         if (resolvedUrl != null) {
-            return resolvedUrl;
+            if (containerId == null || probeHealth(resolvedUrl)) {
+                return resolvedUrl;
+            }
+            discardStaleManagedEndpoint();
         }
         Optional<String> configured = config.services().verifiedpermissions().cedarUrl();
         if (configured.isPresent() && !configured.get().isBlank()) {
@@ -70,6 +77,21 @@ public class CedarSidecarManager {
         }
         startContainer();
         return resolvedUrl;
+    }
+
+    private void discardStaleManagedEndpoint() {
+        String staleUrl = resolvedUrl;
+        String staleContainerId = containerId;
+        resolvedUrl = null;
+        containerId = null;
+        LOG.warnv("Cedar sidecar at {0} is no longer healthy; restarting the managed container", staleUrl);
+        if (staleContainerId != null) {
+            try {
+                lifecycleManager.stopAndRemove(staleContainerId, null);
+            } catch (Exception e) {
+                LOG.debugv(e, "Failed to remove stale Cedar sidecar container {0}", staleContainerId);
+            }
+        }
     }
 
     private void startContainer() {
