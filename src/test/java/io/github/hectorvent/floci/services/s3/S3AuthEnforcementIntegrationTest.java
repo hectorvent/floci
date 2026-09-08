@@ -43,6 +43,7 @@ class S3AuthEnforcementIntegrationTest {
     private static final String PUBLIC_WRITE_ACL_BUCKET = "auth-public-write-acl-bucket";
     private static final String DENY_WRITE_ACL_BUCKET = "auth-deny-write-acl-bucket";
     private static final String DELETE_VERSION_BUCKET = "auth-delete-version-bucket";
+    private static final String BATCH_DELETE_VERSION_BUCKET = "auth-batch-delete-version-bucket";
     private static final String BYPASS_BUCKET = "auth-bypass-governance-bucket";
     private static final String BYPASS_KEY = "bypass-target.txt";
     private static final String CONDITIONAL_DENY_ACL_BUCKET = "auth-conditional-deny-acl-bucket";
@@ -1307,6 +1308,61 @@ class S3AuthEnforcementIntegrationTest {
         .then()
             .statusCode(403)
             .body(containsString("AccessDenied"));
+    }
+
+    @Test
+    @Order(44)
+    void batchDeleteObjectsPolicyGrantDoesNotAuthorizeVersionedDelete() {
+        given().when().put("/" + BATCH_DELETE_VERSION_BUCKET).then().statusCode(200);
+
+        given()
+            .contentType("application/xml")
+            .body("<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>")
+        .when()
+            .put("/" + BATCH_DELETE_VERSION_BUCKET + "?versioning")
+        .then()
+            .statusCode(200);
+
+        String versionId = given()
+            .header("Authorization", LOCAL_AUTH_HEADER)
+            .body("versioned batch delete target")
+        .when()
+            .put("/" + BATCH_DELETE_VERSION_BUCKET + "/" + VERSION_KEY)
+        .then()
+            .statusCode(200)
+            .extract().header("x-amz-version-id");
+
+        given()
+            .contentType("application/json")
+            .body(publicObjectActionPolicy(BATCH_DELETE_VERSION_BUCKET, "s3:DeleteObject"))
+        .when()
+            .put("/" + BATCH_DELETE_VERSION_BUCKET + "?policy")
+        .then()
+            .statusCode(200);
+
+        String deleteXml = """
+                <Delete>
+                  <Object><Key>%s</Key><VersionId>%s</VersionId></Object>
+                </Delete>
+                """.formatted(VERSION_KEY, versionId);
+
+        given()
+            .contentType("application/xml")
+            .body(deleteXml)
+        .when()
+            .post("/" + BATCH_DELETE_VERSION_BUCKET + "?delete")
+        .then()
+            .statusCode(200)
+            .body(containsString("<Code>AccessDenied</Code>"))
+            .body(not(containsString("<Deleted>")));
+
+        given()
+            .header("Authorization", LOCAL_AUTH_HEADER)
+        .when()
+            .get("/" + BATCH_DELETE_VERSION_BUCKET + "?versions&prefix=" + VERSION_KEY)
+        .then()
+            .statusCode(200)
+            .body(containsString("<VersionId>" + versionId + "</VersionId>"));
     }
 
     private static String conditionalDenyObjectActionPolicy(String bucket, String action) {
