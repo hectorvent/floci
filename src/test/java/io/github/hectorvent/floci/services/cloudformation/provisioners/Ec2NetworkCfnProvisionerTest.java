@@ -758,6 +758,45 @@ class Ec2NetworkCfnProvisionerTest {
     }
 
     @Test
+    void aReplacementThatCouldNotBeRemovedAfterAFailedStepIsOwedToTheNextCleanup() {
+        Subnet current = subnet();
+        current.setCidrBlock("10.0.1.0/24");
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(current));
+        Subnet replacement = subnet();
+        replacement.setSubnetId("subnet-replacement");
+        when(ec2.createSubnet(REGION, VPC_ID, "10.0.2.0/24", "us-east-1a")).thenReturn(replacement);
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).when(ec2).createTags(any(), any(), any());
+        doThrow(new AwsException("DependencyViolation", "in use", 400)).when(ec2).deleteSubnet(REGION, "subnet-replacement");
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID));
+        ObjectNode props = withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.2.0/24").put("AvailabilityZone", "us-east-1a"), "k", "v");
+
+        assertThrows(AwsException.class, () -> provisioner.provision(r, props, ctx(SUBNET_ID)));
+
+        assertTrue(r.getAttributes().get(CfnRollback.UPDATE_ROLLBACK_FAILURE_ATTR).contains("Could not remove subnet-replacement"));
+        assertTrue(provisioner.hasReplacementUpdate(r), "the replacement is listed in the attempt's cleanup record");
+        // The engine restores the previous resource and carries the record across (mergeFailedUpdateResourceTracking).
+        StackResource previous = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID));
+        ReplacementCleanup.mergeDisplaced(previous, r);
+        assertEquals("subnet-replacement", provisioner.updateCleanupPhysicalId(previous), "the replacement stays owed a delete");
+        provisioner.completeUpdate(previous);
+        verify(ec2, org.mockito.Mockito.times(2)).deleteSubnet(REGION, "subnet-replacement");
+    }
+
+    @Test
+    void aFreshCreateThatCouldNotBeRemovedRecordsNoCleanupEntry() {
+        when(ec2.createSubnet(eq(REGION), eq(VPC_ID), eq("10.0.1.0/24"), isNull())).thenReturn(subnet());
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).when(ec2).createTags(any(), any(), any());
+        doThrow(new AwsException("DependencyViolation", "in use", 400)).when(ec2).deleteSubnet(REGION, SUBNET_ID);
+        StackResource r = resource("AWS::EC2::Subnet", "Subnet");
+
+        assertThrows(AwsException.class, () -> provisioner.provision(r,
+                withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), "k", "v"), ctx()));
+
+        assertEquals("true", r.getAttributes().get(CfnRollback.ROLLBACK_OWNED_ATTR), "the engine's create rollback owns it");
+        assertFalse(provisioner.hasReplacementUpdate(r));
+    }
+
+    @Test
     void aFailedRestoreOfAReusedEntityKeepsTheSnapshotAndReportsTheReason() {
         RouteTable rt = new RouteTable();
         rt.setRouteTableId(RTB_ID);

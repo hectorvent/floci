@@ -30,7 +30,7 @@ import java.util.Map;
  * A provisioner calls {@link #record} at the end of a successful {@code provision} and delegates
  * the cleanup hooks and {@link #rollback} here.
  */
-final class ReplacementCleanup {
+public final class ReplacementCleanup {
 
     private static final Logger LOG = Logger.getLogger(ReplacementCleanup.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -237,6 +237,55 @@ final class ReplacementCleanup {
 
     private static String firstDisplaced(ArrayNode displaced) {
         return displaced.isEmpty() ? null : displaced.get(0).path("physicalId").asText(null);
+    }
+
+    /**
+     * Lists an entity this provision created and could not remove after a later step failed, so
+     * the next committed update or the stack delete removes it instead of nothing ever trying
+     * again. Never retainable: a failed update created it.
+     */
+    static void recordOrphan(StackResource r, String physicalId, String resourceType, String region) {
+        ObjectNode cleanup = readOrEmpty(r);
+        if (region != null) {
+            cleanup.put("region", region);
+        }
+        addDisplaced(cleanup, physicalId, resourceType, region, false);
+        write(r, cleanup);
+    }
+
+    /**
+     * Carries the entities {@code from} owes a delete onto {@code into}, keeping their attempt
+     * counts and regions and skipping ids {@code into} already lists or owns. The engine calls this
+     * through {@code mergeFailedUpdateResourceTracking} when it restores the previous resource
+     * after a failed update, so an orphan the attempt recorded is not lost with the attempt.
+     */
+    public static void mergeDisplaced(StackResource into, StackResource from) {
+        ObjectNode source = read(from);
+        if (source == null || source.path("displaced").size() == 0) {
+            return;
+        }
+        ObjectNode target = readOrEmpty(into);
+        if (target.path("region").asText(null) == null && source.path("region").asText(null) != null) {
+            target.put("region", source.path("region").asText());
+        }
+        ArrayNode displaced = target.withArray("displaced");
+        for (JsonNode entry : source.path("displaced")) {
+            String physicalId = entry.path("physicalId").asText(null);
+            if (physicalId == null || physicalId.equals(into.getPhysicalId())) {
+                continue;
+            }
+            boolean present = false;
+            for (JsonNode existing : displaced) {
+                if (physicalId.equals(existing.path("physicalId").asText(null))) {
+                    present = true;
+                    break;
+                }
+            }
+            if (!present) {
+                displaced.add(entry.deepCopy());
+            }
+        }
+        write(into, target);
     }
 
     private static void addDisplaced(ObjectNode cleanup, String physicalId, String resourceType, String region,

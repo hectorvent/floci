@@ -11,6 +11,7 @@ import io.github.hectorvent.floci.services.cloudfront.model.Distribution;
 import io.github.hectorvent.floci.services.cloudfront.model.DistributionConfig;
 import io.github.hectorvent.floci.services.cloudfront.model.Origin;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
+import io.github.hectorvent.floci.services.cloudformation.provisioners.ReplacementCleanup;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.CfnRollback;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.CloudFormationResourceRegistry;
 import io.github.hectorvent.floci.services.cloudformation.provisioners.ProvisionContext;
@@ -5373,6 +5374,9 @@ public class CloudFormationResourceProvisioner {
      * attributes must not overwrite the committed resource state.
      */
     void mergeFailedUpdateResourceTracking(StackResource previous, StackResource attempted) {
+        // Any provisioner using ReplacementCleanup: an entity the failed attempt created and could
+        // not remove is owed to the next cleanup, which runs on the restored resource.
+        ReplacementCleanup.mergeDisplaced(previous, attempted);
         if (!"AWS::ApiGatewayV2::Api".equals(previous.getResourceType())
                 || !Objects.equals(previous.getResourceType(), attempted.getResourceType())) {
             return;
