@@ -191,6 +191,13 @@ aws logs put-retention-policy \
 | `DescribeAlarms` | List alarms |
 | `DeleteAlarms` | Delete alarms |
 | `SetAlarmState` | Manually set alarm state |
+| `PutDashboard` | Create a dashboard, or replace its body when the name is taken (tags apply on create only) |
+| `GetDashboard` | Read a dashboard body and ARN |
+| `ListDashboards` | List dashboards, optionally by name prefix |
+| `DeleteDashboards` | Delete dashboards by name |
+| `TagResource` | Tag an alarm or dashboard by ARN |
+| `UntagResource` | Remove tags from an alarm or dashboard |
+| `ListTagsForResource` | List the tags of an alarm or dashboard |
 
 ### Examples
 
