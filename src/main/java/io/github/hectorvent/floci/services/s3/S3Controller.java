@@ -1422,7 +1422,7 @@ public class S3Controller {
         List<S3Service.DeleteError> authorizationErrors = new ArrayList<>();
         for (XmlParser.KeyVersion entry : entries) {
             try {
-                s3Service.authorizeObjectWrite(bucket, entry.key(), "s3:DeleteObject", authorization);
+                s3Service.authorizeDeleteObject(bucket, entry.key(), entry.versionId(), authorization);
                 authorizedEntries.add(entry);
             } catch (AwsException e) {
                 authorizationErrors.add(new S3Service.DeleteError(entry.key(), e.getErrorCode(), e.getMessage()));
@@ -1437,6 +1437,9 @@ public class S3Controller {
         if (!quiet) {
             for (S3Service.DeleteResult d : result.deleted()) {
                 builder.start("Deleted").elem("Key", d.key());
+                if (d.versionId() != null) {
+                    builder.elem("VersionId", d.versionId());
+                }
                 if (d.deleteMarker()) {
                     builder.elem("DeleteMarker", true);
                     if (d.deleteMarkerVersionId() != null) {

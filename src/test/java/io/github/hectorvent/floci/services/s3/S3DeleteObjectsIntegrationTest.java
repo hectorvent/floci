@@ -39,7 +39,8 @@ class S3DeleteObjectsIntegrationTest {
             .post("/" + bucket + "?delete")
         .then()
             .statusCode(200)
-            .body(containsString("<Key>remove.txt</Key>"));
+            .body(containsString("<Key>remove.txt</Key>"))
+            .body(not(containsString("<VersionId>")));
 
         given()
         .when()
@@ -77,7 +78,9 @@ class S3DeleteObjectsIntegrationTest {
             .post("/" + bucket + "?delete")
         .then()
             .statusCode(200)
-            .body(containsString("<Key>" + key + "</Key>"));
+            .body(containsString("<Key>" + key + "</Key>"))
+            .body(containsString("<VersionId>" + versionId1 + "</VersionId>"))
+            .body(containsString("<VersionId>" + versionId2 + "</VersionId>"));
 
         given()
         .when()
