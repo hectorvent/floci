@@ -3055,20 +3055,24 @@ class DynamoDbServiceTest {
     }
 
     @Test
-    void batchWriteItemUsesItsOwnEmptyStringKeyWording() {
+    void everySurfaceUsesTheSameEmptyStringKeyWording() {
         createUsersTable("us-east-1");
         ObjectNode emptyKey = mapper.createObjectNode();
         emptyKey.set("userId", attributeValue("S", ""));
+        String expected = "One or more parameter values are not valid. The AttributeValue for a key "
+                + "attribute cannot contain an empty string value. Key: userId";
 
         AwsException batchError = assertThrows(AwsException.class, () -> service.batchWriteItem(
                 Map.of("Users", List.of(putRequest(emptyKey))), "us-east-1"));
-        assertEquals("One or more parameter values are not valid. The AttributeValue for a key "
-                + "attribute cannot contain an empty string value. Key: userId", batchError.getMessage());
+        assertEquals(expected, batchError.getMessage());
 
         AwsException putError = assertThrows(AwsException.class,
                 () -> service.putItem("Users", emptyKey, "us-east-1"));
-        assertEquals("One or more parameter values were invalid: The AttributeValue for a key "
-                + "attribute cannot contain an empty string value. Key: userId", putError.getMessage());
+        assertEquals(expected, putError.getMessage());
+
+        AwsException getError = assertThrows(AwsException.class,
+                () -> service.getItem("Users", emptyKey, "us-east-1"));
+        assertEquals(expected, getError.getMessage());
     }
 
     @Test

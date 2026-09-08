@@ -3054,9 +3054,9 @@ public class DynamoDbService implements ResourceProvider {
         }
     }
 
-    // AWS words a key rejection by the surface the key arrived on. A Key argument and a
-    // BatchWriteItem entry report a schema mismatch, a PutItem item body names the types,
-    // and BatchWriteItem alone uses the "are not valid." form for an empty value.
+    // AWS words a key rejection by the surface the key arrived on. A PutItem item body
+    // names the mismatched types, a Key argument and a BatchWriteItem entry report a
+    // schema mismatch instead. An empty key value is worded the same on every surface.
     enum KeySurface { ITEM_BODY, KEY_ARGUMENT, BATCH_WRITE }
 
     String buildItemKey(TableDefinition table, JsonNode item) {
@@ -3133,10 +3133,8 @@ public class DynamoDbService implements ResourceProvider {
                     "The provided key element does not match the schema", 400);
         }
         if (attr.has("S") && attr.get("S").asText().isEmpty()) {
-            String prefix = surface == KeySurface.BATCH_WRITE
-                    ? "One or more parameter values are not valid. "
-                    : "One or more parameter values were invalid: ";
-            throw new AwsException("ValidationException", prefix
+            throw new AwsException("ValidationException",
+                    "One or more parameter values are not valid. "
                     + "The AttributeValue for a key attribute cannot contain an empty string value. Key: "
                     + keyName, 400);
         }
