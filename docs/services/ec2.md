@@ -160,6 +160,7 @@ Floci seeds the following resources on first use in each region so Terraform, th
 | Action | Description |
 |--------|-------------|
 | RunInstances | Creates one or more local EC2 instances, starting Docker-backed runtime when not in mock mode. |
+| CreateFleet | Creates an instant local fleet from launch-template configurations and on-demand or spot overrides. DryRun returns the AWS-compatible `DryRunOperation` error without launching instances. |
 | DescribeInstances | Lists or returns stored EC2 instances. |
 | TerminateInstances | Terminates instances and updates their stored lifecycle state. |
 | StartInstances | Starts stopped instances and their local runtime when applicable. |
@@ -168,6 +169,7 @@ Floci seeds the following resources on first use in each region so Terraform, th
 | DescribeInstanceStatus | Returns status records for stored instances. |
 | DescribeInstanceAttribute | Returns a supported attribute for an instance. |
 | ModifyInstanceAttribute | Updates supported mutable attributes for an instance. |
+| ModifyInstanceMetadataOptions | Updates an instance's IMDS options, changing only the fields the request names. |
 
 ### VPCs
 
@@ -257,9 +259,43 @@ Floci seeds the following resources on first use in each region so Terraform, th
 | DeleteRouteTable | Deletes a route table from the local EC2 store. |
 | AssociateRouteTable | Associates a route table with a subnet. |
 | DisassociateRouteTable | Removes a route table association. |
-| CreateRoute | Adds a route to a route table. |
+| CreateRoute | Adds a route to a route table. Accepts `VpcPeeringConnectionId` as a target (alongside `GatewayId`/`NatGatewayId`/`EgressOnlyInternetGatewayId`) and reports it back on `DescribeRouteTables`. |
 | ReplaceRoute | Replaces the target of an existing route. |
 | DeleteRoute | Removes a route from a route table. |
+
+### VPC Peering Connections
+
+| Action | Description |
+|--------|-------------|
+| CreateVpcPeeringConnection | Creates a peering connection between the local VPC and a peer VPC, in status `pending-acceptance`. |
+| AcceptVpcPeeringConnection | Transitions a `pending-acceptance` connection to `active`. |
+| DescribeVpcPeeringConnections | Lists or returns stored peering connections. |
+| ModifyVpcPeeringConnectionOptions | Sets `allow_remote_vpc_dns_resolution` independently per side. |
+| DeleteVpcPeeringConnection | Deletes a peering connection from the local EC2 store. |
+
+Real AWS never auto-accepts a connection, same-account or not: every `CreateVpcPeeringConnection`
+starts `pending-acceptance` and stays there until an explicit `AcceptVpcPeeringConnection`. The
+`auto_accept` convenience on Terraform's `aws_vpc_peering_connection` and
+`aws_vpc_peering_connection_accepter` resources is implemented by the *provider*, which simply
+issues that second call itself — so this emulator does not special-case same-account peers.
+
+A connection is stored keyed by its id alone, not `region::id` like every other EC2 resource here.
+It is meaningfully addressable from both the requester's and the accepter's side, which can be a
+different region (`peer_region`/`accepter_region`); region-scoped storage would leave the accepter's
+`AcceptVpcPeeringConnection`/`DescribeVpcPeeringConnections` calls unable to find a connection
+created under the requester's region key. `RejectVpcPeeringConnection` is not implemented — no
+Gruntwork VPC-peering example exercises it (they use `auto_accept`, not manual rejection).
+
+The accepter VPC named by `PeerVpcId` may belong to another account or region and not be modelled
+in this store at all (a cross-account or "external" peer). Its `cidrBlock` is reported only when
+that VPC happens to exist locally; the request still succeeds either way, and no CIDR is fabricated.
+
+A connection's storage entry lives under whichever account's request created it, but lookups
+(`AcceptVpcPeeringConnection`, `DescribeVpcPeeringConnections`, `ModifyVpcPeeringConnectionOptions`,
+`DeleteVpcPeeringConnection`) resolve it across every account's partition, the same pattern used for
+RAM-shared IPAM resources. `AcceptVpcPeeringConnection` additionally enforces that the caller is the
+connection's accepter — reporting a connection it cannot see as absent, not as a permission error,
+matching how AWS itself responds.
 
 ### Network ACLs
 
@@ -433,6 +469,26 @@ Route table ids follow the live API's own inconsistency: an id that does not exi
 | DescribeNatGateways | Lists or returns stored NAT gateways. |
 | DeleteNatGateway | Deletes a NAT gateway record. |
 
+### Capacity Reservations
+
+| Action | Description |
+|--------|-------------|
+| CreateCapacityReservation | Reserves EC2 instance capacity in a specific Availability Zone. |
+| DescribeCapacityReservations | Lists or returns stored Capacity Reservations. |
+| ModifyCapacityReservation | Updates `InstanceCount`, `EndDate`, `EndDateType` or `InstanceMatchCriteria` in place. |
+| CancelCapacityReservation | Marks a Capacity Reservation `cancelled` and its available count `0`, matching real AWS's retain-but-cancel behaviour rather than deleting the record. |
+
+`InstanceType`, `InstancePlatform` and `InstanceCount` are required, matching the AWS API, and
+one of `AvailabilityZone` or `AvailabilityZoneId` must be given; a request missing any of
+these is rejected with `MissingParameter`. `InstanceCount` must be greater than `0` on create
+and on modify, otherwise `InvalidParameterValue`. `InstanceMatchCriteria` defaults to `open`,
+`Tenancy` defaults to `default` and `EndDateType` defaults to `unlimited`. Creation is
+synchronous: the reservation comes back `active` on the create response rather than passing
+through `payment-pending`/`assessing`. `DescribeCapacityReservations` supports the
+`availability-zone`, `end-date-type`, `instance-match-criteria`, `instance-platform`,
+`instance-type`, `state` and `tenancy` filters alongside the shared `tag:`, `tag-key` and
+`tag-value` filters.
+
 ### Elastic IPs
 
 | Action | Description |
@@ -535,7 +591,15 @@ prefix lists, `EnaSrdSpecification`, `ConnectionTrackingSpecification`, `Primary
 
 | Action | Description |
 |--------|-------------|
-| DescribeNetworkInterfaces | Lists network interfaces known to the local EC2 service. |
+| CreateNetworkInterface | Creates a standalone elastic network interface (ENI) in a subnet, unattached. |
+| DescribeNetworkInterfaces | Lists network interfaces known to the local EC2 service, both an instance's implicit primary interface and standalone ENIs created via `CreateNetworkInterface`. |
+| AttachNetworkInterface | Attaches an available standalone ENI to a running or stopped instance at a device index. |
+| DetachNetworkInterface | Detaches a standalone ENI by attachment ID, returning it to `available`. |
+| DeleteNetworkInterface | Deletes a standalone ENI. Fails while the ENI is still attached, matching AWS. |
+
+A standalone ENI created via `CreateNetworkInterface` can also be handed to `RunInstances` as an instance's primary interface (`NetworkInterface.1.NetworkInterfaceId` / `NetworkInterface.1.DeviceIndex`) instead of letting the instance create its own implicit one, the pattern Terraform's `aws_instance` resource uses for `network_interface { network_interface_id = ... }`. AWS only allows this for a single instance per launch call; `RunInstances` rejects it otherwise with `InvalidParameterCombination`.
+
+`ModifyNetworkInterfaceAttribute` is not implemented: no example in the corpus that needed `CreateNetworkInterface` was found to need it. A route table's `CreateRoute` with a `NetworkInterfaceId` target is accepted but not recorded, since `Route` does not yet model an ENI target; a subsequent `plan` against such a route may show drift.
 
 ### Volumes
 
@@ -612,6 +676,7 @@ State is reported settled rather than transitional, as elsewhere in this service
 | `FLOCI_SERVICES_EC2_MOCK` | `false` | Skip Docker; instances jump directly to final state (useful for tests) |
 | `FLOCI_SERVICES_EC2_AWS_FAITHFUL_PRIVATE_IP` | `false` | Report the CFN/subnet-allocated private IP instead of the container bridge IP; routing and IMDS are unaffected |
 | `FLOCI_SERVICES_EC2_CONTAINER_IPS_ROUTABLE` | auto-detect | Whether an instance's container IP is reachable from the machines consuming Floci's API (Terraform, Terratest, your shell). When it is, DescribeInstances and DescribeAddresses report the container IP, so port 22 really is port 22; when it is not, they report `127.0.0.1` and reachability goes through the published high host ports. Detected by a throwaway TCP connect; set explicitly when Floci itself runs as a container |
+| `FLOCI_SERVICES_EC2_RECONCILE_CONTAINERS_ON_STARTUP` | `true` | On startup, remove instance containers this Floci left on the daemon whose record did not survive the restart or came back terminated; stopped instances are never swept |
 
 ## Requirements
 

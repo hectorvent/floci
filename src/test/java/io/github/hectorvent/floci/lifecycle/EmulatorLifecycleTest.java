@@ -60,6 +60,7 @@ class EmulatorLifecycleTest {
     @Mock private EmulatorConfig.ServicesConfig servicesConfig;
     @Mock private EmulatorConfig.Ec2ServiceConfig ec2ServiceConfig;
     @Mock private EmulatorConfig.ElbV2ServiceConfig elbv2ServiceConfig;
+    @Mock private EmulatorConfig.ElbServiceConfig elbServiceConfig;
     @Mock private IamService iamService;
     @Mock private EmulatorConfig.ElastiCacheServiceConfig elastiCacheServiceConfig;
     @Mock private ElastiCacheService elastiCacheService;
@@ -77,6 +78,7 @@ class EmulatorLifecycleTest {
     @Mock private io.github.hectorvent.floci.services.kinesisanalytics.container.FlinkContainerManager flinkContainerManager;
     @Mock private RdsService rdsService;
     @Mock private io.github.hectorvent.floci.services.elbv2.ElbV2Service elbV2Service;
+    @Mock private io.github.hectorvent.floci.services.elb.ElbClassicService elbClassicService;
     @Mock private InitializationHooksRunner initializationHooksRunner;
     @Mock private SqsEventSourcePoller sqsPoller;
     @Mock private KinesisEventSourcePoller kinesisPoller;
@@ -89,6 +91,7 @@ class EmulatorLifecycleTest {
     @Mock private PersistentPathValidator persistentPathValidator;
     @Mock private EmulatorConfig.TlsConfig tlsConfig;
     @Mock private io.github.hectorvent.floci.services.appsync.graphql.SchemaCreationWorker schemaCreationWorker;
+    @Mock private io.github.hectorvent.floci.services.stepfunctions.StepFunctionsService stepFunctionsService;
     @Mock private jakarta.enterprise.inject.Instance<io.github.hectorvent.floci.core.common.ContainerTeardown> containerTeardowns;
 
     private EmulatorLifecycle emulatorLifecycle;
@@ -102,6 +105,8 @@ class EmulatorLifecycleTest {
         Mockito.lenient().when(elbv2ServiceConfig.enabled()).thenReturn(false);
         Mockito.lenient().when(servicesConfig.elasticache()).thenReturn(elastiCacheServiceConfig);
         Mockito.lenient().when(elastiCacheServiceConfig.enabled()).thenReturn(false);
+        Mockito.lenient().when(servicesConfig.elb()).thenReturn(elbServiceConfig);
+        Mockito.lenient().when(elbServiceConfig.enabled()).thenReturn(false);
         Mockito.lenient().when(config.tls()).thenReturn(tlsConfig);
         Mockito.lenient().when(tlsConfig.enabled()).thenReturn(false);
         Mockito.lenient().when(config.port()).thenReturn(4566);
@@ -113,10 +118,10 @@ class EmulatorLifecycleTest {
                 elastiCacheProxyManager, rdsContainerManager, rdsProxyManager,
                 memoryDbContainerManager, memoryDbProxyManager,
                 docDbContainerManager, neptuneContainerManager, neptuneProxyManager,
-                rabbitMqManager, flinkContainerManager, rdsService, elbV2Service,
+                rabbitMqManager, flinkContainerManager, rdsService, elbV2Service, elbClassicService,
                 initializationHooksRunner, sqsPoller, kinesisPoller, dynamodbStreamsPoller,
                 pipesService, ec2MetadataServer, ecrRegistryManager, flociUiManager, initLifecycleState,
-                schemaCreationWorker, containerTeardowns, persistentPathValidator);
+                schemaCreationWorker, stepFunctionsService, containerTeardowns, persistentPathValidator);
         Mockito.lenient().when(containerTeardowns.iterator())
                 .thenReturn(java.util.Collections.emptyIterator());
     }
@@ -217,6 +222,20 @@ class EmulatorLifecycleTest {
         inOrder.verify(storageFactory).loadAll();
         inOrder.verify(schemaCreationWorker).recoverOrphans();
         inOrder.verify(schemaCreationWorker).rehydrateSchemas();
+    }
+
+    @Test
+    @DisplayName("Should abort abandoned Step Functions executions after loading storage")
+    void shouldAbortAbandonedStepFunctionsExecutionsAfterStorageLoad() {
+        stubStorageConfig();
+        when(initializationHooksRunner.hasHooks(InitializationHook.START)).thenReturn(false);
+        when(initializationHooksRunner.hasHooks(InitializationHook.READY)).thenReturn(false);
+
+        emulatorLifecycle.onStart(Mockito.mock(StartupEvent.class));
+
+        var inOrder = Mockito.inOrder(storageFactory, stepFunctionsService);
+        inOrder.verify(storageFactory).loadAll();
+        inOrder.verify(stepFunctionsService).abortAbandonedExecutions();
     }
 
     @Test

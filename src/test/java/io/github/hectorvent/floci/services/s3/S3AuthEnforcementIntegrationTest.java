@@ -579,6 +579,29 @@ class S3AuthEnforcementIntegrationTest {
 
     @Test
     @Order(23)
+    void virtualHostedPresignedRequestUsesOriginalHostAndPath() throws Exception {
+        String path = "/" + PRIVATE_KEY;
+        String authority = PRIVATE_BUCKET + ".localhost:" + io.restassured.RestAssured.port;
+        String signature = presignedSignature(
+                "GET", path, "test", "test", "3600", "UNSIGNED-PAYLOAD", authority);
+
+        given()
+            .header("Host", authority)
+            .queryParam("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
+            .queryParam("X-Amz-Credential", credential("test"))
+            .queryParam("X-Amz-Date", SIGNING_TIMESTAMP)
+            .queryParam("X-Amz-Expires", "3600")
+            .queryParam("X-Amz-SignedHeaders", "host")
+            .queryParam("X-Amz-Signature", signature)
+        .when()
+            .get(path)
+        .then()
+            .statusCode(200)
+            .body(equalTo("private body"));
+    }
+
+    @Test
+    @Order(24)
     void presignedRequestWithMismatchedContentSha256IsRejected() throws Exception {
         String path = "/" + PRIVATE_BUCKET + "/" + PRIVATE_KEY;
         String contentHash = sha256Hex("private body");
@@ -600,7 +623,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(24)
+    @Order(25)
     void presignedRequestWithTamperedSignatureIsRejected() {
         String path = "/" + PRIVATE_BUCKET + "/" + PRIVATE_KEY;
         String signature = presignedSignature("GET", path, "test", "test", "3600");
@@ -621,7 +644,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(25)
+    @Order(26)
     void presignedRequestWithExpiresExceedingMaxIsRejected() {
         given()
             .queryParam("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
@@ -638,7 +661,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(26)
+    @Order(27)
     void presignedRequestWithExpiresZeroIsRejected() {
         given()
             .queryParam("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
@@ -655,7 +678,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(27)
+    @Order(28)
     void presignedRequestWithUnsupportedAlgorithmIsRejected() {
         given()
             .queryParam("X-Amz-Algorithm", "BOGUS-ALGORITHM")
@@ -672,7 +695,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(28)
+    @Order(29)
     void unsignedRequestCannotPutObject() {
         given().when().put("/" + WRITE_BUCKET).then().statusCode(200);
 
@@ -701,7 +724,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(29)
+    @Order(30)
     void unsignedRequestCannotDeleteObject() {
         given()
         .when()
@@ -727,7 +750,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(30)
+    @Order(31)
     void signedRequestWithBadAccessKeyCannotWriteObject() {
         given()
             .header("Authorization", BAD_AUTH_HEADER)
@@ -748,7 +771,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(31)
+    @Order(32)
     void bucketPolicyCanExplicitlyAllowAnonymousWrite() {
         given().when().put("/" + PUBLIC_WRITE_BUCKET).then().statusCode(200);
 
@@ -783,7 +806,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(32)
+    @Order(33)
     void unsignedRequestCannotWriteObjectSubresources() {
         given()
             .header("Authorization", LOCAL_AUTH_HEADER)
@@ -838,7 +861,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(33)
+    @Order(34)
     void unsignedRequestCannotWriteViaMultipartOrRestore() {
         given()
         .when()
@@ -908,7 +931,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(34)
+    @Order(35)
     void unsignedRequestCannotCopyObject() {
         given()
             .header("Authorization", LOCAL_AUTH_HEADER)
@@ -936,7 +959,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(35)
+    @Order(36)
     void batchDeleteObjectsDeniesUnauthorizedKeysButAllowsAuthorized() {
         given()
             .header("Authorization", LOCAL_AUTH_HEADER)
@@ -994,7 +1017,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(36)
+    @Order(37)
     void batchDeleteObjectsWithUnknownAccessKeyFailsWholeRequest() {
         given()
             .header("Authorization", LOCAL_AUTH_HEADER)
@@ -1030,7 +1053,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(37)
+    @Order(38)
     void bucketAclPublicReadWriteAllowsAnonymousCreateButNotOverwriteOrDelete() {
         // Per AWS's ACL docs, a bucket-ACL WRITE grant to a non-owner (like AllUsers) "denies
         // non-owners the ability to overwrite or delete existing objects" -- it only lets them
@@ -1077,7 +1100,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(38)
+    @Order(39)
     void explicitPolicyDenyOverridesPublicWriteAcl() {
         given().when().put("/" + DENY_WRITE_ACL_BUCKET).then().statusCode(200);
 
@@ -1121,7 +1144,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(39)
+    @Order(40)
     void publicWriteAclDoesNotAuthorizeObjectSubresources() {
         given()
             .header("Authorization", LOCAL_AUTH_HEADER)
@@ -1151,7 +1174,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(40)
+    @Order(41)
     void deleteObjectPolicyGrantDoesNotAuthorizeVersionedDelete() {
         given().when().put("/" + DELETE_VERSION_BUCKET).then().statusCode(200);
 
@@ -1195,7 +1218,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(41)
+    @Order(42)
     void deleteObjectDoesNotBypassGovernanceRetentionWithoutDistinctPermission() {
         given().when().put("/" + BYPASS_BUCKET).then().statusCode(200);
 
@@ -1254,7 +1277,7 @@ class S3AuthEnforcementIntegrationTest {
     }
 
     @Test
-    @Order(42)
+    @Order(43)
     void conditionalPolicyDenyFailsClosedOverridingPublicWriteAcl() {
         // Floci has no request context to evaluate a Condition against, so a conditional Deny
         // is treated as applying (fail closed) -- consistent with S3PublicAccessEvaluatorTest's
@@ -1355,6 +1378,13 @@ class S3AuthEnforcementIntegrationTest {
     private static String presignedSignature(String method, String path,
                                               String accessKeyId, String secretKey,
                                               String expires, String payloadHash) {
+        return presignedSignature(method, path, accessKeyId, secretKey, expires, payloadHash,
+                "localhost:" + io.restassured.RestAssured.port);
+    }
+
+    private static String presignedSignature(String method, String path,
+                                              String accessKeyId, String secretKey,
+                                              String expires, String payloadHash, String authority) {
         try {
             String credentialScope = SIGNING_DATE + "/us-east-1/s3/aws4_request";
             String encodedCredential = URLEncoder.encode(
@@ -1373,7 +1403,7 @@ class S3AuthEnforcementIntegrationTest {
             String canonicalRequest = method + "\n"
                     + path + "\n"
                     + canonicalQueryString + "\n"
-                    + "host:localhost:" + io.restassured.RestAssured.port + "\n\n"
+                    + "host:" + authority + "\n\n"
                     + "host\n"
                     + payloadHash;
 

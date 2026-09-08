@@ -4,12 +4,6 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
-import io.github.hectorvent.floci.core.storage.StorageBackend;
-import io.github.hectorvent.floci.core.storage.StorageFactory;
-import io.github.hectorvent.floci.services.route53.Route53Service;
-import io.github.hectorvent.floci.services.route53.model.HostedZone;
-import io.github.hectorvent.floci.services.route53.model.ResourceRecord;
-import io.github.hectorvent.floci.services.route53.model.ResourceRecordSet;
 import io.github.hectorvent.floci.services.ses.model.AccountSuppressionAttributes;
 import io.github.hectorvent.floci.services.ses.model.AccountDetails;
 import io.github.hectorvent.floci.services.ses.model.AccountVdmAttributes;
@@ -29,6 +23,8 @@ import io.github.hectorvent.floci.services.ses.model.Identity;
 import io.github.hectorvent.floci.services.ses.model.ListManagementOptions;
 import io.github.hectorvent.floci.services.ses.model.MessageHeader;
 import io.github.hectorvent.floci.services.ses.model.MessageTag;
+import io.github.hectorvent.floci.services.ses.model.ReceiptFilter;
+import io.github.hectorvent.floci.services.ses.model.ReceiptRule;
 import io.github.hectorvent.floci.services.ses.model.ReceiptRuleSet;
 import io.github.hectorvent.floci.services.ses.model.Topic;
 import io.github.hectorvent.floci.services.ses.model.TopicPreference;
@@ -40,9 +36,7 @@ import io.github.hectorvent.floci.services.ses.model.TenantResourceAssociation;
 import io.github.hectorvent.floci.services.ses.model.SuppressedDestination;
 import io.github.hectorvent.floci.services.ses.model.SuppressionOptions;
 import io.github.hectorvent.floci.services.ses.model.Tag;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -50,18 +44,11 @@ import org.jboss.logging.Logger;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,24 +57,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @ApplicationScoped
 public class SesService {
 
     private static final Logger LOG = Logger.getLogger(SesService.class);
 
-    private static final Pattern TEMPLATE_VARIABLE = Pattern.compile("\\{\\{\\s*([\\w-]+)\\s*\\}\\}");
-
     private static final int MAX_BULK_DESTINATIONS = 50;
     private static final int MAX_RECIPIENTS_PER_DESTINATION = 50;
-    private static final Duration DKIM_LOOKUP_CACHE_TTL = Duration.ofSeconds(5);
-
-    private static final SecureRandom BOUNDARY_RANDOM = new SecureRandom();
-
-    private final StorageBackend<String, Identity> identityStore;
+    // Identities extracted to SesIdentityService (CRUD, verification, MAIL FROM, notifications,
+    // tags, and the DKIM state machine with its Route53 lookup). The facade keeps the cross-domain
+    // flows and send-path reads, reaching the store through its find/save.
+    private final SesIdentityService identityService;
     // Sent-email records extracted to SesSentEmailService. The send path records finished emails via
     // it; send-statistics and inspection read back through it.
     private final SesSentEmailService sentEmailService;
@@ -96,7 +77,10 @@ public class SesService {
     // Email templates extracted to SesTemplateService. The facade delegates; the templated-send path
     // reads via it, and ARN-dispatched tagging reads/writes via its find/save.
     private final SesTemplateService templateService;
-    private final StorageBackend<String, ConfigurationSet> configSetStore;
+    // Configuration sets extracted to SesConfigurationSetService. The facade delegates; the
+    // cross-domain option validation (tracking's verified domain, delivery's dedicated pool), the
+    // send-path reads, and the ARN-dispatched tagging go through its get/find/save.
+    private final SesConfigurationSetService configSetService;
     // Account suppression attributes + the per-address suppression list (two stores) extracted to
     // SesSuppressionService. The facade delegates; its send filters read via it.
     private final SesSuppressionService suppressionService;
@@ -116,35 +100,30 @@ public class SesService {
     // Tenants (multi-tenancy) live in SesTenantService. The facade delegates.
     private final SesTenantService tenantService;
     private final SmtpRelay smtpRelay;
-    private final ObjectMapper objectMapper;
     private final SesEventPublisher eventPublisher;
     private final String defaultAccountId;
     // Base URL used to build functional list-management unsubscribe links (the {{amazonSESUnsubscribeUrl}}
     // placeholder and the List-Unsubscribe header) that resolve to Floci's own unsubscribe endpoint.
     private final String baseUrl;
-    private final Route53Service route53Service;
     // Resolves the caller's account per request so send-event payloads report the sending account, not
-    // the fixed default. Null in the package-private test constructors (falls back to defaultAccountId).
+    // the fixed default. Null in the package-private test constructor (falls back to defaultAccountId).
     private final RegionResolver regionResolver;
-    private final Clock clock;
-    private final ConcurrentHashMap<String, DkimLookupCacheEntry> dkimLookupCache = new ConcurrentHashMap<>();
 
     @Inject
-    public SesService(StorageFactory storageFactory, SesReceiptRuleService receiptRuleService,
+    public SesService(SesIdentityService identityService, SesReceiptRuleService receiptRuleService,
                        SesAccountService accountService, SesCvetService cvetService,
                        SesPolicyService policyService, SesContactService contactService,
                        SesSuppressionService suppressionService, SesDedicatedIpService dedicatedIpService,
                        SesTemplateService templateService, SesSentEmailService sentEmailService,
-                       SesTenantService tenantService, SmtpRelay smtpRelay, ObjectMapper objectMapper,
-                       SesEventPublisher eventPublisher, EmulatorConfig config, Route53Service route53Service,
-                       RegionResolver regionResolver, Clock clock) {
-        this.identityStore = storageFactory.create("ses", "ses-identities.json",
-                new TypeReference<Map<String, Identity>>() {});
+                       SesTenantService tenantService, SesConfigurationSetService configSetService,
+                       SmtpRelay smtpRelay,
+                       SesEventPublisher eventPublisher, EmulatorConfig config,
+                       RegionResolver regionResolver) {
+        this.identityService = identityService;
         this.sentEmailService = sentEmailService;
         this.accountService = accountService;
         this.templateService = templateService;
-        this.configSetStore = storageFactory.create("ses", "ses-config-sets.json",
-                new TypeReference<Map<String, ConfigurationSet>>() {});
+        this.configSetService = configSetService;
         this.suppressionService = suppressionService;
         this.dedicatedIpService = dedicatedIpService;
         this.contactService = contactService;
@@ -153,20 +132,17 @@ public class SesService {
         this.cvetService = cvetService;
         this.tenantService = tenantService;
         this.smtpRelay = smtpRelay;
-        this.objectMapper = objectMapper;
         this.eventPublisher = eventPublisher;
         this.defaultAccountId = config.defaultAccountId();
         this.baseUrl = config.effectiveBaseUrl();
-        this.route53Service = route53Service;
         this.regionResolver = regionResolver;
-        this.clock = clock;
     }
 
-    SesService(StorageBackend<String, Identity> identityStore,
+    SesService(SesIdentityService identityService,
                SesSentEmailService sentEmailService,
                SesAccountService accountService,
                SesTemplateService templateService,
-               StorageBackend<String, ConfigurationSet> configSetStore,
+               SesConfigurationSetService configSetService,
                SesSuppressionService suppressionService,
                SesDedicatedIpService dedicatedIpService,
                SesContactService contactService,
@@ -174,35 +150,12 @@ public class SesService {
                SesReceiptRuleService receiptRuleService,
                SesCvetService cvetService,
                SesTenantService tenantService,
-               SmtpRelay smtpRelay,
-               ObjectMapper objectMapper,
-               Clock clock) {
-        this(identityStore, sentEmailService, accountService, templateService, configSetStore, suppressionService,
-                dedicatedIpService, contactService, policyService,
-                receiptRuleService, cvetService, tenantService, smtpRelay, objectMapper, null, clock);
-    }
-
-    SesService(StorageBackend<String, Identity> identityStore,
-               SesSentEmailService sentEmailService,
-               SesAccountService accountService,
-               SesTemplateService templateService,
-               StorageBackend<String, ConfigurationSet> configSetStore,
-               SesSuppressionService suppressionService,
-               SesDedicatedIpService dedicatedIpService,
-               SesContactService contactService,
-               SesPolicyService policyService,
-               SesReceiptRuleService receiptRuleService,
-               SesCvetService cvetService,
-               SesTenantService tenantService,
-               SmtpRelay smtpRelay,
-               ObjectMapper objectMapper,
-               Route53Service route53Service,
-               Clock clock) {
-        this.identityStore = identityStore;
+               SmtpRelay smtpRelay) {
+        this.identityService = identityService;
         this.sentEmailService = sentEmailService;
         this.accountService = accountService;
         this.templateService = templateService;
-        this.configSetStore = configSetStore;
+        this.configSetService = configSetService;
         this.suppressionService = suppressionService;
         this.dedicatedIpService = dedicatedIpService;
         this.contactService = contactService;
@@ -211,50 +164,31 @@ public class SesService {
         this.cvetService = cvetService;
         this.tenantService = tenantService;
         this.smtpRelay = smtpRelay;
-        this.objectMapper = objectMapper;
         this.eventPublisher = null;
         this.defaultAccountId = "000000000000";
         this.baseUrl = "http://localhost:4566";
-        this.route53Service = route53Service;
         this.regionResolver = null;
-        this.clock = clock;
     }
 
     public Identity verifyEmailIdentity(String emailAddress, String region) {
-        validateIdentityWhitespace(emailAddress, "Email address");
-        if (emailAddress == null || emailAddress.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "Email address is required.", 400);
-        }
-        String key = identityKey(region, emailAddress);
-        Identity existing = identityStore.get(key).orElse(null);
-        if (existing != null) return existing;
+        return identityService.verifyEmailIdentity(emailAddress, region);
+    }
 
-        Identity identity = new Identity(emailAddress, "EmailAddress");
-        identityStore.put(key, identity);
-        LOG.infov("Verified email identity: {0} in region {1}", emailAddress, region);
-        return identity;
+    /**
+     * v2 CreateEmailIdentity. The identity domain builds and persists the complete record in one
+     * write; only the configuration-set existence check is cross-domain, so it is passed in as the
+     * in-lock callback (a missing set fails the whole call and nothing is created, matching AWS).
+     */
+    public Identity createEmailIdentity(String emailIdentity, String configurationSetName,
+                                        List<Tag> tags, String region) {
+        Runnable configurationSetExistsCheck = configurationSetName == null ? null
+                : () -> getConfigurationSet(configurationSetName, region);
+        return identityService.createEmailIdentity(emailIdentity, configurationSetName, tags, region,
+                configurationSetExistsCheck);
     }
 
     public Identity verifyDomainIdentity(String domain, String region) {
-        validateIdentityWhitespace(domain, "Domain");
-        if (domain == null || domain.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "Domain is required.", 400);
-        }
-        String key = identityKey(region, domain);
-        Identity existing = identityStore.get(key).orElse(null);
-        if (existing != null) return existing;
-
-        Identity identity = new Identity(domain, "Domain");
-        regenerateDkimTokens(identity);
-        identity.setVerificationStatus("Pending");
-        identity.setDkimEnabled(true);
-        // The create response reports DKIM verification as NotStarted (SES hasn't begun tracking the
-        // CNAMEs yet); the first Get/List refresh transitions it to Pending. Matches AWS, where
-        // CreateEmailIdentity returns NOT_STARTED but a subsequent GetEmailIdentity returns PENDING.
-        identity.setDkimVerificationStatus("NotStarted");
-        identityStore.put(key, identity);
-        LOG.infov("Verified domain identity: {0} in region {1}", domain, region);
-        return identity;
+        return identityService.verifyDomainIdentity(domain, region);
     }
 
     public void deleteIdentity(String identityValue, String region) {
@@ -266,20 +200,7 @@ public class SesService {
     }
 
     private void doDeleteIdentity(String identityValue, String region) {
-        String key = identityKey(region, identityValue);
-        identityStore.delete(key);
-        invalidateDkimLookupCache(region, identityValue);
-
-        String prefix = "identity::" + region + "::";
-        List<String> keys = new ArrayList<>(identityStore.keys().stream()
-                .filter(k -> k.startsWith(prefix))
-                .toList());
-        for (String storedKey : keys) {
-            Identity storedIdentity = identityStore.get(storedKey).orElse(null);
-            if (storedIdentity != null && identityValue.equals(storedIdentity.getIdentity())) {
-                identityStore.delete(storedKey);
-            }
-        }
+        identityService.delete(identityValue, region);
 
         // Policies are sub-resources of the identity; drop them too so they can't resurrect into a
         // same-named identity recreated later (and so the per-identity count stays correct).
@@ -289,20 +210,11 @@ public class SesService {
     }
 
     public List<Identity> listIdentities(String identityType, String region) {
-        String prefix = "identity::" + region + "::";
-        List<Identity> all = identityStore.scan(k -> k.startsWith(prefix));
-        if (identityType == null || identityType.isBlank()) {
-            return all;
-        }
-        return all.stream()
-                .filter(i -> identityType.equals(i.getIdentityType()))
-                .toList();
+        return identityService.listIdentities(identityType, region);
     }
 
     public Identity getIdentityVerificationAttributes(String identityValue, String region) {
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key).orElse(null);
-        return refreshIdentityState(identity, region);
+        return identityService.getIdentityVerificationAttributes(identityValue, region);
     }
 
     public String sendEmail(String source, List<String> toAddresses, List<String> ccAddresses,
@@ -321,7 +233,7 @@ public class SesService {
             throw new AwsException("InvalidParameterValue", "At least one destination address is required.", 400);
         }
         String effectiveConfigSet = resolveDefaultConfigurationSet(configurationSetName, source, region);
-        validateConfigurationSet(effectiveConfigSet, region);
+        configSetService.validateForSending(effectiveConfigSet, region);
 
         // Resolve suppression before recording the message so a bad ListManagementOptions (e.g. an
         // unknown contact list) fails the whole send without leaving an orphaned SentEmail record.
@@ -330,7 +242,8 @@ public class SesService {
                 collectSuppressedReasons(envelope, effectiveConfigSet, region));
         // putIfAbsent so a suppression-list reason already set for an address (e.g. COMPLAINT) wins
         // over the list-management BOUNCE and keeps its synthetic event type.
-        collectListManagementOptOuts(envelope, listManagement, region).forEach(suppressedReasons::putIfAbsent);
+        contactService.collectListManagementOptOuts(envelope, listManagement, region,
+                SesService::extractEmailAddress).forEach(suppressedReasons::putIfAbsent);
 
         // A single-recipient list-managed send gets a functional unsubscribe link: the
         // {{amazonSESUnsubscribeUrl}} body placeholder is replaced and the List-Unsubscribe headers
@@ -384,7 +297,7 @@ public class SesService {
             throw new AwsException("InvalidParameterValue", "RawMessage.Data is required.", 400);
         }
         String effectiveConfigSet = resolveDefaultConfigurationSet(configurationSetName, source, region);
-        validateConfigurationSet(effectiveConfigSet, region);
+        configSetService.validateForSending(effectiveConfigSet, region);
         boolean hasExplicitDestinations = destinations != null && !destinations.isEmpty();
         boolean sourceOmitted = source == null || source.isBlank();
         boolean willPublishEvents = (effectiveConfigSet != null && !effectiveConfigSet.isBlank())
@@ -408,7 +321,7 @@ public class SesService {
         // explicit FromEmailAddress.
         if (sourceOmitted && (configurationSetName == null || configurationSetName.isBlank())) {
             effectiveConfigSet = resolveDefaultConfigurationSet(configurationSetName, effectiveSource, region);
-            validateConfigurationSet(effectiveConfigSet, region);
+            configSetService.validateForSending(effectiveConfigSet, region);
         }
         List<String> effectiveDestinations = hasExplicitDestinations
                 ? destinations
@@ -423,7 +336,8 @@ public class SesService {
                 collectSuppressedReasons(effectiveDestinations, effectiveConfigSet, region));
         // putIfAbsent so a suppression-list reason already set for an address (e.g. COMPLAINT) wins
         // over the list-management BOUNCE and keeps its synthetic event type.
-        collectListManagementOptOuts(effectiveDestinations, listManagement, region)
+        contactService.collectListManagementOptOuts(effectiveDestinations, listManagement, region,
+                        SesService::extractEmailAddress)
                 .forEach(suppressedReasons::putIfAbsent);
 
         String messageId = UUID.randomUUID().toString();
@@ -463,34 +377,6 @@ public class SesService {
         return all;
     }
 
-    /**
-     * Validate that a non-blank {@code ConfigurationSetName} is usable for a send. Performs
-     * two gates:
-     *   1. Existence — raises {@code ConfigurationSetDoesNotExist} (400) when the set is
-     *      missing in the given region. The V2 REST controller's {@code remapV1Exception}
-     *      translates that into {@code NotFoundException 404}; V1 Query keeps the original.
-     *   2. Sending-enabled — raises {@code ConfigurationSetSendingPausedException} (400)
-     *      when the set's {@code SendingEnabled} flag has been turned off via
-     *      {@code UpdateConfigurationSetSendingEnabled} (v1) /
-     *      {@code PutConfigurationSetSendingOptions} (v2). The V2 controller narrows that
-     *      code to {@code SendingPausedException}; V1 keeps the longer form, matching the
-     *      exact wire shape AWS returns on each surface.
-     * Mirrors AWS SES behaviour: invalid or paused set fails fast instead of silently
-     * storing/relaying the message and skipping event publishing later.
-     */
-    private void validateConfigurationSet(String configurationSetName, String region) {
-        if (configurationSetName == null || configurationSetName.isBlank()) {
-            return;
-        }
-        ConfigurationSet cs = configSetStore.get(configSetKey(region, configurationSetName))
-                .orElseThrow(() -> new AwsException("ConfigurationSetDoesNotExist",
-                        "Configuration set <" + configurationSetName + "> does not exist.", 400));
-        if (cs.getSendingEnabled() != null && !cs.getSendingEnabled()) {
-            throw new AwsException("ConfigurationSetSendingPausedException",
-                    "Sending is paused for configuration set " + configurationSetName, 400);
-        }
-    }
-
     private void publishSendEvents(String configurationSetName, String messageId, String source,
                                    String subject, List<String> toAddresses,
                                    List<String> ccAddresses, List<String> bccAddresses,
@@ -503,7 +389,7 @@ public class SesService {
         }
         ConfigurationSet cs = null;
         if (configurationSetName != null && !configurationSetName.isBlank()) {
-            cs = configSetStore.get(configSetKey(region, configurationSetName)).orElse(null);
+            cs = configSetService.find(configurationSetName, region).orElse(null);
             if (cs == null) {
                 LOG.warnv("SES send references unknown ConfigurationSet <{0}>; configuration-set "
                         + "events not published (identity notifications, if any, still apply).",
@@ -574,13 +460,13 @@ public class SesService {
         if (email.isBlank()) {
             return targets;
         }
-        Identity emailIdentity = identityStore.get(identityKey(region, email)).orElse(null);
+        Identity emailIdentity = identityService.find(email, region).orElse(null);
         Identity domainIdentity = null;
         int at = email.indexOf('@');
         if (at >= 0 && at < email.length() - 1) {
-            domainIdentity = identityStore.get(identityKey(region, email.substring(at + 1))).orElse(null);
+            domainIdentity = identityService.find(email.substring(at + 1), region).orElse(null);
         }
-        for (String type : NOTIFICATION_TYPES) {
+        for (String type : SesIdentityService.NOTIFICATION_TYPES) {
             String topic = notificationTopicFor(emailIdentity, type);
             Identity owner = emailIdentity;
             if (topic == null) {
@@ -651,345 +537,39 @@ public class SesService {
 
     public void setIdentityNotificationTopic(String identityValue, String notificationType,
                                               String snsTopic, String region) {
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("InvalidParameterValue",
-                        "Identity does not exist: " + identityValue, 400));
-        if (snsTopic != null && !snsTopic.isBlank()) {
-            identity.getNotificationAttributes().put(notificationType + "Topic", snsTopic);
-        } else {
-            identity.getNotificationAttributes().remove(notificationType + "Topic");
-        }
-        identityStore.put(key, identity);
+        identityService.setIdentityNotificationTopic(identityValue, notificationType, snsTopic, region);
     }
 
     public Identity getIdentityNotificationAttributes(String identityValue, String region) {
-        String key = identityKey(region, identityValue);
-        return identityStore.get(key).orElse(null);
+        return identityService.getIdentityNotificationAttributes(identityValue, region);
     }
 
     public void setDkimAttributes(String identityValue, boolean signingEnabled, String region) {
-        if (identityValue == null || identityValue.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "Identity is required.", 400);
-        }
-        // DKIM is a domain concept and an email reports its parent domain's DKIM (via effectiveDkimSource),
-        // so toggling DKIM on an email whose parent domain is a registered identity is a no-op that leaves
-        // the domain untouched — matching real AWS, regardless of whether the email identity itself exists.
-        if (identityValue.contains("@")) {
-            String domain = identityValue.substring(identityValue.indexOf('@') + 1);
-            if (identityStore.get(identityKey(region, domain)).isPresent()) {
-                return;
-            }
-        }
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key).orElse(null);
-        if (identity == null) {
-            String domain = identityValue.contains("@")
-                    ? identityValue.substring(identityValue.indexOf('@') + 1)
-                    : identityValue;
-            // v1-native code; the v2 controller remaps InvalidParameterValue -> BadRequestException.
-            throw new AwsException("InvalidParameterValue",
-                    "Domain " + domain + " is not verified for DKIM signing.", 400);
-        }
-
-        // Only toggle the signing flag. DkimVerificationStatus tracks DNS record detection (via the
-        // Route53 lookup in refreshIdentityState), not the enabled flag — matching real AWS, where
-        // SetIdentityDkimEnabled / PutEmailIdentityDkimAttributes leave the verification status alone.
-        identity.setDkimEnabled(signingEnabled);
-        identityStore.put(key, identity);
-        LOG.infov("Updated DKIM attributes for {0}: signingEnabled={1}", identityValue, signingEnabled);
+        identityService.setDkimAttributes(identityValue, signingEnabled, region);
     }
 
-    private List<String> generateDkimTokens() {
-        List<String> tokens = new ArrayList<>(3);
-        for (int i = 0; i < 3; i++) {
-            tokens.add(UUID.randomUUID().toString().replace("-", ""));
-        }
-        return tokens;
-    }
-
-    /**
-     * Generates a fresh Easy DKIM token set and records the key length / generation timestamp. New
-     * tokens mean the previously published CNAMEs no longer match, so the verification status resets
-     * to Pending (re-detected via the Route53 lookup) and the origin returns to AWS_SES. Only meaningful
-     * for domain identities; refreshIdentityState re-upgrades to Success once the new records exist.
-     */
-    private void regenerateDkimTokens(Identity identity) {
-        identity.setDkimTokens(generateDkimTokens());
-        identity.setDkimCurrentSigningKeyLength(identity.getDkimNextSigningKeyLength());
-        identity.setDkimLastKeyGenerationTimestamp(Instant.now(clock));
-        identity.setDkimSigningAttributesOrigin("AWS_SES");
-        // The new tokens' CNAMEs aren't detected yet, so DKIM verification resets to Pending. The
-        // identity's own verification is NOT revoked by a key rotation (matching AWS) — keep Success
-        // when already verified; a not-yet-verified identity stays Pending.
-        identity.setDkimVerificationStatus("Pending");
-        if (!"Success".equals(identity.getVerificationStatus())) {
-            identity.setVerificationStatus("Pending");
-        }
-    }
-
-    /**
-     * v1 VerifyDomainDkim: returns the domain identity's DKIM tokens (3), generating them if needed.
-     * Tokens are stable across calls (AWS does not regenerate them). The domain is registered as a
-     * pending identity if it does not exist yet, matching AWS's lenient behavior (VerifyDomainDkim
-     * starts DKIM setup for any domain).
-     */
     public List<String> verifyDomainDkim(String domain, String region) {
-        validateIdentityWhitespace(domain, "Domain");
-        if (domain == null || domain.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "Domain is required.", 400);
-        }
-        if (domain.contains("@")) {
-            // Domain-only action: an email-shaped value must not create an email-valued "Domain".
-            throw new AwsException("InvalidParameterValue", "Domain " + domain + " is invalid.", 400);
-        }
-        String key = identityKey(region, domain);
-        Identity identity = identityStore.get(key).orElse(null);
-        if (identity == null) {
-            identity = new Identity(domain, "Domain");
-            identity.setVerificationStatus("Pending");
-            identity.setDkimEnabled(true);
-            identity.setDkimVerificationStatus("Pending");
-        }
-        if (!hasDkimTokens(identity)) {
-            regenerateDkimTokens(identity);
-        }
-        identityStore.put(key, identity);
-        LOG.infov("VerifyDomainDkim: {0} (region {1})", domain, region);
-        return identity.getDkimTokens();
+        return identityService.verifyDomainDkim(domain, region);
     }
 
-    /**
-     * v2 PutEmailIdentityDkimSigningAttributes. AWS_SES (Easy DKIM): sets the next signing key length
-     * and regenerates tokens when the length changes. EXTERNAL (BYODKIM): switches the origin and
-     * clears the Easy DKIM tokens (the caller publishes its own selector, which Floci does not use for
-     * signing). Returns the resulting DKIM status and tokens.
-     */
-    public DkimSigningResult putDkimSigningAttributes(String identityValue, String origin,
-                                                      String signingSelector, String nextKeyLength,
-                                                      String region) {
-        // DKIM signing attributes are domain-level; AWS rejects a missing/blank value or an
-        // email-address identity here (verified: all return the same 400 "must be a valid domain")
-        // rather than mutating state that the email would just inherit back from its parent domain.
-        if (identityValue == null || identityValue.isBlank() || identityValue.contains("@")) {
-            throw new AwsException("BadRequestException",
-                    "The EmailIdentity value must be a valid domain.", 400);
-        }
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "Email identity " + identityValue + " does not exist.", 404));
-        if ("EXTERNAL".equals(origin)) {
-            identity.setDkimSigningAttributesOrigin("EXTERNAL");
-            // Clear the Easy DKIM tokens and reset the status: Floci can't verify a BYODKIM selector,
-            // so leaving a prior Success/Pending with no tokens (and no Route53 detection path) would
-            // be inconsistent.
-            identity.setDkimTokens(new ArrayList<>());
-            identity.setDkimVerificationStatus("Pending");
-            LOG.infov("PutEmailIdentityDkimSigningAttributes(EXTERNAL): {0} selector={1}",
-                    identityValue, signingSelector);
-        } else {
-            identity.setDkimSigningAttributesOrigin("AWS_SES");
-            // DKIM tokens are a domain concept; only (re)generate them for a domain identity.
-            if ("Domain".equals(identity.getIdentityType())) {
-                if (nextKeyLength != null && !nextKeyLength.equals(identity.getDkimCurrentSigningKeyLength())) {
-                    identity.setDkimNextSigningKeyLength(nextKeyLength);
-                    regenerateDkimTokens(identity);
-                } else if (!hasDkimTokens(identity)) {
-                    regenerateDkimTokens(identity);
-                }
-            }
-            LOG.infov("PutEmailIdentityDkimSigningAttributes(AWS_SES): {0} keyLength={1}",
-                    identityValue, nextKeyLength);
-        }
-        identityStore.put(key, refreshIdentityState(identity, region));
-        Identity src = effectiveDkimSource(identity, region);
-        return new DkimSigningResult(src.getDkimVerificationStatus(),
-                src.getDkimTokens() == null ? List.of() : src.getDkimTokens());
+    public SesIdentityService.DkimSigningResult putDkimSigningAttributes(String identityValue, String origin,
+                                                                         String signingSelector, String nextKeyLength,
+                                                                         String region) {
+        return identityService.putDkimSigningAttributes(identityValue, origin, signingSelector,
+                nextKeyLength, region);
     }
 
-    /** Carrier for the PutEmailIdentityDkimSigningAttributes response ({@code dkimStatus} is v1-native). */
-    public record DkimSigningResult(String dkimStatus, List<String> dkimTokens) {}
-
-    /**
-     * Resolves which identity's DKIM state should be reported for {@code identity}. A domain reports
-     * its own DKIM; an email address reports its parent domain's DKIM (SigningEnabled / Status /
-     * Tokens all inherit from the domain), matching AWS. Falls back to the identity itself when the
-     * parent domain is not a registered identity.
-     */
     public Identity effectiveDkimSource(Identity identity, String region) {
-        if (identity == null || !"EmailAddress".equals(identity.getIdentityType())) {
-            return identity;
-        }
-        String addr = identity.getIdentity();
-        int at = addr == null ? -1 : addr.indexOf('@');
-        if (at < 0 || at == addr.length() - 1) {
-            return identity;
-        }
-        Identity domainIdentity = identityStore.get(identityKey(region, addr.substring(at + 1))).orElse(null);
-        return domainIdentity == null ? identity : refreshIdentityState(domainIdentity, region);
+        return identityService.effectiveDkimSource(identity, region);
     }
-
-    private Identity refreshIdentityState(Identity identity, String region) {
-        if (identity == null) {
-            return null;
-        }
-
-        boolean changed = false;
-        if ("Domain".equals(identity.getIdentityType()) && identity.getDkimTokens() == null) {
-            regenerateDkimTokens(identity);
-            changed = true;
-        }
-
-        if ("Domain".equals(identity.getIdentityType()) && hasDkimTokens(identity)) {
-            changed |= normalizePendingDomainState(identity);
-            // Upgrade identity- and DKIM-verification independently so that, e.g., after a key rotation
-            // (which resets only DkimVerificationStatus while the identity stays verified), the DKIM
-            // status can still return to Success once the new records are detected.
-            // Only look up DNS when a status can still be upgraded — skip the (cached) Route53 check
-            // once both identity- and DKIM-verification are already Success. DKIM verification tracks
-            // DNS detection independently of the signing-enabled flag, so it can reach Success even
-            // when DKIM signing is disabled, and can re-pend/re-upgrade after a key rotation.
-            boolean needsUpgrade = !"Success".equals(identity.getVerificationStatus())
-                    || !"Success".equals(identity.getDkimVerificationStatus());
-            if (needsUpgrade && hasAllExpectedDkimRecords(identity, region)) {
-                if (!"Success".equals(identity.getVerificationStatus())) {
-                    identity.setVerificationStatus("Success");
-                    changed = true;
-                }
-                if (!"Success".equals(identity.getDkimVerificationStatus())) {
-                    identity.setDkimVerificationStatus("Success");
-                    changed = true;
-                }
-            }
-        }
-
-        if ("Success".equals(identity.getVerificationStatus())) {
-            invalidateDkimLookupCache(region, identity.getIdentity());
-        }
-
-        if (changed) {
-            identityStore.put(identityKey(region, identity.getIdentity()), identity);
-        }
-        return identity;
-    }
-
-    private boolean hasDkimTokens(Identity identity) {
-        return identity.getDkimTokens() != null && !identity.getDkimTokens().isEmpty();
-    }
-
-    private boolean normalizePendingDomainState(Identity identity) {
-        boolean changed = false;
-        if (!"Success".equals(identity.getVerificationStatus())
-                && !"Pending".equals(identity.getVerificationStatus())) {
-            identity.setVerificationStatus("Pending");
-            changed = true;
-        }
-        // DKIM verification tracks DNS detection, not the signing-enabled flag, so a domain that has
-        // begun tracking (NotStarted -> Pending) reports Pending on Get even while signing is disabled.
-        if (!"Success".equals(identity.getDkimVerificationStatus())
-                && !"Pending".equals(identity.getDkimVerificationStatus())) {
-            identity.setDkimVerificationStatus("Pending");
-            changed = true;
-        }
-        return changed;
-    }
-
-    private boolean hasAllExpectedDkimRecords(Identity identity, String region) {
-        if (route53Service == null) {
-            return false;
-        }
-        Instant now = Instant.now(clock);
-        String cacheKey = dkimLookupCacheKey(region, identity);
-        DkimLookupCacheEntry cached = dkimLookupCache.get(cacheKey);
-        if (cached != null) {
-            if (now.isBefore(cached.expiresAt())) {
-                return cached.present();
-            }
-            dkimLookupCache.remove(cacheKey, cached);
-        }
-
-        boolean present = true;
-        for (String token : identity.getDkimTokens()) {
-            if (!hasExpectedDkimRecord(identity.getIdentity(), token)) {
-                present = false;
-                break;
-            }
-        }
-        dkimLookupCache.put(cacheKey, new DkimLookupCacheEntry(present, now.plus(DKIM_LOOKUP_CACHE_TTL)));
-        return present;
-    }
-
-    private boolean hasExpectedDkimRecord(String domain, String token) {
-        String expectedName = normalizeDnsName(token + "._domainkey." + domain);
-        String expectedValue = normalizeDnsName(token + ".dkim.amazonses.com");
-        for (HostedZone zone : route53Service.listHostedZones(null, Integer.MAX_VALUE)) {
-            for (ResourceRecordSet recordSet : route53Service.listResourceRecordSets(zone.getId(), null, null,
-                    Integer.MAX_VALUE)) {
-                if (!"CNAME".equalsIgnoreCase(recordSet.getType())) {
-                    continue;
-                }
-                if (!expectedName.equals(normalizeDnsName(recordSet.getName()))) {
-                    continue;
-                }
-                List<ResourceRecord> records = recordSet.getRecords();
-                if (records == null) {
-                    continue;
-                }
-                for (ResourceRecord record : records) {
-                    if (record != null && expectedValue.equals(normalizeDnsName(record.getValue()))) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    private String normalizeDnsName(String value) {
-        if (value == null) {
-            return "";
-        }
-        String normalized = value.trim().toLowerCase(Locale.ROOT);
-        while (normalized.endsWith(".")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
-    }
-
-    private void invalidateDkimLookupCache(String region, String identityValue) {
-        if (identityValue == null || identityValue.isBlank()) {
-            return;
-        }
-        String cachePrefix = region + "::" + normalizeDnsName(identityValue) + "::";
-        dkimLookupCache.keySet().removeIf(key -> key.startsWith(cachePrefix));
-    }
-
-    private String dkimLookupCacheKey(String region, Identity identity) {
-        List<String> normalizedTokens = identity.getDkimTokens().stream()
-                .map(this::normalizeDnsName)
-                .sorted()
-                .toList();
-        return region + "::" + normalizeDnsName(identity.getIdentity()) + "::" + String.join(",", normalizedTokens);
-    }
-
-    private record DkimLookupCacheEntry(boolean present, Instant expiresAt) {}
 
     public void setFeedbackForwardingEnabled(String identityValue, boolean enabled, String region) {
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("InvalidParameterValue",
-                        "Identity " + identityValue
-                                + " is invalid. Must be a verified email address or domain.", 400));
-        identity.setFeedbackForwardingEnabled(enabled);
-        identityStore.put(key, identity);
-        LOG.infov("Updated feedback forwarding for {0}: enabled={1}", identityValue, enabled);
+        identityService.setFeedbackForwardingEnabled(identityValue, enabled, region);
     }
 
     public void setEmailIdentityConfigurationSet(String identityValue, String configurationSetName,
                                                  String region) {
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
+        Identity identity = identityService.find(identityValue, region)
                 .orElseThrow(() -> new AwsException("NotFoundException",
                         "Identity <" + identityValue + "> does not exist.", 404));
         boolean clearing = configurationSetName == null || configurationSetName.isEmpty();
@@ -997,7 +577,7 @@ public class SesService {
             getConfigurationSet(configurationSetName, region);
         }
         identity.setConfigurationSetName(clearing ? null : configurationSetName);
-        identityStore.put(key, identity);
+        identityService.save(identity, region);
         LOG.infov("Updated default ConfigurationSet for {0}: {1}",
                 identityValue, clearing ? "<cleared>" : configurationSetName);
     }
@@ -1021,14 +601,14 @@ public class SesService {
         if (email.isBlank()) {
             return configurationSetName;
         }
-        String fromEmail = existingDefaultConfigSet(identityStore.get(identityKey(region, email)).orElse(null), region);
+        String fromEmail = existingDefaultConfigSet(identityService.find(email, region).orElse(null), region);
         if (fromEmail != null) {
             return fromEmail;
         }
         int at = email.indexOf('@');
         if (at >= 0 && at < email.length() - 1) {
             String fromDomain = existingDefaultConfigSet(
-                    identityStore.get(identityKey(region, email.substring(at + 1))).orElse(null), region);
+                    identityService.find(email.substring(at + 1), region).orElse(null), region);
             if (fromDomain != null) {
                 return fromDomain;
             }
@@ -1046,7 +626,7 @@ public class SesService {
         }
         // AWS: deleting the configuration set that is an identity's default, then sending through
         // that identity, fails with a bad-request error rather than silently sending without it.
-        if (configSetStore.get(configSetKey(region, cs)).isEmpty()) {
+        if (configSetService.find(cs, region).isEmpty()) {
             throw new AwsException("BadRequestException",
                     "Configuration set <" + cs + "> does not exist.", 400);
         }
@@ -1055,79 +635,20 @@ public class SesService {
 
     public void setMailFromDomain(String identityValue, String mailFromDomain,
                                    String behaviorOnMxFailure, String region) {
-        String normalizedBehavior = null;
-        if (behaviorOnMxFailure != null) {
-            if (!"UseDefaultValue".equals(behaviorOnMxFailure)
-                    && !"RejectMessage".equals(behaviorOnMxFailure)) {
-                throw new AwsException("ValidationError",
-                        "1 validation error detected: Value at 'behaviorOnMXFailure' failed to satisfy "
-                                + "constraint: Member must satisfy enum value set: [RejectMessage, UseDefaultValue]", 400);
-            }
-            normalizedBehavior = behaviorOnMxFailure;
-        }
-        boolean clearing = mailFromDomain == null || mailFromDomain.isEmpty();
-        if (!clearing && mailFromDomain.isBlank()) {
-            throw new AwsException("InvalidParameterValue",
-                    "MailFromDomain must be a domain or an empty string to clear; whitespace is not accepted.", 400);
-        }
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("InvalidParameterValue",
-                        "Identity <" + identityValue + "> does not exist.", 400));
-        identity.setMailFromDomain(clearing ? null : mailFromDomain);
-        identity.setMailFromDomainStatus(clearing ? "Pending" : "Success");
-        if (clearing) {
-            identity.setBehaviorOnMxFailure("UseDefaultValue");
-        } else if (normalizedBehavior != null) {
-            identity.setBehaviorOnMxFailure(normalizedBehavior);
-        }
-        identityStore.put(key, identity);
-        LOG.infov("Updated MAIL FROM domain for {0}: domain={1}, behavior={2}",
-                identityValue, mailFromDomain, normalizedBehavior);
+        identityService.setMailFromDomain(identityValue, mailFromDomain, behaviorOnMxFailure, region);
     }
 
     public Identity getMailFromAttributes(String identityValue, String region) {
-        String key = identityKey(region, identityValue);
-        return identityStore.get(key).orElse(null);
+        return identityService.getMailFromAttributes(identityValue, region);
     }
-
-    private static final java.util.List<String> NOTIFICATION_TYPES =
-            java.util.List.of("Bounce", "Complaint", "Delivery");
 
     public void setHeadersInNotificationsEnabled(String identityValue, String notificationType,
                                                    boolean enabled, String region) {
-        if (notificationType == null || notificationType.isBlank()) {
-            throw new AwsException("InvalidParameterValue",
-                    "NotificationType is required.", 400);
-        }
-        if (!NOTIFICATION_TYPES.contains(notificationType)) {
-            throw new AwsException("ValidationError",
-                    "1 validation error detected: Value at 'notificationType' failed to satisfy "
-                            + "constraint: Member must satisfy enum value set: "
-                            + NOTIFICATION_TYPES, 400);
-        }
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("InvalidParameterValue",
-                        "Identity " + identityValue
-                                + " is invalid. It must be a verified email address or domain.", 400));
-        identity.getHeadersInNotificationsEnabled().put(notificationType, enabled);
-        identityStore.put(key, identity);
-        LOG.infov("Updated headers-in-notifications for {0}: {1}={2}",
-                identityValue, notificationType, enabled);
+        identityService.setHeadersInNotificationsEnabled(identityValue, notificationType, enabled, region);
     }
 
     public List<String> getVerifiedEmailAddresses(String region) {
-        String prefix = "identity::" + region + "::";
-        List<Identity> all = identityStore.scan(k -> k.startsWith(prefix));
-        List<String> emails = new ArrayList<>();
-        for (Identity identity : all) {
-            if ("EmailAddress".equals(identity.getIdentityType())
-                    && "Success".equals(identity.getVerificationStatus())) {
-                emails.add(identity.getIdentity());
-            }
-        }
-        return emails;
+        return identityService.getVerifiedEmailAddresses(region);
     }
 
     public List<SentEmail> getEmails() {
@@ -1166,11 +687,7 @@ public class SesService {
     }
 
     public void setConfigurationSetSendingEnabled(String configSetName, boolean enabled, String region) {
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        cs.setSendingEnabled(enabled);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated SendingEnabled on configuration set {0} in region {1}: {2}",
-                configSetName, region, enabled);
+        configSetService.setSendingEnabled(configSetName, enabled, region);
     }
 
     // ──────────────────────────── Templates ────────────────────────────
@@ -1262,7 +779,7 @@ public class SesService {
         CustomVerificationEmailTemplate template = cvetService.find(templateName, region)
                 .orElseThrow(() -> new AwsException("CustomVerificationEmailTemplateDoesNotExist",
                         "Template <" + templateName + "> does not exist", 400));
-        if (!isVerifiedSender(template.getFromEmailAddress(), region)) {
+        if (!identityService.isVerifiedSender(template.getFromEmailAddress(), region)) {
             throw new AwsException("FromEmailAddressNotVerified",
                     "Email address is not verified. The following identities failed the check in region "
                             + region.toUpperCase(Locale.ROOT) + ": " + template.getFromEmailAddress(), 400);
@@ -1273,7 +790,7 @@ public class SesService {
 
         // AWS registers the recipient as a pending-verification identity as part of sending the
         // verification email, so ListIdentities / GetIdentityVerificationAttributes surface it.
-        markPendingEmailIdentity(emailAddress, region);
+        identityService.markPendingEmailIdentity(emailAddress, region);
 
         // AWS sends the template content verbatim and appends a fixed, non-removable disclaimer (SES
         // docs Q10). AWS also appends a unique verification link, which Floci does not reproduce
@@ -1317,17 +834,6 @@ public class SesService {
         return count;
     }
 
-    private void markPendingEmailIdentity(String emailAddress, String region) {
-        String key = identityKey(region, emailAddress);
-        if (identityStore.get(key).isEmpty()) {
-            Identity identity = new Identity(emailAddress, "EmailAddress");
-            identity.setVerificationStatus("Pending");
-            identityStore.put(key, identity);
-            LOG.infov("SES custom verification email registered pending identity {0} in region {1}",
-                    emailAddress, region);
-        }
-    }
-
     private void validateCustomVerificationTemplate(CustomVerificationEmailTemplate t, String region) {
         requireCvetField(t.getTemplateName(), "TemplateName");
         requireCvetField(t.getFromEmailAddress(), "FromEmailAddress");
@@ -1335,7 +841,7 @@ public class SesService {
         requireCvetField(t.getTemplateContent(), "TemplateContent");
         requireCvetField(t.getSuccessRedirectionURL(), "SuccessRedirectionURL");
         requireCvetField(t.getFailureRedirectionURL(), "FailureRedirectionURL");
-        if (!isVerifiedSender(t.getFromEmailAddress(), region)) {
+        if (!identityService.isVerifiedSender(t.getFromEmailAddress(), region)) {
             // v1-native code (verified: FromEmailAddressNotVerified / 400); remapV1Exception
             // translates it to NotFoundException / 404 for the v2 boundary.
             throw new AwsException("FromEmailAddressNotVerified",
@@ -1347,23 +853,6 @@ public class SesService {
         if (!isValidRedirectUrl(t.getFailureRedirectionURL())) {
             throw new AwsException("InvalidParameterValue", "The failure redirection URL is invalid", 400);
         }
-    }
-
-    private boolean isVerifiedSender(String fromEmail, String region) {
-        if (fromEmail == null) {
-            return false;
-        }
-        if (isIdentityVerified(fromEmail, region)) {
-            return true;
-        }
-        int at = fromEmail.indexOf('@');
-        return at >= 0 && at < fromEmail.length() - 1
-                && isIdentityVerified(fromEmail.substring(at + 1), region);
-    }
-
-    private boolean isIdentityVerified(String identity, String region) {
-        Identity id = getIdentityVerificationAttributes(identity, region);
-        return id != null && "Success".equals(id.getVerificationStatus());
     }
 
     private static boolean isValidRedirectUrl(String url) {
@@ -1389,66 +878,26 @@ public class SesService {
     }
 
     public ConfigurationSet createConfigurationSet(ConfigurationSet configSet, String region) {
-        if (configSet == null) {
-            throw new AwsException("InvalidParameterValue",
-                    "ConfigurationSetName is required.", 400);
-        }
-        String key = configSetKey(region, configSet.getName());
-        SesTags.validate(configSet.getTags());
-        if (configSet.getSuppressionOptions() != null
-                && configSet.getSuppressionOptions().getSuppressedReasons() != null) {
-            for (String reason : configSet.getSuppressionOptions().getSuppressedReasons()) {
-                if (reason == null) {
-                    throw new AwsException("BadRequestException",
-                            invalidSuppressionReasonMessage(null), 400);
-                }
-                if (!isValidConfigSetSuppressionReason(reason)) {
-                    throw new AwsException("BadRequestException",
-                            "1 validation error detected: Value at "
-                                    + "'suppressionOptions.suppressedReasons' failed to satisfy "
-                                    + "constraint: Member must satisfy constraint: "
-                                    + "[Member must satisfy enum value set: [BOUNCE, COMPLAINT]]",
-                            400);
-                }
-            }
-        }
-        validateTrackingOptions(configSet.getTrackingOptions(), region);
-        validateDeliveryOptions(configSet.getDeliveryOptions(), region);
-        validateVdmOptions(configSet.getVdmOptions());
-        if (configSetStore.get(key).isPresent()) {
-            throw new AwsException("ConfigurationSetAlreadyExists",
-                    "Configuration set " + configSet.getName() + " already exists.", 400);
-        }
-        if (configSet.getCreatedTimestamp() == null) {
-            configSet.setCreatedTimestamp(Instant.now());
-        }
-        configSetStore.put(key, configSet);
-        LOG.infov("Created SES configuration set: {0} in region {1}", configSet.getName(), region);
-        return configSet;
+        return configSetService.createConfigurationSet(configSet, region,
+                domain -> isVerifiedDomainIdentity(domain, region),
+                pool -> dedicatedIpPoolExists(pool, region));
     }
 
+    // The option operations live in the service; the facade only supplies the cross-domain probes
+    // (a verified domain identity, a dedicated IP pool) as predicates.
+
     public void setConfigurationSetTrackingOptions(String configSetName, TrackingOptions options, String region) {
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        validateTrackingOptions(options, region);
-        cs.setTrackingOptions(options);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated TrackingOptions on configuration set {0} in region {1}", configSetName, region);
+        configSetService.setTrackingOptions(configSetName, options, region,
+                domain -> isVerifiedDomainIdentity(domain, region));
     }
 
     public void setConfigurationSetDeliveryOptions(String configSetName, DeliveryOptions options, String region) {
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        validateDeliveryOptions(options, region);
-        cs.setDeliveryOptions(options);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated DeliveryOptions on configuration set {0} in region {1}", configSetName, region);
+        configSetService.setDeliveryOptions(configSetName, options, region,
+                pool -> dedicatedIpPoolExists(pool, region));
     }
 
     public void setConfigurationSetReputationOptions(String configSetName, boolean metricsEnabled, String region) {
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        cs.setReputationMetricsEnabled(metricsEnabled);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated ReputationMetricsEnabled on configuration set {0} in region {1}: {2}",
-                configSetName, region, metricsEnabled);
+        configSetService.setReputationMetricsEnabled(configSetName, metricsEnabled, region);
     }
 
     private boolean isVerifiedDomainIdentity(String domain, String region) {
@@ -1457,202 +906,42 @@ public class SesService {
                 && "Domain".equals(identity.getIdentityType());
     }
 
-    private void requireVerifiedRedirectDomain(String domain, String region) {
-        if (domain == null) {
-            throw new AwsException("ValidationError",
-                    "1 validation error detected: Value at 'trackingOptions' failed to satisfy constraint: "
-                            + "Member must not be null", 400);
-        }
-        if (domain.isBlank()) {
-            throw new AwsException("InvalidTrackingOptions",
-                    "At least one field of TrackingOptions must contain a value.", 400);
-        }
-        if (!isVerifiedDomainIdentity(domain, region)) {
-            throw new AwsException("InvalidTrackingOptions",
-                    "Domain <" + domain + "> is not verified under this account.", 400);
-        }
-    }
-
     public void createConfigurationSetTrackingOptions(String configSetName, String customRedirectDomain,
                                                       String region) {
-        requireVerifiedRedirectDomain(customRedirectDomain, region);
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        if (cs.getTrackingOptions() != null && cs.getTrackingOptions().getCustomRedirectDomain() != null) {
-            throw new AwsException("TrackingOptionsAlreadyExistsException",
-                    "Configuration set <" + configSetName + "> already has tracking options.", 400);
-        }
-        TrackingOptions options = new TrackingOptions();
-        options.setCustomRedirectDomain(customRedirectDomain);
-        cs.setTrackingOptions(options);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Created TrackingOptions on configuration set {0} in region {1}", configSetName, region);
+        configSetService.createTrackingOptions(configSetName, customRedirectDomain, region,
+                domain -> isVerifiedDomainIdentity(domain, region));
     }
 
     public void updateConfigurationSetTrackingOptions(String configSetName, String customRedirectDomain,
                                                       String region) {
-        requireVerifiedRedirectDomain(customRedirectDomain, region);
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        if (cs.getTrackingOptions() == null || cs.getTrackingOptions().getCustomRedirectDomain() == null) {
-            throw new AwsException("TrackingOptionsDoesNotExistException",
-                    "There are no tracking options for configuration set <" + configSetName + ">", 400);
-        }
-        cs.getTrackingOptions().setCustomRedirectDomain(customRedirectDomain);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated TrackingOptions on configuration set {0} in region {1}", configSetName, region);
+        configSetService.updateTrackingOptions(configSetName, customRedirectDomain, region,
+                domain -> isVerifiedDomainIdentity(domain, region));
     }
 
     public void deleteConfigurationSetTrackingOptions(String configSetName, String region) {
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        if (cs.getTrackingOptions() == null || cs.getTrackingOptions().getCustomRedirectDomain() == null) {
-            throw new AwsException("TrackingOptionsDoesNotExistException",
-                    "There are no tracking options for configuration set <" + configSetName + ">", 400);
-        }
-        cs.setTrackingOptions(null);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Deleted TrackingOptions on configuration set {0} in region {1}", configSetName, region);
+        configSetService.deleteTrackingOptions(configSetName, region);
     }
 
     public void setConfigurationSetArchivingOptions(String configSetName, ArchivingOptions options, String region) {
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        cs.setArchivingOptions(options);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated ArchivingOptions on configuration set {0} in region {1}", configSetName, region);
+        configSetService.setArchivingOptions(configSetName, options, region);
     }
-
-    private static final java.util.Set<String> VDM_FEATURE_STATES = java.util.Set.of("ENABLED", "DISABLED");
 
     public void setConfigurationSetVdmOptions(String configSetName, VdmOptions options, String region) {
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        validateVdmOptions(options);
-        cs.setVdmOptions(options);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated VdmOptions on configuration set {0} in region {1}", configSetName, region);
-    }
-
-    private void validateVdmOptions(VdmOptions options) {
-        if (options == null) {
-            return;
-        }
-        // Enum values verified against real AWS 2026-06-19; messages use the
-        // nested member path and the [ENABLED, DISABLED] value set.
-        if (options.getDashboardOptions() != null
-                && options.getDashboardOptions().getEngagementMetrics() != null
-                && !VDM_FEATURE_STATES.contains(options.getDashboardOptions().getEngagementMetrics())) {
-            throw new AwsException("BadRequestException",
-                    "1 validation error detected: Value at 'vdmOptions.dashboardOptions.engagementMetrics' "
-                            + "failed to satisfy constraint: Member must satisfy enum value set: [ENABLED, DISABLED]", 400);
-        }
-        if (options.getGuardianOptions() != null
-                && options.getGuardianOptions().getOptimizedSharedDelivery() != null
-                && !VDM_FEATURE_STATES.contains(options.getGuardianOptions().getOptimizedSharedDelivery())) {
-            throw new AwsException("BadRequestException",
-                    "1 validation error detected: Value at 'vdmOptions.guardianOptions.optimizedSharedDelivery' "
-                            + "failed to satisfy constraint: Member must satisfy enum value set: [ENABLED, DISABLED]", 400);
-        }
-    }
-
-    private static final java.util.Set<String> HTTPS_POLICIES =
-            java.util.Set.of("REQUIRE", "REQUIRE_OPEN_ONLY", "OPTIONAL");
-    private static final java.util.Set<String> TLS_POLICIES = java.util.Set.of("REQUIRE", "OPTIONAL");
-
-    private void validateTrackingOptions(TrackingOptions options, String region) {
-        if (options == null) {
-            return;
-        }
-        String domain = options.getCustomRedirectDomain();
-        String httpsPolicy = options.getHttpsPolicy();
-        // AWS validation order (verified against real AWS 2026-06-17): a present
-        // CustomRedirectDomain must be non-blank, and it is required whenever
-        // HttpsPolicy is set; then the domain must be a verified domain identity
-        // (checked even without HttpsPolicy); then HttpsPolicy must be a valid enum.
-        if ((domain != null && domain.isBlank()) || (httpsPolicy != null && domain == null)) {
-            throw new AwsException("BadRequestException",
-                    "CustomRedirectDomain must be specified.", 400);
-        }
-        if (domain != null && !isVerifiedDomainIdentity(domain, region)) {
-            throw new AwsException("BadRequestException",
-                    "Domain <" + domain + "> is not verified under this account.", 400);
-        }
-        if (httpsPolicy != null && !HTTPS_POLICIES.contains(httpsPolicy)) {
-            throw new AwsException("BadRequestException",
-                    "1 validation error detected: Value at 'httpsPolicy' failed to satisfy constraint: "
-                            + "Member must satisfy enum value set: [OPTIONAL, REQUIRE, REQUIRE_OPEN_ONLY]", 400);
-        }
-    }
-
-    private void validateDeliveryOptions(DeliveryOptions options, String region) {
-        if (options == null) {
-            return;
-        }
-        if (options.getTlsPolicy() != null && !TLS_POLICIES.contains(options.getTlsPolicy())) {
-            throw new AwsException("BadRequestException",
-                    "1 validation error detected: Value at 'tlsPolicy' failed to satisfy constraint: "
-                            + "Member must satisfy enum value set: [OPTIONAL, REQUIRE]", 400);
-        }
-        // AWS rejects a blank SendingPoolName outright, and a non-existent
-        // dedicated IP pool (both verified against real AWS 2026-06-17). The
-        // pool must have been created via CreateDedicatedIpPool.
-        if (options.getSendingPoolName() != null) {
-            if (options.getSendingPoolName().isBlank()) {
-                throw new AwsException("BadRequestException",
-                        "sendingPoolName can't be blank.", 400);
-            }
-            if (!dedicatedIpPoolExists(options.getSendingPoolName(), region)) {
-                throw new AwsException("BadRequestException",
-                        "SendingPool <" + options.getSendingPoolName() + "> doesn't exist", 400);
-            }
-        }
-        // AWS constrains MaxDeliverySeconds to [300, 50400] (max verified against
-        // real AWS 2026-06-17; min follows the same smithy range-constraint shape).
-        if (options.getMaxDeliverySeconds() != null) {
-            long maxDeliverySeconds = options.getMaxDeliverySeconds();
-            if (maxDeliverySeconds < 300) {
-                throw new AwsException("BadRequestException",
-                        "1 validation error detected: Value at 'maxDeliverySeconds' failed to satisfy constraint: "
-                                + "Member must have value greater than or equal to 300", 400);
-            }
-            if (maxDeliverySeconds > 50400) {
-                throw new AwsException("BadRequestException",
-                        "1 validation error detected: Value at 'maxDeliverySeconds' failed to satisfy constraint: "
-                                + "Member must have value less than or equal to 50400", 400);
-            }
-        }
+        configSetService.setVdmOptions(configSetName, options, region);
     }
 
     public ConfigurationSet getConfigurationSet(String name, String region) {
-        return configSetStore.get(configSetKey(region, name))
-                .orElseThrow(() -> new AwsException("ConfigurationSetDoesNotExist",
-                        "Configuration set <" + name + "> does not exist.", 400));
+        return configSetService.get(name, region);
     }
 
     public List<ConfigurationSet> listConfigurationSets(String region) {
-        String prefix = "configSet::" + region + "::";
-        List<ConfigurationSet> all = new ArrayList<>(configSetStore.scan(k -> k.startsWith(prefix)));
-        all.sort(Comparator.comparing(ConfigurationSet::getCreatedTimestamp,
-                        Comparator.nullsLast(Comparator.naturalOrder()))
-                .thenComparing(ConfigurationSet::getName,
-                        Comparator.nullsLast(Comparator.naturalOrder())));
-        return all;
+        return configSetService.list(region);
     }
 
     public void deleteConfigurationSet(String name, String region) {
-        String key = configSetKey(region, name);
-        if (configSetStore.get(key).isEmpty()) {
-            throw new AwsException("ConfigurationSetDoesNotExist",
-                    "Configuration set <" + name + "> does not exist.", 400);
-        }
+        configSetService.get(name, region);
         tenantService.deleteBackingResource(SesTenantService.RESOURCE_TYPE_CONFIGURATION_SET, name,
-                region, () -> {
-                    configSetStore.delete(key);
-                    LOG.infov("Deleted SES configuration set: {0} in region {1}", name, region);
-                });
-    }
-
-    private static final Pattern CONFIG_SET_NAME = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
-
-    private static String configSetKey(String region, String name) {
-        validateConfigurationSetName(name);
-        return "configSet::" + region + "::" + name;
+                region, () -> configSetService.remove(name, region));
     }
 
     // ──────────────────────── Tenants (multi-tenancy) ────────────────────────
@@ -1797,13 +1086,13 @@ public class SesService {
         if (email.isBlank()) {
             return fromEmailAddress.trim();
         }
-        if (identityStore.get(identityKey(region, email)).isPresent()) {
+        if (identityService.find(email, region).isPresent()) {
             return email;
         }
         int at = email.lastIndexOf('@');
         if (at >= 0) {
             String domain = email.substring(at + 1);
-            if (identityStore.get(identityKey(region, domain)).isPresent()) {
+            if (identityService.find(domain, region).isPresent()) {
                 return domain;
             }
         }
@@ -1815,10 +1104,10 @@ public class SesService {
     private void requireTenantResourceExists(SesTenantService.AssociationResource ref, String region) {
         boolean exists = switch (ref.type()) {
             case SesTenantService.RESOURCE_TYPE_IDENTITY ->
-                    identityStore.get(identityKey(region, ref.name())).isPresent();
+                    identityService.find(ref.name(), region).isPresent();
             case SesTenantService.RESOURCE_TYPE_CONFIGURATION_SET ->
-                    CONFIG_SET_NAME.matcher(ref.name()).matches()
-                            && configSetStore.get(configSetKey(region, ref.name())).isPresent();
+                    SesConfigurationSetService.isValidName(ref.name())
+                            && configSetService.find(ref.name(), region).isPresent();
             case SesTenantService.RESOURCE_TYPE_TEMPLATE ->
                     templateService.find(ref.name(), region).isPresent();
             default -> false;
@@ -1864,6 +1153,51 @@ public class SesService {
 
     public ReceiptRuleSet describeActiveReceiptRuleSet(String region) {
         return receiptRuleService.describeActiveReceiptRuleSet(region);
+    }
+
+    public void reorderReceiptRuleSet(String ruleSetName, List<String> ruleNames, String region) {
+        receiptRuleService.reorderReceiptRuleSet(ruleSetName, ruleNames, region);
+    }
+
+    public ReceiptRuleSet cloneReceiptRuleSet(String ruleSetName, String originalRuleSetName, String region) {
+        return receiptRuleService.cloneReceiptRuleSet(ruleSetName, originalRuleSetName, region);
+    }
+
+    // The bounce-sender check needs identity state; the rule domain receives it as a predicate
+    // bound here, keeping SesIdentityService out of its constructor surface.
+
+    public void createReceiptRule(String ruleSetName, ReceiptRule rule, String after, String region) {
+        receiptRuleService.createReceiptRule(ruleSetName, rule, after, region,
+                sender -> identityService.isVerifiedSender(sender, region));
+    }
+
+    public ReceiptRule describeReceiptRule(String ruleSetName, String ruleName, String region) {
+        return receiptRuleService.describeReceiptRule(ruleSetName, ruleName, region);
+    }
+
+    public void updateReceiptRule(String ruleSetName, ReceiptRule rule, String region) {
+        receiptRuleService.updateReceiptRule(ruleSetName, rule, region,
+                sender -> identityService.isVerifiedSender(sender, region));
+    }
+
+    public void deleteReceiptRule(String ruleSetName, String ruleName, String region) {
+        receiptRuleService.deleteReceiptRule(ruleSetName, ruleName, region);
+    }
+
+    public void setReceiptRulePosition(String ruleSetName, String ruleName, String after, String region) {
+        receiptRuleService.setReceiptRulePosition(ruleSetName, ruleName, after, region);
+    }
+
+    public void createReceiptFilter(ReceiptFilter filter, String region) {
+        receiptRuleService.createReceiptFilter(filter, region);
+    }
+
+    public List<ReceiptFilter> listReceiptFilters(String region) {
+        return receiptRuleService.listReceiptFilters(region);
+    }
+
+    public void deleteReceiptFilter(String filterName, String region) {
+        receiptRuleService.deleteReceiptFilter(filterName, region);
     }
 
     // ──────────────────────── Dedicated IP Pools ────────────────────────
@@ -1996,7 +1330,7 @@ public class SesService {
     }
 
     private void requireIdentityExists(String identity, String region) {
-        if (identityStore.get(identityKey(region, identity)).isEmpty()) {
+        if (identityService.find(identity, region).isEmpty()) {
             throw new AwsException("NotFoundException",
                     "Email identity <" + identity + "> does not exist.", 404);
         }
@@ -2004,104 +1338,28 @@ public class SesService {
 
 
 
-    static void validateConfigurationSetName(String name) {
-        if (name == null || name.isBlank()) {
-            throw new AwsException("InvalidParameterValue",
-                    "ConfigurationSetName is required.", 400);
-        }
-        if (!CONFIG_SET_NAME.matcher(name).matches()) {
-            throw new AwsException("InvalidParameterValue",
-                    "ConfigurationSetName must be 1-64 characters and may only contain "
-                            + "alphanumeric characters, underscores, and hyphens.", 400);
-        }
-    }
-
-    private static final Pattern EVENT_DESTINATION_NAME_CHARS = Pattern.compile("^[A-Za-z0-9_-]+$");
-
-    private static final int MAX_EVENT_DESTINATION_NAME_LENGTH = 64;
-
-    private static final List<String> VALID_EVENT_TYPES = List.of(
-            "SEND", "REJECT", "BOUNCE", "COMPLAINT", "DELIVERY", "OPEN", "CLICK",
-            "RENDERING_FAILURE", "DELIVERY_DELAY", "SUBSCRIPTION");
-
     public void createConfigurationSetEventDestination(String configSetName, String eventDestinationName,
                                                        EventDestination dest, String region) {
-        validateEventDestinationName(eventDestinationName);
-        validateEventDestination(dest);
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        if (indexOfEventDestination(cs.getEventDestinations(), eventDestinationName) >= 0) {
-            throw new AwsException("AlreadyExists",
-                    "An event destination with name <" + eventDestinationName
-                            + "> already exists for configuration set <" + configSetName + ">.", 400);
-        }
-        dest.setName(eventDestinationName);
-        cs.getEventDestinations().add(dest);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Created SES event destination {0} on configuration set {1} in region {2}",
-                eventDestinationName, configSetName, region);
+        configSetService.createEventDestination(configSetName, eventDestinationName, dest, region);
     }
 
     public List<EventDestination> getConfigurationSetEventDestinations(String configSetName, String region) {
-        return List.copyOf(getConfigurationSet(configSetName, region).getEventDestinations());
+        return configSetService.getEventDestinations(configSetName, region);
     }
 
     public void updateConfigurationSetEventDestination(String configSetName, String eventDestinationName,
                                                        EventDestination dest, String region) {
-        validateEventDestinationName(eventDestinationName);
-        validateEventDestination(dest);
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        int index = indexOfEventDestination(cs.getEventDestinations(), eventDestinationName);
-        if (index < 0) {
-            throw new AwsException("NotFoundException",
-                    "An event destination with name <" + eventDestinationName
-                            + "> does not exist for configuration set <" + configSetName + ">.", 404);
-        }
-        dest.setName(eventDestinationName);
-        cs.getEventDestinations().set(index, dest);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated SES event destination {0} on configuration set {1} in region {2}",
-                eventDestinationName, configSetName, region);
+        configSetService.updateEventDestination(configSetName, eventDestinationName, dest, region);
     }
 
     public void deleteConfigurationSetEventDestination(String configSetName, String eventDestinationName,
                                                        String region) {
-        validateEventDestinationName(eventDestinationName);
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        boolean removed = cs.getEventDestinations().removeIf(ed -> eventDestinationName.equals(ed.getName()));
-        if (!removed) {
-            throw new AwsException("NotFoundException",
-                    "An event destination with name <" + eventDestinationName
-                            + "> does not exist for configuration set <" + configSetName + ">.", 404);
-        }
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Deleted SES event destination {0} on configuration set {1} in region {2}",
-                eventDestinationName, configSetName, region);
+        configSetService.deleteEventDestination(configSetName, eventDestinationName, region);
     }
 
-    /**
-     * Stores per-configuration-set suppression overrides. Mirrors the AWS V2
-     * {@code PutConfigurationSetSuppressionOptions} contract: {@code reasons} may
-     * be {@code null} or empty (explicit "no filtering" for this set) or a subset
-     * of {@code [BOUNCE, COMPLAINT]}. Once set, the value is returned through
-     * {@link #getConfigurationSet}; downstream callers can resolve the effective
-     * reasons for a given send via {@link #getEffectiveSuppressedReasons}.
-     */
     public void putConfigurationSetSuppressionOptions(String configSetName,
                                                       List<String> reasons, String region) {
-        List<String> sanitized = new ArrayList<>();
-        if (reasons != null) {
-            for (String r : reasons) {
-                validateConfigSetSuppressionReason(r);
-                sanitized.add(r);
-            }
-        }
-        ConfigurationSet cs = getConfigurationSet(configSetName, region);
-        SuppressionOptions options = new SuppressionOptions();
-        options.setSuppressedReasons(sanitized);
-        cs.setSuppressionOptions(options);
-        configSetStore.put(configSetKey(region, configSetName), cs);
-        LOG.infov("Updated SuppressionOptions on configuration set {0} in region {1}: {2}",
-                configSetName, region, sanitized);
+        configSetService.putSuppressionOptions(configSetName, reasons, region);
     }
 
     /**
@@ -2125,129 +1383,18 @@ public class SesService {
         return List.copyOf(getAccountSuppressionAttributes(region).getSuppressedReasons());
     }
 
-    private static int indexOfEventDestination(List<EventDestination> destinations, String name) {
-        for (int i = 0; i < destinations.size(); i++) {
-            if (name != null && name.equals(destinations.get(i).getName())) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    static void validateEventDestinationName(String name) {
-        if (name == null || name.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "EventDestinationName is required.", 400);
-        }
-        if (!EVENT_DESTINATION_NAME_CHARS.matcher(name).matches()) {
-            throw new AwsException("InvalidParameterValue",
-                    "Invalid event destination name <" + name + ">: only alphanumeric ASCII characters, "
-                            + "'_', and '-' are allowed.", 400);
-        }
-        if (name.length() > MAX_EVENT_DESTINATION_NAME_LENGTH) {
-            throw new AwsException("InvalidParameterValue",
-                    "Event destination name cannot exceed 64 characters.", 400);
-        }
-    }
-
-    static void validateEventDestination(EventDestination dest) {
-        if (dest == null) {
-            throw new AwsException("InvalidParameterValue", "EventDestination is required.", 400);
-        }
-        List<String> types = dest.getMatchingEventTypes();
-        if (types == null || types.isEmpty()) {
-            throw new AwsException("InvalidParameterValue", "At least one event type must be specified.", 400);
-        }
-        for (String t : types) {
-            if (t == null || !VALID_EVENT_TYPES.contains(t)) {
-                throw new AwsException("InvalidParameterValue",
-                        "Invalid event type: " + t + ". Valid values are " + VALID_EVENT_TYPES + ".", 400);
-            }
-        }
-        int destinationCount = countDestinations(dest);
-        if (destinationCount == 0) {
-            throw new AwsException("InvalidParameterValue", "Event destination is not provided.", 400);
-        }
-        if (destinationCount > 1) {
-            throw new AwsException("InvalidParameterValue",
-                    "Please provide only one destination with each request. Either a Firehose Destination "
-                            + "or a Cloudwatch Destination or an SNS Destination or an EventBridge Destination.", 400);
-        }
-        if (dest.getSnsDestination() != null
-                && (dest.getSnsDestination().getTopicArn() == null
-                || dest.getSnsDestination().getTopicArn().isBlank())) {
-            throw new AwsException("InvalidParameterValue",
-                    "SnsDestination requires a non-blank TopicArn.", 400);
-        }
-        if (dest.getKinesisFirehoseDestination() != null
-                && (dest.getKinesisFirehoseDestination().getIamRoleArn() == null
-                || dest.getKinesisFirehoseDestination().getIamRoleArn().isBlank()
-                || dest.getKinesisFirehoseDestination().getDeliveryStreamArn() == null
-                || dest.getKinesisFirehoseDestination().getDeliveryStreamArn().isBlank())) {
-            throw new AwsException("InvalidParameterValue",
-                    "KinesisFirehoseDestination requires both IamRoleArn and DeliveryStreamArn.",
-                    400);
-        }
-        if (dest.getCloudWatchDestination() != null) {
-            List<CloudWatchDimensionConfiguration> dims =
-                    dest.getCloudWatchDestination().getDimensionConfigurations();
-            if (dims == null || dims.isEmpty()) {
-                throw new AwsException("InvalidParameterValue",
-                        "CloudWatch metrics dimension configuration list cannot be empty.", 400);
-            }
-            for (int i = 0; i < dims.size(); i++) {
-                CloudWatchDimensionConfiguration dim = dims.get(i);
-                if (dim == null
-                        || dim.getDimensionName() == null || dim.getDimensionName().isBlank()
-                        || dim.getDimensionValueSource() == null
-                        || dim.getDimensionValueSource().isBlank()
-                        || dim.getDefaultDimensionValue() == null
-                        || dim.getDefaultDimensionValue().isBlank()) {
-                    throw new AwsException("InvalidParameterValue",
-                            "CloudWatchDestination dimension configurations require "
-                                    + "DimensionName, DimensionValueSource, and DefaultDimensionValue "
-                                    + "(missing on member " + (i + 1) + ").", 400);
-                }
-            }
-        }
-        if (dest.getPinpointDestination() != null
-                && (dest.getPinpointDestination().getApplicationArn() == null
-                || dest.getPinpointDestination().getApplicationArn().isBlank())) {
-            throw new AwsException("InvalidParameterValue",
-                    "Invalid Pinpoint application ARN provided: "
-                            + dest.getPinpointDestination().getApplicationArn() + ".", 400);
-        }
-    }
-
-    private static int countDestinations(EventDestination dest) {
-        int count = 0;
-        if (dest.getSnsDestination() != null) {
-            count++;
-        }
-        if (dest.getCloudWatchDestination() != null) {
-            count++;
-        }
-        if (dest.getKinesisFirehoseDestination() != null) {
-            count++;
-        }
-        if (dest.getEventBridgeDestination() != null) {
-            count++;
-        }
-        if (dest.getPinpointDestination() != null) {
-            count++;
-        }
-        return count;
-    }
 
     public List<Tag> listResourceTags(String arn, String region) {
         ResourceRef ref = parseSesArn(arn);
         requireCallerAccount(ref);
         List<Tag> tags = switch (ref.type()) {
-            case "configuration-set" -> listConfigurationSetTags(ref.name(), region);
-            case "template" -> listEmailTemplateTags(ref.name(), region);
-            case "identity" -> listIdentityTags(ref.name(), region);
+            case "configuration-set" -> configSetService.listTags(ref.name(), region);
+            case "template" -> templateService.listTags(ref.name(), region);
+            case "identity" -> identityService.listTags(ref.name(), region);
             case "contact-list" -> contactService.listTags(ref.name(), region);
             case "custom-verification-email-template" -> cvetService.listTags(ref.name(), region);
             case "dedicated-ip-pool" -> dedicatedIpService.listTags(ref.name(), region);
+            case "tenant" -> tenantService.listTags(ref.name(), region);
             default -> throw new AwsException("NotFoundException",
                     "Resource " + arn + " was not found.", 404);
         };
@@ -2272,12 +1419,13 @@ public class SesService {
         List<Tag> tags = newTags == null ? List.of() : newTags;
         SesTags.validate(tags);
         switch (ref.type()) {
-            case "configuration-set" -> tagConfigurationSet(ref.name(), region, tags);
-            case "template" -> tagEmailTemplate(ref.name(), region, tags);
-            case "identity" -> tagIdentity(ref.name(), region, tags);
+            case "configuration-set" -> configSetService.tag(ref.name(), region, tags);
+            case "template" -> templateService.tag(ref.name(), region, tags);
+            case "identity" -> identityService.tag(ref.name(), region, tags);
             case "contact-list" -> contactService.tag(ref.name(), region, tags);
             case "custom-verification-email-template" -> cvetService.tag(ref.name(), region, tags);
             case "dedicated-ip-pool" -> dedicatedIpService.tag(ref.name(), region, tags);
+            case "tenant" -> tenantService.tag(ref.name(), region, tags);
             default -> throw new AwsException("NotFoundException",
                     "Resource " + arn + " was not found.", 404);
         }
@@ -2298,118 +1446,20 @@ public class SesService {
             throw new AwsException("BadRequestException", "Failed to untag resource", 400);
         }
         switch (ref.type()) {
-            case "configuration-set" -> untagConfigurationSet(ref.name(), region, tagKeys);
-            case "template" -> untagEmailTemplate(ref.name(), region, tagKeys);
-            case "identity" -> untagIdentity(ref.name(), region, tagKeys);
+            case "configuration-set" -> configSetService.untag(ref.name(), region, tagKeys);
+            case "template" -> templateService.untag(ref.name(), region, tagKeys);
+            case "identity" -> identityService.untag(ref.name(), region, tagKeys);
             case "contact-list" -> contactService.untag(ref.name(), region, tagKeys);
             case "custom-verification-email-template" -> cvetService.untag(ref.name(), region, tagKeys);
             case "dedicated-ip-pool" -> dedicatedIpService.untag(ref.name(), region, tagKeys);
+            case "tenant" -> tenantService.untag(ref.name(), region, tagKeys);
             default -> throw new AwsException("NotFoundException",
                     "Resource " + arn + " was not found.", 404);
         }
     }
 
-    private List<Tag> listConfigurationSetTags(String name, String region) {
-        ConfigurationSet cs = configSetStore.get(configSetKey(region, name))
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No ConfigurationSet present with name: " + name, 404));
-        return new ArrayList<>(cs.getTags());
-    }
-
-    private void tagConfigurationSet(String name, String region, List<Tag> newTags) {
-        String key = configSetKey(region, name);
-        ConfigurationSet cs = configSetStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No ConfigurationSet present with name: " + name, 404));
-        cs.setTags(SesTags.merge(cs.getTags(), newTags));
-        configSetStore.put(key, cs);
-        LOG.infov("Tagged SES configuration set: {0} (region {1}, +{2} tags)", name, region, newTags.size());
-    }
-
-    private void untagConfigurationSet(String name, String region, List<String> tagKeys) {
-        String key = configSetKey(region, name);
-        ConfigurationSet cs = configSetStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No ConfigurationSet present with name: " + name, 404));
-        Set<String> toRemove = new HashSet<>(tagKeys);
-        // Copy-on-write: the stored list may be immutable, and unlocked readers iterate it.
-        List<Tag> remaining = new ArrayList<>(cs.getTags());
-        remaining.removeIf(t -> toRemove.contains(t.key()));
-        cs.setTags(remaining);
-        configSetStore.put(key, cs);
-        LOG.infov("Untagged SES configuration set: {0} (region {1}, -{2} keys)", name, region, tagKeys.size());
-    }
-
-    private List<Tag> listEmailTemplateTags(String name, String region) {
-        EmailTemplate template = templateService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No Template present with name: " + name, 404));
-        return new ArrayList<>(template.getTags());
-    }
-
-    private void tagEmailTemplate(String name, String region, List<Tag> newTags) {
-        EmailTemplate template = templateService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No Template present with name: " + name, 404));
-        template.setTags(SesTags.merge(template.getTags(), newTags));
-        templateService.save(template, region);
-        LOG.infov("Tagged SES template: {0} (region {1}, +{2} tags)", name, region, newTags.size());
-    }
-
-    private List<Tag> listIdentityTags(String identityValue, String region) {
-        Identity identity = identityStore.get(identityKey(region, identityValue))
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No EmailIdentity present with name: " + identityValue, 404));
-        return new ArrayList<>(identity.getTags());
-    }
-
-    private void tagIdentity(String identityValue, String region, List<Tag> newTags) {
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No EmailIdentity present with name: " + identityValue, 404));
-        identity.setTags(SesTags.merge(identity.getTags(), newTags));
-        identityStore.put(key, identity);
-        LOG.infov("Tagged SES identity: {0} (region {1}, +{2} tags)", identityValue, region, newTags.size());
-    }
-
-    private void untagIdentity(String identityValue, String region, List<String> tagKeys) {
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No EmailIdentity present with name: " + identityValue, 404));
-        Set<String> toRemove = new HashSet<>(tagKeys);
-        // Copy-on-write: the stored list may be immutable, and unlocked readers iterate it.
-        List<Tag> remaining = new ArrayList<>(identity.getTags());
-        remaining.removeIf(t -> toRemove.contains(t.key()));
-        identity.setTags(remaining);
-        identityStore.put(key, identity);
-        LOG.infov("Untagged SES identity: {0} (region {1}, -{2} keys)", identityValue, region, tagKeys.size());
-    }
-
-    public void setIdentityTags(String identityValue, String region, List<Tag> tags) {
-        SesTags.validate(tags);
-        String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No EmailIdentity present with name: " + identityValue, 404));
-        identity.setTags(tags);
-        identityStore.put(key, identity);
-    }
-
-    private void untagEmailTemplate(String name, String region, List<String> tagKeys) {
-        EmailTemplate template = templateService.find(name, region)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "No Template present with name: " + name, 404));
-        Set<String> toRemove = new HashSet<>(tagKeys);
-        // Copy-on-write: the stored list may be immutable, and unlocked readers iterate it.
-        List<Tag> remaining = new ArrayList<>(template.getTags());
-        remaining.removeIf(t -> toRemove.contains(t.key()));
-        template.setTags(remaining);
-        templateService.save(template, region);
-        LOG.infov("Untagged SES template: {0} (region {1}, -{2} keys)", name, region, tagKeys.size());
-    }
-
+    // name is everything after the type's first slash and may itself contain one: a tenant ARN's
+    // <name>/<tenantId> remainder passes through whole, decomposed by the tenant domain.
     private record ResourceRef(String account, String region, String type, String name) {}
 
     /**
@@ -2573,50 +1623,6 @@ public class SesService {
         return result;
     }
 
-    /**
-     * Resolves the recipients suppressed by SES V2 {@code SendEmail} {@code ListManagementOptions}:
-     * for each envelope recipient that is opted out of the named contact list (or the given topic),
-     * returns a {@code BOUNCE} suppression reason so the shared send path drops the recipient from
-     * the relay and publishes a Bounce event — matching AWS ("SES will issue a bounce event for a
-     * message that is sent to an unsubscribed contact"). Returns an empty map when no
-     * {@code ListManagementOptions} was supplied. Throws when the contact list does not exist, so a
-     * bad reference fails the whole send. A recipient that is not yet a contact is created
-     * automatically (matching AWS), then evaluated like any other contact.
-     */
-    private Map<String, String> collectListManagementOptOuts(Collection<String> addresses,
-                                                             ListManagementOptions listManagement, String region) {
-        if (listManagement == null || listManagement.contactListName() == null
-                || listManagement.contactListName().isBlank() || addresses == null || addresses.isEmpty()) {
-            return Map.of();
-        }
-        ContactList list = contactService.getContactList(listManagement.contactListName(), region);
-        String topicName = listManagement.topicName();
-        String effectiveTopic = (topicName == null || topicName.isBlank()) ? null : topicName;
-        // Fail fast on a topic that isn't defined on the list rather than silently skipping
-        // suppression (a typo would otherwise send to everyone). AWS does not document this, so the
-        // exact error is best-effort.
-        if (effectiveTopic != null && contactService.defaultTopicStatus(list, effectiveTopic) == null) {
-            throw new AwsException("BadRequestException",
-                    "Topic " + effectiveTopic + " does not exist in contact list "
-                            + list.getContactListName() + ".", 400);
-        }
-        Map<String, String> optOuts = new LinkedHashMap<>();
-        for (String address : addresses) {
-            if (address == null || address.isBlank() || optOuts.containsKey(address)) {
-                continue;
-            }
-            String email = extractEmailAddress(address);
-            if (email == null || email.isBlank()) {
-                continue;
-            }
-            Contact contact = contactService.getOrAutoCreateContact(list, email, region);
-            if (contactService.isListManagementOptedOut(contact, list, effectiveTopic)) {
-                optOuts.put(address, "BOUNCE");
-            }
-        }
-        return optOuts;
-    }
-
     private static final String UNSUBSCRIBE_PLACEHOLDER = "{{amazonSESUnsubscribeUrl}}";
 
     private static boolean hasListManagement(ListManagementOptions listManagement) {
@@ -2718,9 +1724,9 @@ public class SesService {
      * <p>The returned value is one of {@code "BOUNCE"} / {@code "COMPLAINT"}, allowing
      * callers (publishSendEvents) to map the recipient to a synthetic Bounce / Complaint
      * event without consulting the store again. Both the per-address suppression entries
-     * and the account-level / per-CS {@code suppressedReasons} go through
-     * {@link SesSuppressionService}'s reason validation / {@link #validateConfigSetSuppressionReason},
-     * which enforce exact case-sensitive equality with the two canonical values, so
+     * and the account-level / per-CS {@code suppressedReasons} go through reason validation
+     * (in {@link SesSuppressionService} and {@link SesConfigurationSetService} respectively),
+     * which enforces exact case-sensitive equality with the two canonical values, so
      * {@code entry.getReason()} is guaranteed to be canonical and downstream
      * {@code .equals("BOUNCE")} / {@code .equals("COMPLAINT")} checks are safe.
      */
@@ -2743,30 +1749,6 @@ public class SesService {
     }
 
 
-    /**
-     * Validation message used by PutConfigurationSetSuppressionOptions. AWS
-     * V2 SES uses a different, simpler natural-language sentence on this
-     * endpoint than on the three older suppression APIs above:
-     *   "Reason <X> is invalid, must be one of [BOUNCE, COMPLAINT]."
-     * (Verified against real AWS V2 SES on 2026-06-03.) CreateConfigurationSet
-     * reports the constraint-style validation message for invalid non-null
-     * values but falls back to this sentence for null elements, matching AWS
-     * (verified 2026-06-13); see {@link #createConfigurationSet}.
-     */
-    private static void validateConfigSetSuppressionReason(String reason) {
-        if (!isValidConfigSetSuppressionReason(reason)) {
-            throw new AwsException("BadRequestException",
-                    invalidSuppressionReasonMessage(reason), 400);
-        }
-    }
-
-    private static boolean isValidConfigSetSuppressionReason(String reason) {
-        return "BOUNCE".equals(reason) || "COMPLAINT".equals(reason);
-    }
-
-    private static String invalidSuppressionReasonMessage(String reason) {
-        return "Reason " + reason + " is invalid, must be one of [BOUNCE, COMPLAINT].";
-    }
 
     public String sendTemplatedEmail(String source, List<String> toAddresses, List<String> ccAddresses,
                                      List<String> bccAddresses, List<String> replyToAddresses,
@@ -2782,116 +1764,7 @@ public class SesService {
     }
 
     public String renderTestTemplate(String templateName, String templateDataRaw, String region) {
-        EmailTemplate template = getTemplate(templateName, region);
-        JsonNode templateData = parseRenderingData(objectMapper, templateDataRaw);
-        String subject = applyTemplateData(template.getSubject(), templateData);
-        String text = applyTemplateData(template.getTextPart(), templateData);
-        String html = applyTemplateData(template.getHtmlPart(), templateData);
-        return buildTestRenderMime(subject, text, html, ZonedDateTime.now(ZoneOffset.UTC), nextBoundary());
-    }
-
-    static JsonNode parseRenderingData(ObjectMapper mapper, String raw) {
-        if (raw == null || raw.isBlank()) {
-            throw new AwsException("InvalidRenderingParameter",
-                    "Template rendering data is required.", 400);
-        }
-        JsonNode node;
-        try {
-            node = mapper.readTree(raw);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new AwsException("InvalidRenderingParameter",
-                    "Template rendering data is invalid: " + e.getOriginalMessage(), 400);
-        }
-        if (!node.isObject()) {
-            throw new AwsException("InvalidRenderingParameter",
-                    "Template rendering data must be a JSON object.", 400);
-        }
-        return node;
-    }
-
-    static String buildTestRenderMime(String subject, String text, String html,
-                                       ZonedDateTime date, String boundary) {
-        String safeSubject = sanitizeSubject(subject);
-        String safeText = text == null ? "" : text;
-        String safeHtml = html == null ? "" : html;
-        String dateHeader = DateTimeFormatter.RFC_1123_DATE_TIME.format(date);
-        StringBuilder out = new StringBuilder();
-        out.append("Date: ").append(dateHeader).append("\r\n");
-        out.append("Subject: ").append(safeSubject).append("\r\n");
-        out.append("MIME-Version: 1.0\r\n");
-        out.append("Content-Type: multipart/alternative; boundary=\"").append(boundary).append("\"\r\n");
-        out.append("\r\n");
-        appendMimePart(out, boundary, "text/plain", safeText);
-        appendMimePart(out, boundary, "text/html", safeHtml);
-        out.append("--").append(boundary).append("--\r\n");
-        return out.toString();
-    }
-
-    private static void appendMimePart(StringBuilder out, String boundary, String mimeType, String body) {
-        out.append("--").append(boundary).append("\r\n");
-        out.append("Content-Type: ").append(mimeType).append("; charset=UTF-8\r\n");
-        out.append("Content-Transfer-Encoding: ").append(pickTransferEncoding(body)).append("\r\n");
-        out.append("\r\n");
-        String normalized = normalizeToCrlf(body);
-        out.append(normalized);
-        if (!normalized.endsWith("\r\n")) {
-            out.append("\r\n");
-        }
-    }
-
-    static String normalizeToCrlf(String body) {
-        return body.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n");
-    }
-
-    static String pickTransferEncoding(String body) {
-        return body.codePoints().allMatch(c -> c < 128) ? "7bit" : "8bit";
-    }
-
-    static String sanitizeSubject(String subject) {
-        if (subject == null) {
-            return "";
-        }
-        // Strip C0 control characters (U+0000-U+001F) and DEL (U+007F): RFC 5322
-        // forbids them in unstructured header field bodies. Replace with spaces so
-        // visible content is preserved when template data accidentally injects them.
-        StringBuilder out = new StringBuilder(subject.length());
-        for (int i = 0; i < subject.length(); i++) {
-            char c = subject.charAt(i);
-            out.append((c < 0x20 || c == 0x7F) ? ' ' : c);
-        }
-        return out.toString();
-    }
-
-    static String stripXml10InvalidChars(String s) {
-        if (s == null || s.isEmpty()) {
-            return s;
-        }
-        // XML 1.0 char production: \t \n \r, U+0020-U+D7FF, U+E000-U+FFFD,
-        // U+10000-U+10FFFF. Anything else (C0 controls, U+FFFE/U+FFFF, lone
-        // surrogates) makes the response unparseable by SDK XML parsers.
-        StringBuilder out = new StringBuilder(s.length());
-        int i = 0;
-        while (i < s.length()) {
-            int cp = s.codePointAt(i);
-            if (isXml10Char(cp)) {
-                out.appendCodePoint(cp);
-            }
-            i += Character.charCount(cp);
-        }
-        return out.toString();
-    }
-
-    private static boolean isXml10Char(int cp) {
-        return cp == 0x09 || cp == 0x0A || cp == 0x0D
-                || (cp >= 0x20 && cp <= 0xD7FF)
-                || (cp >= 0xE000 && cp <= 0xFFFD)
-                || (cp >= 0x10000 && cp <= 0x10FFFF);
-    }
-
-    private static String nextBoundary() {
-        byte[] bytes = new byte[6];
-        BOUNDARY_RANDOM.nextBytes(bytes);
-        return "===_floci_" + HexFormat.of().formatHex(bytes) + "_===";
+        return templateService.renderTestTemplate(templateName, templateDataRaw, region);
     }
 
     /**
@@ -2918,9 +1791,9 @@ public class SesService {
                                             ListManagementOptions listManagement, String region) {
         requireInlineTemplateContent(subject, textPart, htmlPart);
         return sendEmail(source, toAddresses, ccAddresses, bccAddresses, replyToAddresses,
-                applyTemplateData(subject, templateData),
-                applyTemplateData(textPart, templateData),
-                applyTemplateData(htmlPart, templateData),
+                SesTemplateService.applyTemplateData(subject, templateData),
+                SesTemplateService.applyTemplateData(textPart, templateData),
+                SesTemplateService.applyTemplateData(htmlPart, templateData),
                 configurationSetName, emailTags, additionalHeaders, listManagement, region);
     }
 
@@ -2941,7 +1814,7 @@ public class SesService {
             throw new AwsException("InvalidParameterValue",
                     "At least one destination entry is required.", 400);
         }
-        validateConfigurationSet(configurationSetName, region);
+        configSetService.validateForSending(configurationSetName, region);
         if (entries.size() > MAX_BULK_DESTINATIONS) {
             throw new AwsException("MessageRejected",
                     "Number of destinations (" + entries.size() + ") exceeds the maximum of "
@@ -2969,9 +1842,9 @@ public class SesService {
                 String messageId = sendEmail(source,
                         entry.toAddresses(), entry.ccAddresses(), entry.bccAddresses(),
                         replyToAddresses,
-                        applyTemplateData(subject, merged),
-                        applyTemplateData(textPart, merged),
-                        applyTemplateData(htmlPart, merged),
+                        SesTemplateService.applyTemplateData(subject, merged),
+                        SesTemplateService.applyTemplateData(textPart, merged),
+                        SesTemplateService.applyTemplateData(htmlPart, merged),
                         configurationSetName, mergedTags, mergedHeaders, null, region);
                 results.add(BulkEmailEntryResult.success(messageId));
             } catch (AwsException e) {
@@ -3069,69 +1942,5 @@ public class SesService {
         ObjectNode merged = ((ObjectNode) defaults).deepCopy();
         replacement.fields().forEachRemaining(e -> merged.set(e.getKey(), e.getValue()));
         return merged;
-    }
-
-    static String applyTemplateData(String text, JsonNode data) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        Matcher matcher = TEMPLATE_VARIABLE.matcher(text);
-        StringBuilder out = new StringBuilder();
-        while (matcher.find()) {
-            String key = matcher.group(1);
-            if ("amazonSESUnsubscribeUrl".equals(key)) {
-                // Reserved list-management placeholder: leave it intact for post-render replacement
-                // in the send path, so a templated body can carry {{amazonSESUnsubscribeUrl}} without
-                // failing as a missing rendering attribute.
-                matcher.appendReplacement(out, Matcher.quoteReplacement(matcher.group(0)));
-                continue;
-            }
-            if (data == null || !data.hasNonNull(key)) {
-                throw new AwsException("MissingRenderingAttribute",
-                        "Attribute '" + key + "' is not present in the rendering data.", 400);
-            }
-            JsonNode value = data.get(key);
-            String replacement = value.isValueNode() ? value.asText() : value.toString();
-            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(out);
-        return out.toString();
-    }
-
-    /**
-     * Extracts the template name from an SES template ARN of the form
-     * {@code arn:aws:ses:<region>:<account>:template/<name>}. Region and
-     * account segments are not validated; only the {@code template/<name>}
-     * suffix is required.
-     */
-    public static String templateNameFromArn(String arn) {
-        if (arn == null || arn.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "TemplateArn is required.", 400);
-        }
-        int marker = arn.indexOf(":template/");
-        if (!arn.startsWith("arn:") || marker < 0) {
-            throw new AwsException("InvalidParameterValue",
-                    "TemplateArn is not a valid SES template ARN: " + arn, 400);
-        }
-        String name = arn.substring(marker + ":template/".length());
-        if (name.isEmpty()) {
-            throw new AwsException("InvalidParameterValue",
-                    "TemplateArn is missing a template name: " + arn, 400);
-        }
-        return name;
-    }
-
-    private static String identityKey(String region, String identity) {
-        validateIdentityWhitespace(identity, "Identity");
-        return "identity::" + region + "::" + identity;
-    }
-
-    private static void validateIdentityWhitespace(String identity, String fieldName) {
-        if (identity == null || identity.isBlank()) {
-            return;
-        }
-        if (Character.isWhitespace(identity.charAt(0)) || Character.isWhitespace(identity.charAt(identity.length() - 1))) {
-            throw new AwsException("InvalidParameterValue", fieldName + " must not contain leading or trailing whitespace.", 400);
-        }
     }
 }

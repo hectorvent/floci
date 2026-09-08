@@ -72,14 +72,50 @@ class S3CfnProvisionerTest {
 
         verify(s3).createBucket("my-bucket", REGION);
         assertEquals("my-bucket", r.getPhysicalId(), "Ref is the bucket name");
-        // aws-s3-bucket.json readOnlyProperties, minus DualStackDomainName (see the PR follow-up),
-        // plus BucketName which the template engine resolves for Fn::GetAtt.
+        // Every readOnlyProperty in aws-s3-bucket.json, plus BucketName which the template engine
+        // resolves for Fn::GetAtt.
         assertEquals(Map.of(
                 "Arn", "arn:aws:s3:::my-bucket",
                 "DomainName", "my-bucket.s3.amazonaws.com",
                 "RegionalDomainName", "my-bucket.s3.us-east-1.amazonaws.com",
+                "DualStackDomainName", "my-bucket.s3.dualstack.us-east-1.amazonaws.com",
                 "WebsiteURL", "http://my-bucket.s3-website.us-east-1.amazonaws.com",
                 "BucketName", "my-bucket"), r.getAttributes());
+    }
+
+    /**
+     * The defect Greptile flagged on the migration PR, pre-existing rather than introduced there:
+     * an unnamed bucket was renamed on every update, creating a second bucket and orphaning the
+     * first with its objects. BucketName is createOnly in aws-s3-bucket.json, so an unchanged
+     * template must keep its physical id.
+     */
+    @Test
+    void anUnnamedBucketKeepsItsNameAcrossUpdates() {
+        StackResource r = resource("Bucket", "AWS::S3::Bucket");
+        r.setPhysicalId("my-stack-bucket-abc123def456");
+        provisioner.provision(r, props("{}"),
+                new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack",
+                        "my-stack-bucket-abc123def456"));
+
+        assertEquals("my-stack-bucket-abc123def456", r.getPhysicalId());
+        // The bucket already exists under this name. Outside us-east-1 CreateBucket would answer
+        // BucketAlreadyOwnedByYou, so the update must not create; it still reconciles configuration.
+        verify(s3, never()).createBucket(anyString(), anyString());
+        verify(s3).deleteBucketCors("my-stack-bucket-abc123def456");
+    }
+
+    @Test
+    void anUpdateThatRenamesTheBucketStillCreatesIt() {
+        StackResource r = resource("Bucket", "AWS::S3::Bucket");
+        r.setPhysicalId("my-stack-bucket-abc123def456");
+        provisioner.provision(r, props("{\"BucketName\": \"renamed\"}"),
+                new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack",
+                        "my-stack-bucket-abc123def456"));
+
+        // A replacing update: the derived name differs from the prior id, so the new bucket must
+        // be created. This is why the guard asks reusesPriorEntity and not isUpdate.
+        assertEquals("renamed", r.getPhysicalId());
+        verify(s3).createBucket("renamed", REGION);
     }
 
     @Test
@@ -171,6 +207,23 @@ class S3CfnProvisionerTest {
 
         assertTrue(r.getPhysicalId().startsWith("bucket-policy-"), r.getPhysicalId());
         assertTrue(r.getAttributes().isEmpty());
+    }
+
+    /**
+     * provision runs again on every UpdateStack, so minting a fresh id each time made an unchanged
+     * policy look like a replaced resource and changed what Ref returned.
+     */
+    @Test
+    void aBucketPolicyKeepsItsIdAcrossUpdates() {
+        StackResource r = resource("Policy", "AWS::S3::BucketPolicy");
+        r.setPhysicalId("bucket-policy-abc12345");
+        provisioner.provision(r, props("""
+                {"Bucket": "b", "PolicyDocument": {"Version": "2012-10-17"}}
+                """),
+                new ProvisionContext(ctx.engine(), REGION, "000000000000", "my-stack",
+                        "bucket-policy-abc12345"));
+
+        assertEquals("bucket-policy-abc12345", r.getPhysicalId());
     }
 
     @Test

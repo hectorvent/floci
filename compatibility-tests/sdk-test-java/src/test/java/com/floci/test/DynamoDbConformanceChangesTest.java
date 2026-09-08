@@ -547,8 +547,10 @@ class DynamoDbConformanceChangesTest {
     void queryWithQueryFilter() {
         QueryResponse resp = ddb.query(QueryRequest.builder()
                 .tableName(TABLE)
-                .keyConditionExpression("pk = :pk")
-                .expressionAttributeValues(Map.of(":pk", av("p1")))
+                .keyConditions(Map.of("pk", Condition.builder()
+                        .comparisonOperator(ComparisonOperator.EQ)
+                        .attributeValueList(av("p1"))
+                        .build()))
                 .queryFilter(Map.of("name", Condition.builder()
                         .comparisonOperator(ComparisonOperator.EQ)
                         .attributeValueList(av("Item-0"))
@@ -815,11 +817,12 @@ class DynamoDbConformanceChangesTest {
 
     @Test @Order(101)
     void reservedWordWithAliasPasses() {
-        // Using #status alias should work fine
+        // Using the #st alias should work fine. The alias must be referenced by the
+        // expression: AWS rejects ExpressionAttributeNames entries left unused.
         assertThatCode(() -> ddb.putItem(r -> r
                 .tableName(TABLE)
                 .item(Map.of("pk", av("rw-alias"), "sk", av("s"), "status", av("ok")))
-                .conditionExpression("attribute_not_exists(pk)")
+                .conditionExpression("attribute_not_exists(#st)")
                 .expressionAttributeNames(Map.of("#st", "status"))))
                 .doesNotThrowAnyException();
     }
