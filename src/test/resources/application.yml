@@ -421,6 +421,9 @@ floci:
       enabled: true
     servicequotas:
       enabled: true
+    verifiedpermissions:
+      enabled: true
+      cedar-url: http://127.0.0.1:18180
     ram:
       enabled: true
     codegurureviewer:

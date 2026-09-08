@@ -244,6 +244,10 @@ services:
     doc: docs/services/budgets.md
     sources:
       - { path: src/main/java/io/github/hectorvent/floci/services/budgets/BudgetsJsonHandler.java, mode: switch }
+  - service: verifiedpermissions
+    doc: docs/services/verifiedpermissions.md
+    sources:
+      - { path: src/main/java/io/github/hectorvent/floci/services/verifiedpermissions/VerifiedPermissionsJsonHandler.java, mode: switch }
   - service: sqs
     doc: docs/services/sqs.md
     sources:

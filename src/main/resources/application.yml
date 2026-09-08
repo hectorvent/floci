@@ -666,6 +666,10 @@ floci:
       enabled: true
     servicequotas:
       enabled: true
+    verifiedpermissions:
+      enabled: true
+      # cedar-url: http://floci-cedar:8180  # set to skip sidecar container management
+      cedar-image: "floci/floci:latest-cedar"
     ram:
       enabled: true
     codegurureviewer:

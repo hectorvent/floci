@@ -731,6 +731,7 @@ public interface EmulatorConfig {
         BudgetsServiceConfig budgets();
         DetectiveServiceConfig detective();
         ServiceQuotasServiceConfig servicequotas();
+        VerifiedPermissionsServiceConfig verifiedpermissions();
         RamServiceConfig ram();
         ControlCatalogServiceConfig controlcatalog();
         ControlTowerServiceConfig controltower();
@@ -895,6 +896,17 @@ public interface EmulatorConfig {
     interface ServiceQuotasServiceConfig {
         @WithDefault("true")
         boolean enabled();
+    }
+
+    interface VerifiedPermissionsServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        /** When set, Floci uses this URL and skips Cedar sidecar container management. */
+        Optional<String> cedarUrl();
+
+        @WithDefault("floci/floci:latest-cedar")
+        String cedarImage();
     }
 
     interface RamServiceConfig {
