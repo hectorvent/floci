@@ -57,6 +57,24 @@ class LambdaStructureSerializationIntegrationTest {
     }
 
     @Test
+    void updateFunctionConfigurationRejectsScalarStructureMembersOnAnUnknownFunction() {
+        // The shape check runs ahead of the function lookup, so a malformed member reports
+        // SerializationException rather than the 404 the lookup would raise. Pinned because this is
+        // ordering rather than logic: it holds only while the checks stay in front of getFunction,
+        // and nothing else fails if a refactor moves them behind it.
+        for (String member : FUNCTION_STRUCTURE_MEMBERS) {
+            given()
+                .contentType("application/json")
+                .body(Map.of(member, 5))
+            .when()
+                .put(BASE_PATH + "/functions/structure-check-on-missing-function/configuration")
+            .then()
+                .statusCode(400)
+                .body("__type", equalTo("SerializationException"));
+        }
+    }
+
+    @Test
     void environmentVariablesRejectsScalarBeforeUpdateMutation() {
         Map<String, Object> createRequest = functionRequest("nested-environment-create");
         createRequest.put("Environment", Map.of("Variables", 5));
