@@ -45,6 +45,15 @@ Floci Lambda runs your function code locally inside real Docker containers - clo
 | `GetFunctionConcurrency` | Get reserved concurrent executions |
 | `DeleteFunctionConcurrency` | Clear reserved concurrent executions |
 | `GetAccountSettings` | Account limits plus usage derived from the caller's stored functions |
+| `PutFunctionEventInvokeConfig` | Set the asynchronous invocation settings of a function, version or alias (retries, event age, destinations) |
+| `UpdateFunctionEventInvokeConfig` | Change some of those settings, leaving the rest as they are |
+| `GetFunctionEventInvokeConfig` | Read the asynchronous invocation settings |
+| `DeleteFunctionEventInvokeConfig` | Remove the asynchronous invocation settings |
+| `ListFunctionEventInvokeConfigs` | List the asynchronous invocation settings of every version and alias of a function |
+
+The event invoke configuration is stored and returned as AWS does, and `AWS::Lambda::EventInvokeConfig`
+provisions it from a stack. Asynchronous invocations do not yet apply its retry, event age or
+destination settings.
 
 ## Hot-Reloading via Reactive S3 Sync
 
@@ -205,7 +214,6 @@ These AWS Lambda operations have no handler in Floci. Calls will return `404` or
 
 - Layer permissions (`AddLayerVersionPermission`, `RemoveLayerVersionPermission`, `GetLayerVersionPolicy`)
 - Provisioned concurrency (`PutProvisionedConcurrencyConfig`, `GetProvisionedConcurrencyConfig`, `ListProvisionedConcurrencyConfigs`, `DeleteProvisionedConcurrencyConfig`)
-- Dead-letter, async invoke config, and event invoke config operations
 - `InvokeWithResponseStream`
 - Code signing management (only `GetFunctionCodeSigningConfig` and `ListFunctionsByCodeSigningConfig` are wired; there is no `PutFunctionCodeSigningConfig` or `CreateCodeSigningConfig`, so no code-signing config can exist and `ListFunctionsByCodeSigningConfig` reports every well-formed ARN as `ResourceNotFoundException` — a malformed ARN or an out-of-range `MaxItems` is rejected with `InvalidParameterValueException` first)
 

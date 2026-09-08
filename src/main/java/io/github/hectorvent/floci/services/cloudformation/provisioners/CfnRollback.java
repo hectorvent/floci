@@ -45,6 +45,14 @@ public final class CfnRollback {
     public static final String PIPE_UPDATE_SNAPSHOT_ATTR = "__FlociPipeUpdateSnapshot";
 
     /**
+     * Holds the settings an event invoke configuration carried before an in-place update changed
+     * them, in the request shape a put takes, so a failed stack update can put them back. Written
+     * by {@code LambdaEventInvokeConfigCfnProvisioner} before its update call and spent by its
+     * {@code rollbackUpdate}.
+     */
+    public static final String EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR = "__FlociEventInvokeConfigSnapshot";
+
+    /**
      * Holds the pipe a rename displaced: the name it still lives under, the region that addresses
      * it, how many times deleting it has been attempted, and when the replacement was created.
      * Written by {@code PipesCfnProvisioner} when it creates the replacement, and spent by whichever
