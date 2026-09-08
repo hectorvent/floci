@@ -25,13 +25,15 @@ class PipesServiceTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private AccountAwareStorageBackend<Pipe> storage;
     private PipesService pipesService;
 
     @BeforeEach
     void setUp() {
+        storage = AccountAwareStorageBackend.inMemory("000000000000");
         StorageFactory storageFactory = Mockito.mock(StorageFactory.class);
-        when(storageFactory.create(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
-                .thenReturn(AccountAwareStorageBackend.inMemory("000000000000"));
+        Mockito.doReturn(storage).when(storageFactory)
+                .create(Mockito.anyString(), Mockito.anyString(), Mockito.any());
 
         RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
 
@@ -231,6 +233,38 @@ class PipesServiceTest {
         assertEquals("arn:aws:iam::000000000000:role/original-role", restored.getRoleArn());
         assertEquals(DesiredState.STOPPED, restored.getDesiredState());
         assertEquals(PipeState.STOPPED, restored.getCurrentState());
+    }
+
+    /**
+     * A restore puts back a configuration that was accepted when it was written, so it is not run
+     * through the source validation again. A persisted pipe can predate a rule added since, and a
+     * CloudFormation rollback that re-validated its snapshot would fail on the very pipe it is
+     * putting back. The pipe is seeded straight into storage, as one written before the Kafka
+     * TopicName check existed would be.
+     */
+    @Test
+    void restorePipeDoesNotRevalidateAnAlreadyAcceptedConfiguration() {
+        JsonNode legacyParameters = sourceParameters("""
+                {"SelfManagedKafkaParameters":{"BatchSize":10}}""");
+        Pipe legacy = new Pipe();
+        legacy.setName("legacy-pipe");
+        legacy.setArn("arn:aws:pipes:us-east-1:000000000000:pipe/legacy-pipe");
+        legacy.setSource("smk://broker:9092");
+        legacy.setTarget("arn:aws:sqs:us-east-1:000000000000:target");
+        legacy.setRoleArn("arn:aws:iam::000000000000:role/role");
+        legacy.setDesiredState(DesiredState.RUNNING);
+        legacy.setCurrentState(PipeState.RUNNING);
+        legacy.setSourceParameters(legacyParameters);
+        storage.put("us-east-1::legacy-pipe", legacy);
+
+        Pipe restored = pipesService.restorePipe("legacy-pipe",
+                "arn:aws:sqs:us-east-1:000000000000:target",
+                "arn:aws:iam::000000000000:role/role",
+                null, null, null, legacyParameters, null, null, "us-east-1");
+
+        assertEquals(legacyParameters, restored.getSourceParameters());
+        assertEquals(legacyParameters,
+                pipesService.describePipe("legacy-pipe", "us-east-1").getSourceParameters());
     }
 
     @Test

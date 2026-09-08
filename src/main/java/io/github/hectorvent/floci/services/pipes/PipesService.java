@@ -134,6 +134,9 @@ public class PipesService implements TagHandler, ResourceProvider {
                            DesiredState desiredState, String enrichment,
                            JsonNode sourceParameters, JsonNode targetParameters,
                            JsonNode enrichmentParameters, String region) {
+        Pipe pipe = describePipe(name, region);
+        validateSourceConfiguration(pipe.getSource(),
+                sourceParameters != null ? sourceParameters : pipe.getSourceParameters());
         return writePipeConfiguration(name, target, roleArn, description, desiredState, enrichment,
                 sourceParameters, targetParameters, enrichmentParameters, region, false);
     }
@@ -141,6 +144,10 @@ public class PipesService implements TagHandler, ResourceProvider {
     /**
      * Puts the pipe back to a configuration held in full: a property given as null is cleared, so
      * the pipe ends up carrying exactly what is passed here and nothing the caller left out.
+     *
+     * <p>The configuration was accepted when the pipe was written, so it is not validated again:
+     * a snapshot that predates a rule added since must still be restorable, or a CloudFormation
+     * rollback would fail on the very pipe it is putting back.
      */
     public Pipe restorePipe(String name, String target, String roleArn, String description,
                             DesiredState desiredState, String enrichment,
@@ -166,11 +173,6 @@ public class PipesService implements TagHandler, ResourceProvider {
         Pipe pipe = storage.get(key)
                 .orElseThrow(() -> new AwsException("NotFoundException",
                         "Pipe " + name + " does not exist.", 404));
-
-        JsonNode effectiveSourceParameters = sourceParameters == null && !clearUnsetProperties
-                ? pipe.getSourceParameters()
-                : sourceParameters;
-        validateSourceConfiguration(pipe.getSource(), effectiveSourceParameters);
 
         writeProperty(target, clearUnsetProperties, pipe::setTarget);
         writeProperty(roleArn, clearUnsetProperties, pipe::setRoleArn);
