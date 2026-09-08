@@ -13,6 +13,12 @@ quarkus:
   http:
     port: ${floci.port}
     host: 0.0.0.0
+    # Quarkus 3.38 added a Host-header validation filter that only accepts localhost by default
+    # (DNS-rebinding protection for local dev servers). An emulator is reached under whatever name
+    # its clients use: a compose service name via FLOCI_HOSTNAME, localhost.floci.io, and the
+    # virtual-host style S3 names, so the filter must not require localhost.
+    host-validation:
+      require-localhost: false
     limits:
       max-body-size: ${floci.protocols.max-request-size}M
   datasource:
