@@ -162,7 +162,7 @@ public final class XmlParser {
      *
      * <p>Unlike {@link #extractAll(String, String)}, which flattens every {@code <Key>} across
      * the whole document, this keeps each key paired with the {@code VersionId} from the same
-     * {@code <Object>} block — needed so a batch delete can target the exact version named,
+     * {@code <Object>} block. This is needed so a batch delete can target the exact version named,
      * rather than discarding it and always falling back to "no version specified".
      *
      * <p>{@code <VersionId>} is optional per the {@code Delete} request schema; an {@code <Object>}
