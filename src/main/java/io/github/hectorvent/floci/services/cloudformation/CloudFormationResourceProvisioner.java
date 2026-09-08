@@ -205,15 +205,8 @@ public class CloudFormationResourceProvisioner {
             "AWS::CloudFront::Distribution",
             "AWS::DynamoDB::GlobalTable",
             "AWS::DynamoDB::Table",
-            "AWS::EC2::EIP",
             "AWS::EC2::Instance",
-            "AWS::EC2::InternetGateway",
-            "AWS::EC2::NatGateway",
-            "AWS::EC2::Route",
-            "AWS::EC2::RouteTable",
             "AWS::EC2::SecurityGroup",
-            "AWS::EC2::Subnet",
-            "AWS::EC2::SubnetRouteTableAssociation",
             "AWS::EKS::Cluster",
             "AWS::EKS::Nodegroup",
             "AWS::Events::EventBus",
@@ -420,15 +413,7 @@ public class CloudFormationResourceProvisioner {
                 // EC2 networking. These delegate to Ec2Service so the resources actually exist
                 // (describe-subnets, ELBv2, etc. can find them) instead of being stubbed with a
                 // fake physical id. Topological ordering guarantees parents are provisioned first.
-                case "AWS::EC2::Subnet" -> provisionSubnet(resource, properties, engine, region);
                 case "AWS::EC2::SecurityGroup" -> provisionSecurityGroup(resource, properties, engine, region, stackName);
-                case "AWS::EC2::InternetGateway" -> provisionInternetGateway(resource, region);
-                case "AWS::EC2::RouteTable" -> provisionRouteTable(resource, properties, engine, region);
-                case "AWS::EC2::SubnetRouteTableAssociation" ->
-                        provisionSubnetRouteTableAssociation(resource, properties, engine, region);
-                case "AWS::EC2::Route" -> provisionRoute(resource, properties, engine, region);
-                case "AWS::EC2::NatGateway" -> provisionNatGateway(resource, properties, engine, region);
-                case "AWS::EC2::EIP" -> provisionEip(resource, region);
                 case "AWS::EC2::Instance" -> provisionEc2Instance(resource, properties, engine, region);
                 // RDS. DBInstance/DBCluster start real RDS containers (same as the direct API).
                 case "AWS::RDS::DBSubnetGroup" -> provisionDbSubnetGroup(resource, properties, engine, stackName, region);
@@ -730,21 +715,6 @@ public class CloudFormationResourceProvisioner {
     // Ref/exports resolve to a real vpc-/subnet-/... id rather than a stub.
 
 
-    private void provisionSubnet(StackResource r, JsonNode props, CloudFormationTemplateEngine engine, String region) {
-        String vpcId = resolveOptional(props, "VpcId", engine);
-        String cidr = resolveOptional(props, "CidrBlock", engine);
-        String az = resolveOptional(props, "AvailabilityZone", engine);
-        String mapPublicIpOnLaunch = resolveOptional(props, "MapPublicIpOnLaunch", engine);
-        var subnet = ec2Service.createSubnet(region, vpcId, cidr, az);
-        if (mapPublicIpOnLaunch != null) {
-            ec2Service.modifySubnetAttribute(region, subnet.getSubnetId(), "mapPublicIpOnLaunch", mapPublicIpOnLaunch);
-        }
-        r.setPhysicalId(subnet.getSubnetId());
-        r.getAttributes().put("SubnetId", subnet.getSubnetId());
-        r.getAttributes().put("VpcId", subnet.getVpcId());
-        r.getAttributes().put("AvailabilityZone", subnet.getAvailabilityZone());
-    }
-
     private void provisionSecurityGroup(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
                                         String region, String stackName) {
         String groupName = resolveOptional(props, "GroupName", engine);
@@ -779,59 +749,6 @@ public class CloudFormationResourceProvisioner {
                         List.of(Ec2SecurityGroupRuleCfnProvisioner.toIpPermission(rule, engine)));
             }
         }
-    }
-
-    private void provisionInternetGateway(StackResource r, String region) {
-        var igw = ec2Service.createInternetGateway(region);
-        r.setPhysicalId(igw.getInternetGatewayId());
-        r.getAttributes().put("InternetGatewayId", igw.getInternetGatewayId());
-    }
-
-    private void provisionRouteTable(StackResource r, JsonNode props, CloudFormationTemplateEngine engine, String region) {
-        String vpcId = resolveOptional(props, "VpcId", engine);
-        var rt = ec2Service.createRouteTable(region, vpcId);
-        r.setPhysicalId(rt.getRouteTableId());
-        r.getAttributes().put("RouteTableId", rt.getRouteTableId());
-    }
-
-    private void provisionSubnetRouteTableAssociation(StackResource r, JsonNode props,
-                                                      CloudFormationTemplateEngine engine, String region) {
-        String routeTableId = resolveOptional(props, "RouteTableId", engine);
-        String subnetId = resolveOptional(props, "SubnetId", engine);
-        var assoc = ec2Service.associateRouteTable(region, routeTableId, subnetId);
-        r.setPhysicalId(assoc.getRouteTableAssociationId());
-        r.getAttributes().put("Id", assoc.getRouteTableAssociationId());
-    }
-
-    private void provisionRoute(StackResource r, JsonNode props, CloudFormationTemplateEngine engine, String region) {
-        String routeTableId = resolveOptional(props, "RouteTableId", engine);
-        String destinationCidr = resolveOptional(props, "DestinationCidrBlock", engine);
-        String destinationIpv6Cidr = resolveOptional(props, "DestinationIpv6CidrBlock", engine);
-        String destinationPrefixListId = resolveOptional(props, "DestinationPrefixListId", engine);
-        String gatewayId = resolveOptional(props, "GatewayId", engine);
-        String natGatewayId = resolveOptional(props, "NatGatewayId", engine);
-        String egressOnlyInternetGatewayId = resolveOptional(props, "EgressOnlyInternetGatewayId", engine);
-        String vpcPeeringConnectionId = resolveOptional(props, "VpcPeeringConnectionId", engine);
-        ec2Service.createRoute(region, routeTableId, destinationCidr, destinationIpv6Cidr,
-                destinationPrefixListId, gatewayId, natGatewayId, egressOnlyInternetGatewayId,
-                vpcPeeringConnectionId);
-        r.setPhysicalId(r.getLogicalId() + "-" + UUID.randomUUID().toString().substring(0, 8));
-    }
-
-    private void provisionNatGateway(StackResource r, JsonNode props, CloudFormationTemplateEngine engine, String region) {
-        String subnetId = resolveOptional(props, "SubnetId", engine);
-        String allocationId = resolveOptional(props, "AllocationId", engine);
-        var nat = ec2Service.createNatGateway(region, subnetId, allocationId, "public", List.of());
-        r.setPhysicalId(nat.getNatGatewayId());
-        r.getAttributes().put("NatGatewayId", nat.getNatGatewayId());
-    }
-
-    private void provisionEip(StackResource r, String region) {
-        var addr = ec2Service.allocateAddress(region);
-        // Ref on AWS::EC2::EIP returns the public IP; AllocationId is exposed via Fn::GetAtt.
-        r.setPhysicalId(addr.getPublicIp());
-        r.getAttributes().put("AllocationId", addr.getAllocationId());
-        r.getAttributes().put("PublicIp", addr.getPublicIp());
     }
 
     // ── CloudWatch Logs ─────────────────────────────────────────────────────────
