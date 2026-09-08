@@ -278,6 +278,13 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         }
     }
 
+    /** The schema's required properties fail the resource with the repo's ValidationError wording, not a null into the service. */
+    private static void require(String type, String property, String value) {
+        if (value == null || value.isBlank()) {
+            throw new AwsException("ValidationError", type + " requires " + property, 400);
+        }
+    }
+
     private static boolean isPrefixList(String destination) {
         return destination.startsWith("pl-");
     }
@@ -295,6 +302,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         String cidr = ctx.resolveOptional(props, "CidrBlock");
         String az = ctx.resolveOptional(props, "AvailabilityZone");
         String mapPublicIpOnLaunch = ctx.resolveOptional(props, "MapPublicIpOnLaunch");
+        require(SUBNET, "VpcId", vpcId);
         // VpcId, CidrBlock and AvailabilityZone are createOnly: unchanged, the subnet is kept and
         // only MapPublicIpOnLaunch is applied; changed, a new subnet replaces it.
         Subnet existing = ctx.isUpdate() ? findSubnet(ctx.priorPhysicalId(), ctx.region()) : null;
@@ -322,6 +330,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
 
     private void provisionRouteTable(StackResource r, JsonNode props, ProvisionContext ctx) {
         String vpcId = ctx.resolveOptional(props, "VpcId");
+        require(ROUTE_TABLE, "VpcId", vpcId);
         // VpcId is createOnly: a table in the same VPC is kept, one in another VPC is replaced.
         RouteTable existing = ctx.isUpdate() ? findRouteTable(ctx.priorPhysicalId(), ctx.region()) : null;
         boolean reuse = existing != null && Objects.equals(vpcId, existing.getVpcId());
@@ -334,6 +343,8 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private void provisionSubnetRouteTableAssociation(StackResource r, JsonNode props, ProvisionContext ctx) {
         String routeTableId = ctx.resolveOptional(props, "RouteTableId");
         String subnetId = ctx.resolveOptional(props, "SubnetId");
+        require(SUBNET_ROUTE_TABLE_ASSOCIATION, "RouteTableId", routeTableId);
+        require(SUBNET_ROUTE_TABLE_ASSOCIATION, "SubnetId", subnetId);
         // Both properties are createOnly: the same pair keeps the association, anything else is a
         // new association and the prior one is removed once the update commits.
         RouteTableAssociation existing = ctx.isUpdate() ? findAssociation(ctx.priorPhysicalId(), ctx.region()) : null;
@@ -353,6 +364,13 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         String natGatewayId = ctx.resolveOptional(props, "NatGatewayId");
         String egressOnlyInternetGatewayId = ctx.resolveOptional(props, "EgressOnlyInternetGatewayId");
         String vpcPeeringConnectionId = ctx.resolveOptional(props, "VpcPeeringConnectionId");
+        require(ROUTE, "RouteTableId", routeTableId);
+        long destinations = java.util.stream.Stream.of(destinationCidr, destinationIpv6Cidr, destinationPrefixListId)
+                .filter(value -> value != null && !value.isBlank()).count();
+        if (destinations != 1) {
+            throw new AwsException("ValidationError", ROUTE + " requires exactly one of DestinationCidrBlock,"
+                    + " DestinationIpv6CidrBlock or DestinationPrefixListId", 400);
+        }
         // The registry primary identifier is RouteTableId|CidrBlock, which is also what Ref returns
         // on AWS, and the only id a later delete can act on. CidrBlock is the schema's read-only
         // attribute: the destination the route was created with, whichever property carried it.

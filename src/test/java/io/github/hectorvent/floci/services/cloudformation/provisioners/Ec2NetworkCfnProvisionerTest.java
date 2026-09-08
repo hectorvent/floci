@@ -593,6 +593,32 @@ class Ec2NetworkCfnProvisionerTest {
     }
 
     @Test
+    void requiredPropertiesAreValidatedBeforeAnyServiceCall() {
+        record Case(String type, ObjectNode props, String expected) { }
+        List<Case> cases = List.of(
+                new Case("AWS::EC2::Subnet", mapper.createObjectNode().put("CidrBlock", "10.0.1.0/24"), "AWS::EC2::Subnet requires VpcId"),
+                new Case("AWS::EC2::RouteTable", mapper.createObjectNode(), "AWS::EC2::RouteTable requires VpcId"),
+                new Case("AWS::EC2::SubnetRouteTableAssociation", mapper.createObjectNode().put("SubnetId", SUBNET_ID),
+                        "AWS::EC2::SubnetRouteTableAssociation requires RouteTableId"),
+                new Case("AWS::EC2::SubnetRouteTableAssociation", mapper.createObjectNode().put("RouteTableId", RTB_ID),
+                        "AWS::EC2::SubnetRouteTableAssociation requires SubnetId"),
+                new Case("AWS::EC2::Route", mapper.createObjectNode().put("DestinationCidrBlock", "0.0.0.0/0"), "AWS::EC2::Route requires RouteTableId"),
+                new Case("AWS::EC2::Route", mapper.createObjectNode().put("RouteTableId", RTB_ID),
+                        "AWS::EC2::Route requires exactly one of DestinationCidrBlock, DestinationIpv6CidrBlock or DestinationPrefixListId"),
+                new Case("AWS::EC2::Route", mapper.createObjectNode().put("RouteTableId", RTB_ID).put("DestinationCidrBlock", "0.0.0.0/0").put("DestinationIpv6CidrBlock", "::/0"),
+                        "AWS::EC2::Route requires exactly one of DestinationCidrBlock, DestinationIpv6CidrBlock or DestinationPrefixListId"));
+        for (Case c : cases) {
+            AwsException e = assertThrows(AwsException.class, () -> provisioner.provision(resource(c.type(), "R"), c.props(), ctx()), c.expected());
+            assertEquals("ValidationError", e.getErrorCode());
+            assertEquals(c.expected(), e.getMessage());
+        }
+        verify(ec2, never()).createSubnet(any(), any(), any(), any());
+        verify(ec2, never()).createRouteTable(any(), any());
+        verify(ec2, never()).associateRouteTable(any(), any(), any());
+        verify(ec2, never()).createRoute(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void unknownTypeIsRejected() {
         StackResource r = resource("AWS::EC2::SecurityGroup", "Sg");
 
