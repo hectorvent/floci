@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.services.organizations.OrganizationsService;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -19,14 +20,30 @@ class DetectiveIntegrationTest {
     @Inject
     OrganizationsService organizationsService;
 
+    private boolean createdOrganization;
+
     @BeforeAll
     static void configureRestAssured() {
         RestAssuredJsonUtils.configureAwsContentTypes();
     }
 
+    /**
+     * Organizations state is shared by every test in the JVM and keyed by the management account,
+     * so an organization left behind here makes the next class that creates one under
+     * {@code 000000000000} (e.g. {@code OrganizationsIntegrationTest}) fail with
+     * AlreadyInOrganizationException.
+     */
+    @AfterEach
+    void deleteTheOrganizationThisTestCreated() {
+        if (createdOrganization) {
+            organizationsService.deleteOrganization("000000000000");
+        }
+    }
+
     @Test
     void organizationGraphAndMemberLifecycleMatchesAwsContract() {
         organizationsService.createOrganization("000000000000", "ALL");
+        createdOrganization = true;
         String enableBody = post("/orgs/enableAdminAccount", "{\"AccountId\":\"000000000000\"}")
                 .statusCode(200).extract().asString();
         assertTrue(enableBody.isEmpty());
