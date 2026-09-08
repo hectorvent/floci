@@ -310,22 +310,47 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
                 && Objects.equals(cidr, existing.getCidrBlock())
                 && (az == null || az.equals(existing.getAvailabilityZone()));
         Subnet subnet = reuse ? existing : ec2Service.createSubnet(ctx.region(), vpcId, cidr, az);
-        applyTags(subnet.getSubnetId(), reuse ? existing.getTags() : List.of(), props, ctx);
-        if (mapPublicIpOnLaunch != null) {
-            ec2Service.modifySubnetAttribute(ctx.region(), subnet.getSubnetId(), "mapPublicIpOnLaunch", mapPublicIpOnLaunch);
-        }
         r.setPhysicalId(subnet.getSubnetId());
         r.getAttributes().put("SubnetId", subnet.getSubnetId());
         r.getAttributes().put("VpcId", subnet.getVpcId());
         r.getAttributes().put("AvailabilityZone", subnet.getAvailabilityZone());
+        afterCreate(!reuse, () -> ec2Service.deleteSubnet(ctx.region(), subnet.getSubnetId()), () -> {
+            applyTags(subnet.getSubnetId(), reuse ? existing.getTags() : List.of(), props, ctx);
+            if (mapPublicIpOnLaunch != null) {
+                ec2Service.modifySubnetAttribute(ctx.region(), subnet.getSubnetId(), "mapPublicIpOnLaunch", mapPublicIpOnLaunch);
+            }
+        });
+    }
+
+    /**
+     * Runs the steps that follow an EC2 create. If one of them throws and this provision created the
+     * entity, the entity is deleted again before the failure propagates: the engine only removes a
+     * failed create it can see, and on a failed update it restores the previous resource metadata
+     * and forgets whatever the attempt made. A reused entity is left as it is.
+     */
+    private void afterCreate(boolean created, Runnable undoCreate, Runnable steps) {
+        try {
+            steps.run();
+        } catch (RuntimeException e) {
+            if (created) {
+                try {
+                    undoCreate.run();
+                } catch (RuntimeException undo) {
+                    e.addSuppressed(undo);
+                    LOG.warnv("Could not undo a create after a failed provision step: {0}", undo.getMessage());
+                }
+            }
+            throw e;
+        }
     }
 
     private void provisionInternetGateway(StackResource r, JsonNode props, ProvisionContext ctx) {
         InternetGateway existing = ctx.isUpdate() ? findInternetGateway(ctx.priorPhysicalId(), ctx.region()) : null;
         InternetGateway igw = existing != null ? existing : ec2Service.createInternetGateway(ctx.region());
-        applyTags(igw.getInternetGatewayId(), existing != null ? existing.getTags() : List.of(), props, ctx);
         r.setPhysicalId(igw.getInternetGatewayId());
         r.getAttributes().put("InternetGatewayId", igw.getInternetGatewayId());
+        afterCreate(existing == null, () -> ec2Service.deleteInternetGateway(ctx.region(), igw.getInternetGatewayId()),
+                () -> applyTags(igw.getInternetGatewayId(), existing != null ? existing.getTags() : List.of(), props, ctx));
     }
 
     private void provisionRouteTable(StackResource r, JsonNode props, ProvisionContext ctx) {
@@ -335,9 +360,10 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         RouteTable existing = ctx.isUpdate() ? findRouteTable(ctx.priorPhysicalId(), ctx.region()) : null;
         boolean reuse = existing != null && Objects.equals(vpcId, existing.getVpcId());
         RouteTable rt = reuse ? existing : ec2Service.createRouteTable(ctx.region(), vpcId);
-        applyTags(rt.getRouteTableId(), reuse ? existing.getTags() : List.of(), props, ctx);
         r.setPhysicalId(rt.getRouteTableId());
         r.getAttributes().put("RouteTableId", rt.getRouteTableId());
+        afterCreate(!reuse, () -> ec2Service.deleteRouteTable(ctx.region(), rt.getRouteTableId()),
+                () -> applyTags(rt.getRouteTableId(), reuse ? existing.getTags() : List.of(), props, ctx));
     }
 
     private void provisionSubnetRouteTableAssociation(StackResource r, JsonNode props, ProvisionContext ctx) {
@@ -437,10 +463,11 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         // change, so an address that is still allocated is simply kept.
         Address existing = ctx.isUpdate() ? findAddress(r.getAttributes().get("AllocationId"), ctx.priorPhysicalId(), ctx.region()) : null;
         Address addr = existing != null ? existing : ec2Service.allocateAddress(ctx.region());
-        applyTags(addr.getAllocationId(), existing != null ? existing.getTags() : List.of(), props, ctx);
         // Ref on AWS::EC2::EIP returns the public IP; AllocationId is exposed via Fn::GetAtt.
         r.setPhysicalId(addr.getPublicIp());
         r.getAttributes().put("AllocationId", addr.getAllocationId());
         r.getAttributes().put("PublicIp", addr.getPublicIp());
+        afterCreate(existing == null, () -> ec2Service.releaseAddress(ctx.region(), addr.getAllocationId()),
+                () -> applyTags(addr.getAllocationId(), existing != null ? existing.getTags() : List.of(), props, ctx));
     }
 }

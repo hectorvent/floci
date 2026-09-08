@@ -619,6 +619,48 @@ class Ec2NetworkCfnProvisionerTest {
     }
 
     @Test
+    void aFailedStepAfterACreateDeletesWhatWasJustCreatedAndPropagates() {
+        when(ec2.createSubnet(eq(REGION), eq(VPC_ID), eq("10.0.1.0/24"), isNull())).thenReturn(subnet());
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        when(ec2.createRouteTable(REGION, VPC_ID)).thenReturn(rt);
+        InternetGateway igw = new InternetGateway();
+        igw.setInternetGatewayId(IGW_ID);
+        when(ec2.createInternetGateway(REGION)).thenReturn(igw);
+        Address addr = new Address();
+        addr.setAllocationId(ALLOC_ID);
+        addr.setPublicIp(PUBLIC_IP);
+        when(ec2.allocateAddress(REGION)).thenReturn(addr);
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).when(ec2).createTags(any(), any(), any());
+
+        for (var attempt : List.of(
+                Map.entry("AWS::EC2::Subnet", withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), "k", "v")),
+                Map.entry("AWS::EC2::RouteTable", withTags(mapper.createObjectNode().put("VpcId", VPC_ID), "k", "v")),
+                Map.entry("AWS::EC2::InternetGateway", withTags(mapper.createObjectNode(), "k", "v")),
+                Map.entry("AWS::EC2::EIP", withTags(mapper.createObjectNode(), "k", "v")))) {
+            AwsException e = assertThrows(AwsException.class,
+                    () -> provisioner.provision(resource(attempt.getKey(), "R"), attempt.getValue(), ctx()), attempt.getKey());
+            assertEquals("TagLimitExceeded", e.getErrorCode());
+        }
+        verify(ec2).deleteSubnet(REGION, SUBNET_ID);
+        verify(ec2).deleteRouteTable(REGION, RTB_ID);
+        verify(ec2).deleteInternetGateway(REGION, IGW_ID);
+        verify(ec2).releaseAddress(REGION, ALLOC_ID);
+    }
+
+    @Test
+    void aFailedStepOnAReusedEntityLeavesItAlone() {
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(subnet()));
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).when(ec2).createTags(any(), any(), any());
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID));
+
+        assertThrows(AwsException.class, () -> provisioner.provision(r,
+                withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), "k", "v"), ctx(SUBNET_ID)));
+
+        verify(ec2, never()).deleteSubnet(any(), any());
+    }
+
+    @Test
     void unknownTypeIsRejected() {
         StackResource r = resource("AWS::EC2::SecurityGroup", "Sg");
 
