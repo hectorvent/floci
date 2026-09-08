@@ -1126,7 +1126,8 @@ public class DynamoDbJsonHandler {
                 JsonNode keyNode = writeReq.has("PutRequest")
                         ? writeReq.get("PutRequest").get("Item")
                         : writeReq.get("DeleteRequest").get("Key");
-                String key = dynamoDbService.buildItemKey(bwTable, keyNode);
+                String key = dynamoDbService.buildItemKey(bwTable, keyNode,
+                        DynamoDbService.KeySurface.BATCH_WRITE);
                 if (!seen.add(key)) {
                     throw new AwsException("ValidationException",
                             "Provided list of item keys contains duplicates", 400);
