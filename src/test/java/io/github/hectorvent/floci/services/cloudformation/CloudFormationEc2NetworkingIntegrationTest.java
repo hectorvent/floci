@@ -38,6 +38,10 @@ class CloudFormationEc2NetworkingIntegrationTest {
     private static final String STACK = "ec2-networking-it";
 
     private static String template(String vpcId, String publicSubnetCidr) {
+        return template(vpcId, publicSubnetCidr, "{\"Key\": \"tier\", \"Value\": \"web\"}");
+    }
+
+    private static String template(String vpcId, String publicSubnetCidr, String extraSubnetTag) {
         return """
         {
           "Resources": {
@@ -46,8 +50,10 @@ class CloudFormationEc2NetworkingIntegrationTest {
                        "Properties": {"VpcId": "%1$s", "InternetGatewayId": {"Ref": "Igw"}}},
             "PublicSubnet": {"Type": "AWS::EC2::Subnet",
                              "Properties": {"VpcId": "%1$s", "CidrBlock": "%2$s",
-                                            "AvailabilityZone": "us-east-1a", "MapPublicIpOnLaunch": true}},
-            "PublicRt": {"Type": "AWS::EC2::RouteTable", "Properties": {"VpcId": "%1$s"}},
+                                            "AvailabilityZone": "us-east-1a", "MapPublicIpOnLaunch": true,
+                                            "Tags": [{"Key": "Name", "Value": "public"}, %3$s]}},
+            "PublicRt": {"Type": "AWS::EC2::RouteTable",
+                         "Properties": {"VpcId": "%1$s", "Tags": [{"Key": "Name", "Value": "public-rt"}]}},
             "PublicRoute": {"Type": "AWS::EC2::Route", "DependsOn": "Attach",
                             "Properties": {"RouteTableId": {"Ref": "PublicRt"}, "DestinationCidrBlock": "0.0.0.0/0",
                                            "GatewayId": {"Ref": "Igw"}}},
@@ -75,7 +81,7 @@ class CloudFormationEc2NetworkingIntegrationTest {
             "NatId": {"Value": {"Ref": "Nat"}}
           }
         }
-        """.formatted(vpcId, publicSubnetCidr);
+        """.formatted(vpcId, publicSubnetCidr, extraSubnetTag);
     }
 
     @BeforeAll
@@ -102,8 +108,11 @@ class CloudFormationEc2NetworkingIntegrationTest {
         assertFalse(out.get("EipRef").startsWith("eipalloc-"), "Ref of an EIP is its public IP: " + out.get("EipRef"));
         assertTrue(out.get("NatId").startsWith("nat-"), out.get("NatId"));
 
-        assertTrue(ec2("DescribeSubnets").contains(out.get("SubnetId")));
+        String subnets = ec2("DescribeSubnets");
+        assertTrue(subnets.contains(out.get("SubnetId")));
+        assertTrue(subnets.contains("<key>tier</key>") && subnets.contains("<value>web</value>"), "subnet tags must reach EC2: " + subnets);
         String routeTables = ec2("DescribeRouteTables");
+        assertTrue(routeTables.contains("<value>public-rt</value>"), "route table tags must reach EC2");
         assertTrue(routeTables.contains(out.get("PublicRtId")) && routeTables.contains(out.get("AssocId")));
         assertTrue(routeTables.contains(out.get("NatId")), "the private route must point at the NAT gateway");
         assertTrue(ec2("DescribeNatGateways").contains(out.get("NatId")));
@@ -114,6 +123,13 @@ class CloudFormationEc2NetworkingIntegrationTest {
         cloudFormation("UpdateStack", template(vpcId, "10.40.0.0/24"));
         Map<String, String> again = XmlParser.extractPairs(describeStacks("UPDATE_COMPLETE"), "Outputs", "OutputKey", "OutputValue");
         assertEquals(out, again, "an unchanged update must keep every networking resource");
+
+        // Tags are mutable: a dropped key goes, a changed value is written, the subnet stays.
+        cloudFormation("UpdateStack", template(vpcId, "10.40.0.0/24", "{\"Key\": \"env\", \"Value\": \"test\"}"));
+        assertEquals(out.get("SubnetId"), XmlParser.extractPairs(describeStacks("UPDATE_COMPLETE"), "Outputs", "OutputKey", "OutputValue").get("SubnetId"));
+        String retagged = ec2("DescribeSubnets");
+        assertTrue(retagged.contains("<key>env</key>"), "the new tag must be written");
+        assertFalse(retagged.contains("<key>tier</key>"), "the dropped tag must be removed");
 
         // CidrBlock is createOnly: the public subnet is replaced, and with it the NAT gateway and the
         // association that name it; the gateway, EIP and route tables stay.

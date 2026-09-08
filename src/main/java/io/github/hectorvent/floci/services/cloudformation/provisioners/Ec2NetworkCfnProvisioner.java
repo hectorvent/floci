@@ -11,10 +11,13 @@ import io.github.hectorvent.floci.services.ec2.model.Route;
 import io.github.hectorvent.floci.services.ec2.model.RouteTable;
 import io.github.hectorvent.floci.services.ec2.model.RouteTableAssociation;
 import io.github.hectorvent.floci.services.ec2.model.Subnet;
+import io.github.hectorvent.floci.services.ec2.model.Tag;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -69,11 +72,11 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         Map<String, String> attributesBefore = Map.copyOf(r.getAttributes());
         switch (r.getResourceType()) {
             case SUBNET -> provisionSubnet(r, props, ctx);
-            case INTERNET_GATEWAY -> provisionInternetGateway(r, ctx);
+            case INTERNET_GATEWAY -> provisionInternetGateway(r, props, ctx);
             case ROUTE_TABLE -> provisionRouteTable(r, props, ctx);
             case ROUTE -> provisionRoute(r, props, ctx);
             case NAT_GATEWAY -> provisionNatGateway(r, props, ctx);
-            case EIP -> provisionEip(r, ctx);
+            case EIP -> provisionEip(r, props, ctx);
             case SUBNET_ROUTE_TABLE_ASSOCIATION -> provisionSubnetRouteTableAssociation(r, props, ctx);
             default -> throw new IllegalStateException("Ec2NetworkCfnProvisioner cannot handle " + r.getResourceType());
         }
@@ -179,6 +182,39 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
                         () -> ec2Service.releaseAddress(region, address.getAllocationId()), "InvalidAllocationID.NotFound"));
     }
 
+    /**
+     * Reconciles the template's {@code Tags} onto an entity: keys the template dropped are removed,
+     * the rest written. A template without a Tags property leaves whatever the entity carries.
+     */
+    private void applyTags(String resourceId, List<Tag> current, JsonNode props, ProvisionContext ctx) {
+        if (props == null || !props.has("Tags")) {
+            return;
+        }
+        Map<String, String> desired = ctx.resolveTags(props, "Tags");
+        Map<String, String> currentTags = new LinkedHashMap<>();
+        for (Tag tag : current == null ? List.<Tag>of() : current) {
+            currentTags.put(tag.getKey(), tag.getValue());
+        }
+        List<String> stale = ProvisionContext.staleTagKeys(currentTags, desired);
+        if (!stale.isEmpty()) {
+            ec2Service.deleteTags(ctx.region(), List.of(resourceId),
+                    stale.stream().map(key -> new Tag(key, null)).toList());
+        }
+        if (!desired.isEmpty()) {
+            ec2Service.createTags(ctx.region(), List.of(resourceId), toTagList(desired));
+        }
+    }
+
+    private static List<Tag> tagList(JsonNode props, ProvisionContext ctx) {
+        return toTagList(ctx.resolveTags(props, "Tags"));
+    }
+
+    private static List<Tag> toTagList(Map<String, String> tags) {
+        List<Tag> out = new ArrayList<>();
+        tags.forEach((key, value) -> out.add(new Tag(key, value)));
+        return out;
+    }
+
     private Subnet findSubnet(String subnetId, String region) {
         return tolerateNotFound(() -> ec2Service.describeSubnets(region, List.of(subnetId), Map.of()).stream()
                 .findFirst().orElse(null), "InvalidSubnetID.NotFound", subnetId);
@@ -266,6 +302,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
                 && Objects.equals(cidr, existing.getCidrBlock())
                 && (az == null || az.equals(existing.getAvailabilityZone()));
         Subnet subnet = reuse ? existing : ec2Service.createSubnet(ctx.region(), vpcId, cidr, az);
+        applyTags(subnet.getSubnetId(), reuse ? existing.getTags() : List.of(), props, ctx);
         if (mapPublicIpOnLaunch != null) {
             ec2Service.modifySubnetAttribute(ctx.region(), subnet.getSubnetId(), "mapPublicIpOnLaunch", mapPublicIpOnLaunch);
         }
@@ -275,9 +312,10 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         r.getAttributes().put("AvailabilityZone", subnet.getAvailabilityZone());
     }
 
-    private void provisionInternetGateway(StackResource r, ProvisionContext ctx) {
+    private void provisionInternetGateway(StackResource r, JsonNode props, ProvisionContext ctx) {
         InternetGateway existing = ctx.isUpdate() ? findInternetGateway(ctx.priorPhysicalId(), ctx.region()) : null;
         InternetGateway igw = existing != null ? existing : ec2Service.createInternetGateway(ctx.region());
+        applyTags(igw.getInternetGatewayId(), existing != null ? existing.getTags() : List.of(), props, ctx);
         r.setPhysicalId(igw.getInternetGatewayId());
         r.getAttributes().put("InternetGatewayId", igw.getInternetGatewayId());
     }
@@ -286,8 +324,9 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         String vpcId = ctx.resolveOptional(props, "VpcId");
         // VpcId is createOnly: a table in the same VPC is kept, one in another VPC is replaced.
         RouteTable existing = ctx.isUpdate() ? findRouteTable(ctx.priorPhysicalId(), ctx.region()) : null;
-        RouteTable rt = existing != null && Objects.equals(vpcId, existing.getVpcId())
-                ? existing : ec2Service.createRouteTable(ctx.region(), vpcId);
+        boolean reuse = existing != null && Objects.equals(vpcId, existing.getVpcId());
+        RouteTable rt = reuse ? existing : ec2Service.createRouteTable(ctx.region(), vpcId);
+        applyTags(rt.getRouteTableId(), reuse ? existing.getTags() : List.of(), props, ctx);
         r.setPhysicalId(rt.getRouteTableId());
         r.getAttributes().put("RouteTableId", rt.getRouteTableId());
     }
@@ -352,18 +391,23 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         String allocationId = ctx.resolveOptional(props, "AllocationId");
         // SubnetId and AllocationId are createOnly: the same pair keeps the gateway, a change replaces it.
         NatGateway existing = ctx.isUpdate() ? findNatGateway(ctx.priorPhysicalId(), ctx.region()) : null;
-        NatGateway nat = existing != null && Objects.equals(subnetId, existing.getSubnetId())
-                && Objects.equals(allocationId, existing.getAllocationId())
-                ? existing : ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, "public", List.of());
+        boolean reuse = existing != null && Objects.equals(subnetId, existing.getSubnetId())
+                && Objects.equals(allocationId, existing.getAllocationId());
+        NatGateway nat = reuse ? existing
+                : ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, "public", tagList(props, ctx));
+        if (reuse) {
+            applyTags(nat.getNatGatewayId(), existing.getTags(), props, ctx);
+        }
         r.setPhysicalId(nat.getNatGatewayId());
         r.getAttributes().put("NatGatewayId", nat.getNatGatewayId());
     }
 
-    private void provisionEip(StackResource r, ProvisionContext ctx) {
+    private void provisionEip(StackResource r, JsonNode props, ProvisionContext ctx) {
         // Nothing about an EIP that Floci emulates is mutable or create-only in a way a template can
         // change, so an address that is still allocated is simply kept.
         Address existing = ctx.isUpdate() ? findAddress(r.getAttributes().get("AllocationId"), ctx.priorPhysicalId(), ctx.region()) : null;
         Address addr = existing != null ? existing : ec2Service.allocateAddress(ctx.region());
+        applyTags(addr.getAllocationId(), existing != null ? existing.getTags() : List.of(), props, ctx);
         // Ref on AWS::EC2::EIP returns the public IP; AllocationId is exposed via Fn::GetAtt.
         r.setPhysicalId(addr.getPublicIp());
         r.getAttributes().put("AllocationId", addr.getAllocationId());

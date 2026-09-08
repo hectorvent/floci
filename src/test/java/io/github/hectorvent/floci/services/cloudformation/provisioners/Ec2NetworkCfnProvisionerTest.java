@@ -13,6 +13,8 @@ import io.github.hectorvent.floci.services.ec2.model.Route;
 import io.github.hectorvent.floci.services.ec2.model.RouteTable;
 import io.github.hectorvent.floci.services.ec2.model.RouteTableAssociation;
 import io.github.hectorvent.floci.services.ec2.model.Subnet;
+import io.github.hectorvent.floci.services.ec2.model.Tag;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
@@ -457,6 +459,100 @@ class Ec2NetworkCfnProvisionerTest {
         assertEquals(RTB_ID + "|0.0.0.0/0", provisioner.updateCleanupPhysicalId(r));
         provisioner.completeUpdate(r);
         verify(ec2).deleteRoute(REGION, RTB_ID, "0.0.0.0/0", null, null);
+    }
+
+    /** The EC2 Tag model has no equals, so tag lists are compared as key=value pairs. */
+    private static List<String> pairs(List<Tag> tags) {
+        return tags.stream().map(t -> t.getKey() + "=" + t.getValue()).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> tagsWritten(String resourceId) {
+        ArgumentCaptor<List<Tag>> tags = ArgumentCaptor.forClass(List.class);
+        verify(ec2).createTags(eq(REGION), eq(List.of(resourceId)), tags.capture());
+        return pairs(tags.getValue());
+    }
+
+    private static ObjectNode withTags(ObjectNode props, String... keyValues) {
+        var tags = props.putArray("Tags");
+        for (int i = 0; i < keyValues.length; i += 2) {
+            tags.addObject().put("Key", keyValues[i]).put("Value", keyValues[i + 1]);
+        }
+        return props;
+    }
+
+    @Test
+    void tagsAreWrittenOnCreateForEveryTaggableType() {
+        when(ec2.createSubnet(eq(REGION), eq(VPC_ID), eq("10.0.1.0/24"), isNull())).thenReturn(subnet());
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        when(ec2.createRouteTable(REGION, VPC_ID)).thenReturn(rt);
+        InternetGateway igw = new InternetGateway();
+        igw.setInternetGatewayId(IGW_ID);
+        when(ec2.createInternetGateway(REGION)).thenReturn(igw);
+        Address addr = new Address();
+        addr.setAllocationId(ALLOC_ID);
+        addr.setPublicIp(PUBLIC_IP);
+        when(ec2.allocateAddress(REGION)).thenReturn(addr);
+
+        provisioner.provision(resource("AWS::EC2::Subnet", "Subnet"),
+                withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), "Name", "public"), ctx());
+        provisioner.provision(resource("AWS::EC2::RouteTable", "Rtb"),
+                withTags(mapper.createObjectNode().put("VpcId", VPC_ID), "Name", "public-rt"), ctx());
+        provisioner.provision(resource("AWS::EC2::InternetGateway", "Igw"), withTags(mapper.createObjectNode(), "Name", "igw"), ctx());
+        provisioner.provision(resource("AWS::EC2::EIP", "Eip"), withTags(mapper.createObjectNode(), "Name", "nat-ip"), ctx());
+
+        assertEquals(List.of("Name=public"), tagsWritten(SUBNET_ID));
+        assertEquals(List.of("Name=public-rt"), tagsWritten(RTB_ID));
+        assertEquals(List.of("Name=igw"), tagsWritten(IGW_ID));
+        assertEquals(List.of("Name=nat-ip"), tagsWritten(ALLOC_ID));
+        verify(ec2, never()).deleteTags(any(), any(), any());
+    }
+
+    @Test
+    void natGatewayTagsGoThroughItsCreateCall() {
+        NatGateway nat = new NatGateway();
+        nat.setNatGatewayId(NAT_ID);
+        when(ec2.createNatGateway(eq(REGION), eq(SUBNET_ID), eq(ALLOC_ID), eq("public"), any())).thenReturn(nat);
+
+        provisioner.provision(resource("AWS::EC2::NatGateway", "Nat"),
+                withTags(mapper.createObjectNode().put("SubnetId", SUBNET_ID).put("AllocationId", ALLOC_ID), "Name", "nat"), ctx());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> tags = ArgumentCaptor.forClass(List.class);
+        verify(ec2).createNatGateway(eq(REGION), eq(SUBNET_ID), eq(ALLOC_ID), eq("public"), tags.capture());
+        assertEquals(List.of("Name=nat"), pairs(tags.getValue()));
+        verify(ec2, never()).createTags(any(), any(), any());
+    }
+
+    @Test
+    void aReusedSubnetDropsTheTagKeysTheTemplateRemovedAndWritesTheRest() {
+        Subnet current = subnet();
+        current.setTags(List.of(new Tag("Name", "old"), new Tag("team", "net")));
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(current));
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID));
+        ObjectNode props = withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), "Name", "new");
+
+        provisioner.provision(r, props, ctx(SUBNET_ID));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> removed = ArgumentCaptor.forClass(List.class);
+        verify(ec2).deleteTags(eq(REGION), eq(List.of(SUBNET_ID)), removed.capture());
+        assertEquals(List.of("team=null"), pairs(removed.getValue()));
+        assertEquals(List.of("Name=new"), tagsWritten(SUBNET_ID));
+    }
+
+    @Test
+    void aTemplateWithoutTagsLeavesExistingTagsAlone() {
+        Subnet current = subnet();
+        current.setTags(List.of(new Tag("Name", "kept")));
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(current));
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID));
+
+        provisioner.provision(r, mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), ctx(SUBNET_ID));
+
+        verify(ec2, never()).deleteTags(any(), any(), any());
+        verify(ec2, never()).createTags(any(), any(), any());
     }
 
     @Test
