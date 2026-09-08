@@ -7,19 +7,19 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 /**
  * CloudFormation provisioning for the EC2 networking types: {@code AWS::EC2::Subnet},
  * {@code InternetGateway}, {@code RouteTable}, {@code Route}, {@code NatGateway}, {@code EIP} and
  * {@code SubnetRouteTableAssociation}. Extracted from {@code CloudFormationResourceProvisioner} as
- * part of the per-service decomposition, behaviour unchanged: the physical id is the EC2 id the
- * service assigns (a Route gets a generated one, an EIP its public IP, which is what Ref returns on
- * AWS), and the attributes are the ones the switch exposed.
+ * part of the per-service decomposition. The physical id is the EC2 id the service assigns, except
+ * for a Route, whose id is the registry primary identifier {@code <RouteTableId>|<destination>} (what
+ * Ref returns on AWS and what a delete needs), and an EIP, whose Ref is its public IP.
  *
- * <p>No delete override yet: the switch this replaces had no delete arm for any of these types, so
- * stack teardown leaves them alone. Adding one is a behaviour change and follows separately.
+ * <p>Deletes tolerate only the service's own not-found code for each type; a
+ * {@code DependencyViolation} still fails the stack delete, as on AWS.
  */
 @ApplicationScoped
 public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
@@ -31,6 +31,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private static final String NAT_GATEWAY = "AWS::EC2::NatGateway";
     private static final String EIP = "AWS::EC2::EIP";
     private static final String SUBNET_ROUTE_TABLE_ASSOCIATION = "AWS::EC2::SubnetRouteTableAssociation";
+    private static final String ROUTE_ID_SEPARATOR = "|";
 
     private final Ec2Service ec2Service;
 
@@ -56,6 +57,80 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
             case SUBNET_ROUTE_TABLE_ASSOCIATION -> provisionSubnetRouteTableAssociation(r, props, ctx);
             default -> throw new IllegalStateException("Ec2NetworkCfnProvisioner cannot handle " + r.getResourceType());
         }
+    }
+
+    /** An EIP's Ref is its public IP, so its release needs the AllocationId recorded at create time. */
+    @Override
+    public void delete(StackResource resource, String region) {
+        if (EIP.equals(resource.getResourceType()) && resource.getAttributes() != null
+                && resource.getAttributes().get("AllocationId") != null) {
+            String allocationId = resource.getAttributes().get("AllocationId");
+            CfnDeletes.safeDelete("elastic IP", allocationId,
+                    () -> ec2Service.releaseAddress(region, allocationId), "InvalidAllocationID.NotFound");
+            return;
+        }
+        delete(resource.getResourceType(), resource.getPhysicalId(), region);
+    }
+
+    @Override
+    public void delete(String resourceType, String physicalId, String region) {
+        if (physicalId == null || physicalId.isBlank()) {
+            return;
+        }
+        switch (resourceType) {
+            case SUBNET -> CfnDeletes.safeDelete("subnet", physicalId,
+                    () -> ec2Service.deleteSubnet(region, physicalId), "InvalidSubnetID.NotFound");
+            case INTERNET_GATEWAY -> CfnDeletes.safeDelete("internet gateway", physicalId,
+                    () -> ec2Service.deleteInternetGateway(region, physicalId), "InvalidInternetGatewayID.NotFound");
+            case ROUTE_TABLE -> CfnDeletes.safeDelete("route table", physicalId,
+                    () -> ec2Service.deleteRouteTable(region, physicalId), "InvalidRouteTableID.NotFound");
+            case ROUTE -> deleteRoute(physicalId, region);
+            case NAT_GATEWAY -> CfnDeletes.safeDelete("NAT gateway", physicalId,
+                    () -> ec2Service.deleteNatGateway(region, physicalId), "NatGatewayNotFound");
+            case EIP -> releaseByPublicIp(physicalId, region);
+            case SUBNET_ROUTE_TABLE_ASSOCIATION -> CfnDeletes.safeDelete("route table association", physicalId,
+                    () -> ec2Service.disassociateRouteTable(region, physicalId), "InvalidAssociationID.NotFound");
+            default -> { }
+        }
+    }
+
+    /**
+     * The route's id names its table and destination; a route created by the switch before this
+     * provisioner existed carries a generated id with no separator and cannot be located, so it is
+     * left alone rather than guessed at. A table that is already gone took its routes with it.
+     */
+    private void deleteRoute(String physicalId, String region) {
+        int separator = physicalId.indexOf(ROUTE_ID_SEPARATOR);
+        if (separator <= 0 || separator == physicalId.length() - 1) {
+            return;
+        }
+        String routeTableId = physicalId.substring(0, separator);
+        String destination = physicalId.substring(separator + 1);
+        CfnDeletes.safeDelete("route", physicalId, () -> ec2Service.deleteRoute(region, routeTableId,
+                        isIpv4Cidr(destination) ? destination : null,
+                        isIpv6Cidr(destination) ? destination : null,
+                        isPrefixList(destination) ? destination : null),
+                "InvalidRoute.NotFound", "InvalidRouteTableID.NotFound");
+    }
+
+    /** Without the recorded AllocationId (a rollback of a failed create, for instance), the address is looked up by IP. */
+    private void releaseByPublicIp(String publicIp, String region) {
+        ec2Service.describeAddresses(region, List.of(), Map.of("public-ip", List.of(publicIp))).stream()
+                .findFirst()
+                .ifPresent(address -> CfnDeletes.safeDelete("elastic IP", address.getAllocationId(),
+                        () -> ec2Service.releaseAddress(region, address.getAllocationId()), "InvalidAllocationID.NotFound"));
+    }
+
+    private static boolean isPrefixList(String destination) {
+        return destination.startsWith("pl-");
+    }
+
+    private static boolean isIpv6Cidr(String destination) {
+        return destination.contains(":");
+    }
+
+    private static boolean isIpv4Cidr(String destination) {
+        return !isPrefixList(destination) && !isIpv6Cidr(destination);
     }
 
     private void provisionSubnet(StackResource r, JsonNode props, ProvisionContext ctx) {
@@ -106,11 +181,12 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         ec2Service.createRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr,
                 destinationPrefixListId, gatewayId, natGatewayId, egressOnlyInternetGatewayId,
                 vpcPeeringConnectionId);
-        r.setPhysicalId(r.getLogicalId() + "-" + UUID.randomUUID().toString().substring(0, 8));
-        // CidrBlock is the attribute the registry schema declares read-only: the destination the
-        // route was created with, whichever of the three destination properties carried it.
+        // The registry primary identifier is RouteTableId|CidrBlock, which is also what Ref returns
+        // on AWS, and the only id a later delete can act on. CidrBlock is the schema's read-only
+        // attribute: the destination the route was created with, whichever property carried it.
         String destination = destinationCidr != null ? destinationCidr
                 : destinationIpv6Cidr != null ? destinationIpv6Cidr : destinationPrefixListId;
+        r.setPhysicalId(routeTableId + ROUTE_ID_SEPARATOR + destination);
         if (destination != null) {
             r.getAttributes().put("CidrBlock", destination);
         }

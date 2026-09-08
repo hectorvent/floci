@@ -18,12 +18,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import io.github.hectorvent.floci.core.common.AwsException;
+import java.util.Map;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -151,7 +155,7 @@ class Ec2NetworkCfnProvisionerTest {
         provisioner.provision(r, props, ctx());
 
         verify(ec2).createRoute(REGION, RTB_ID, "0.0.0.0/0", null, null, IGW_ID, null, null, null);
-        assertTrue(r.getPhysicalId().startsWith("Default-"), r.getPhysicalId());
+        assertEquals(RTB_ID + "|0.0.0.0/0", r.getPhysicalId(), "Ref is the registry primary identifier");
         assertEquals(Set.of("CidrBlock"), r.getAttributes().keySet());
         assertEquals("0.0.0.0/0", r.getAttributes().get("CidrBlock"));
     }
@@ -194,6 +198,67 @@ class Ec2NetworkCfnProvisionerTest {
         assertEquals(PUBLIC_IP, r.getPhysicalId());
         assertEquals(Set.of("AllocationId", "PublicIp"), r.getAttributes().keySet());
         assertEquals(ALLOC_ID, r.getAttributes().get("AllocationId"));
+    }
+
+    @Test
+    void deletesUseEachTypesOwnApiAndTolerateOnlyItsNotFoundCode() {
+        provisioner.delete("AWS::EC2::Subnet", SUBNET_ID, REGION);
+        provisioner.delete("AWS::EC2::InternetGateway", IGW_ID, REGION);
+        provisioner.delete("AWS::EC2::RouteTable", RTB_ID, REGION);
+        provisioner.delete("AWS::EC2::NatGateway", NAT_ID, REGION);
+        provisioner.delete("AWS::EC2::SubnetRouteTableAssociation", ASSOC_ID, REGION);
+        verify(ec2).deleteSubnet(REGION, SUBNET_ID);
+        verify(ec2).deleteInternetGateway(REGION, IGW_ID);
+        verify(ec2).deleteRouteTable(REGION, RTB_ID);
+        verify(ec2).deleteNatGateway(REGION, NAT_ID);
+        verify(ec2).disassociateRouteTable(REGION, ASSOC_ID);
+
+        doThrow(new AwsException("InvalidSubnetID.NotFound", "gone", 400)).when(ec2).deleteSubnet(REGION, "subnet-gone");
+        assertDoesNotThrow(() -> provisioner.delete("AWS::EC2::Subnet", "subnet-gone", REGION));
+        doThrow(new AwsException("DependencyViolation", "has dependencies", 400)).when(ec2).deleteSubnet(REGION, "subnet-busy");
+        AwsException e = assertThrows(AwsException.class, () -> provisioner.delete("AWS::EC2::Subnet", "subnet-busy", REGION));
+        assertEquals("DependencyViolation", e.getErrorCode());
+    }
+
+    @Test
+    void routeDeleteParsesTheTableAndDestinationFromItsId() {
+        provisioner.delete("AWS::EC2::Route", RTB_ID + "|0.0.0.0/0", REGION);
+        provisioner.delete("AWS::EC2::Route", RTB_ID + "|::/0", REGION);
+        provisioner.delete("AWS::EC2::Route", RTB_ID + "|pl-63a5400a", REGION);
+
+        verify(ec2).deleteRoute(REGION, RTB_ID, "0.0.0.0/0", null, null);
+        verify(ec2).deleteRoute(REGION, RTB_ID, null, "::/0", null);
+        verify(ec2).deleteRoute(REGION, RTB_ID, null, null, "pl-63a5400a");
+    }
+
+    @Test
+    void routeDeleteToleratesAMissingRouteOrTableAndSkipsALegacyGeneratedId() {
+        doThrow(new AwsException("InvalidRouteTableID.NotFound", "gone", 400))
+                .when(ec2).deleteRoute(REGION, "rtb-gone", "10.0.0.0/8", null, null);
+
+        assertDoesNotThrow(() -> provisioner.delete("AWS::EC2::Route", "rtb-gone|10.0.0.0/8", REGION));
+        assertDoesNotThrow(() -> provisioner.delete("AWS::EC2::Route", "Default-1a2b3c4d", REGION));
+        verify(ec2, never()).deleteRoute(eq(REGION), eq("Default-1a2b3c4d"), any(), any(), any());
+    }
+
+    @Test
+    void eipReleaseUsesTheRecordedAllocationIdOrLooksTheAddressUpByIp() {
+        StackResource r = resource("AWS::EC2::EIP", "Eip");
+        r.setPhysicalId(PUBLIC_IP);
+        r.getAttributes().put("AllocationId", ALLOC_ID);
+        provisioner.delete(r, REGION);
+        verify(ec2).releaseAddress(REGION, ALLOC_ID);
+        verify(ec2, never()).describeAddresses(any(), any(), any());
+
+        Address addr = new Address();
+        addr.setAllocationId("eipalloc-byip");
+        addr.setPublicIp("54.0.0.2");
+        when(ec2.describeAddresses(REGION, List.of(), Map.of("public-ip", List.of("54.0.0.2")))).thenReturn(List.of(addr));
+        provisioner.delete("AWS::EC2::EIP", "54.0.0.2", REGION);
+        verify(ec2).releaseAddress(REGION, "eipalloc-byip");
+
+        when(ec2.describeAddresses(REGION, List.of(), Map.of("public-ip", List.of("54.0.0.3")))).thenReturn(List.of());
+        assertDoesNotThrow(() -> provisioner.delete("AWS::EC2::EIP", "54.0.0.3", REGION));
     }
 
     @Test
