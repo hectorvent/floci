@@ -99,6 +99,10 @@ public class FirehoseService implements ResourceProvider {
     // Values are replaced whole, never mutated in place, so a flusher that snapshots one
     // commits exactly the position that snapshot covered.
     private final Map<String, Map<String, String>> pendingSourceIterators = new ConcurrentHashMap<>();
+    // Streams already warned about unconverted delivery, so the flusher says it once
+    // per stream rather than on every flush. Deliberately not persisted: the point is
+    // to keep one process's logs readable, and a restart re-warning is harmless.
+    private final Set<String> unconvertedDeliveryWarned = ConcurrentHashMap.newKeySet();
     private final Clock clock;
     private final long tickIntervalSeconds;
     private final int flushRecordCount;
@@ -219,6 +223,7 @@ public class FirehoseService implements ResourceProvider {
         }
 
         validateBufferingHints(s3Config);
+        DataFormatConversionValidator.validateEffective(s3Config);
         String arn = AwsArnUtils.Arn.of("firehose", region, regionResolver.getAccountId(),
                 "deliverystream/" + name).toString();
         // CreateDeliveryStream's KinesisStreamSourceConfiguration carries only the ARN and
@@ -263,9 +268,16 @@ public class FirehoseService implements ResourceProvider {
         validateBufferingHints(update);
         S3Destination current = destination.getExtendedS3DestinationDescription();
         if (current == null) {
+            DataFormatConversionValidator.validateEffective(update);
             update.applyDefaults();
             destination.setExtendedS3DestinationDescription(update);
         } else {
+            // AWS validates the merged effective state, not the update shape: enabling
+            // conversion is rejected while a stored GZIP is in effect, and re-enabling
+            // with only {"Enabled": true} succeeds on the stored schema (probe u5/u6).
+            // Validating a merged view first also keeps a failed update from leaving a
+            // half-merged destination behind in the memory backend.
+            DataFormatConversionValidator.validateEffective(mergedView(current, update));
             mergeDestination(current, update);
         }
         stream.setVersionId(String.valueOf(parseVersionId(stream.getVersionId()) + 1));
@@ -354,6 +366,79 @@ public class FirehoseService implements ResourceProvider {
         if (update.getBufferingHints() != null) current.setBufferingHints(update.getBufferingHints());
         if (update.getEncryptionConfiguration() != null) current.setEncryptionConfiguration(update.getEncryptionConfiguration());
         if (update.getS3BackupMode() != null) current.setS3BackupMode(update.getS3BackupMode());
+        if (update.getDataFormatConversionConfiguration() != null) {
+            current.setDataFormatConversionConfiguration(mergeConversion(
+                    current.getDataFormatConversionConfiguration(), update.getDataFormatConversionConfiguration()));
+        }
+    }
+
+    /**
+     * Unlike the whole-object replacement above, DataFormatConversionConfiguration
+     * merges member-wise: real AWS keeps the stored Schema/Input/Output when an update
+     * carries only {"Enabled": false} (probe u2). Where there is anything to merge the
+     * result is a new object, so a validation pass over a {@link #mergedView} never
+     * mutates the stored configuration; with nothing stored yet the update is returned
+     * as it stands, since there is no stored state for a caller to reach through it.
+     */
+    private static DeliveryStreamDescription.DataFormatConversionConfiguration mergeConversion(
+            DeliveryStreamDescription.DataFormatConversionConfiguration current,
+            DeliveryStreamDescription.DataFormatConversionConfiguration update) {
+        if (current == null) {
+            return update;
+        }
+        DeliveryStreamDescription.DataFormatConversionConfiguration merged =
+                new DeliveryStreamDescription.DataFormatConversionConfiguration();
+        merged.setEnabled(update.getEnabled() != null ? update.getEnabled() : current.getEnabled());
+        merged.setSchemaConfiguration(mergeSchema(
+                current.getSchemaConfiguration(), update.getSchemaConfiguration()));
+        merged.setInputFormatConfiguration(update.getInputFormatConfiguration() != null
+                ? update.getInputFormatConfiguration() : current.getInputFormatConfiguration());
+        merged.setOutputFormatConfiguration(update.getOutputFormatConfiguration() != null
+                ? update.getOutputFormatConfiguration() : current.getOutputFormatConfiguration());
+        return merged;
+    }
+
+    /**
+     * SchemaConfiguration merges a member at a time as well, so an update naming only
+     * a new TableName keeps the stored role, database and region (probed). Replacing
+     * it wholesale would drop those and then fail the required-member checks.
+     */
+    private static DeliveryStreamDescription.SchemaConfiguration mergeSchema(
+            DeliveryStreamDescription.SchemaConfiguration current,
+            DeliveryStreamDescription.SchemaConfiguration update) {
+        if (update == null) {
+            return current;
+        }
+        if (current == null) {
+            return update;
+        }
+        DeliveryStreamDescription.SchemaConfiguration merged =
+                new DeliveryStreamDescription.SchemaConfiguration();
+        merged.setRoleArn(update.getRoleArn() != null ? update.getRoleArn() : current.getRoleArn());
+        merged.setCatalogId(update.getCatalogId() != null ? update.getCatalogId() : current.getCatalogId());
+        merged.setDatabaseName(update.getDatabaseName() != null
+                ? update.getDatabaseName() : current.getDatabaseName());
+        merged.setTableName(update.getTableName() != null ? update.getTableName() : current.getTableName());
+        merged.setRegion(update.getRegion() != null ? update.getRegion() : current.getRegion());
+        merged.setVersionId(update.getVersionId() != null ? update.getVersionId() : current.getVersionId());
+        return merged;
+    }
+
+    private static S3Destination mergedView(S3Destination current, S3Destination update) {
+        S3Destination view = new S3Destination();
+        view.setRoleArn(current.getRoleArn());
+        view.setBucketArn(current.getBucketArn());
+        view.setPrefix(current.getPrefix());
+        view.setErrorOutputPrefix(current.getErrorOutputPrefix());
+        view.setCompressionFormat(current.getCompressionFormat());
+        view.setFileExtension(current.getFileExtension());
+        view.setCustomTimeZone(current.getCustomTimeZone());
+        view.setBufferingHints(current.getBufferingHints());
+        view.setEncryptionConfiguration(current.getEncryptionConfiguration());
+        view.setS3BackupMode(current.getS3BackupMode());
+        view.setDataFormatConversionConfiguration(current.getDataFormatConversionConfiguration());
+        mergeDestination(view, update);
+        return view;
     }
 
     public void tagDeliveryStream(String name, List<DeliveryStreamDescription.Tag> tagsToTag) {
@@ -426,6 +511,9 @@ public class FirehoseService implements ResourceProvider {
         bufferSince.remove(name);
         pendingSourceIterators.remove(name);
         sourceIteratorStore.delete(name);
+        // Dropped with the rest of the per-stream state so a stream recreated under
+        // the same name warns again rather than inheriting the deleted one's silence.
+        unconvertedDeliveryWarned.remove(name);
         LOG.infov("Deleted Firehose delivery stream: {0}", name);
     }
 
@@ -622,6 +710,14 @@ public class FirehoseService implements ResourceProvider {
         try {
             String bucket = resolveBucket(stream);
             S3Destination s3 = stream.s3Destination();
+            // Once per stream, not once per flush: the flusher reaches this on every
+            // buffered delivery and on every retry after a failed write, and the
+            // configuration it reports cannot change between them.
+            if (s3 != null && s3.isDataFormatConversionEnabled()
+                    && unconvertedDeliveryWarned.add(streamName)) {
+                LOG.warnv("Stream {0} has data format conversion enabled, but conversion is not"
+                        + " implemented yet; delivering records unconverted", streamName);
+            }
             FirehoseCompression compression =
                     FirehoseCompression.forDelivery(s3 == null ? null : s3.getCompressionFormat());
             String key = S3ObjectKeyResolver.resolveKey(s3, stream.getDeliveryStreamName(),
