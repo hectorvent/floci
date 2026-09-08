@@ -1597,20 +1597,20 @@ public class S3Service implements Resettable, ResourceProvider {
     public record DeleteObjectsResult(List<DeleteResult> deleted, List<DeleteError> errors) {
     }
 
-    public DeleteObjectsResult deleteObjects(String bucketName, List<String> keys) {
+    public DeleteObjectsResult deleteObjects(String bucketName, List<XmlParser.KeyVersion> entries) {
         ensureBucketExists(bucketName);
         List<DeleteResult> deleted = new ArrayList<>();
         List<DeleteError> errors = new ArrayList<>();
-        for (String key : keys) {
+        for (XmlParser.KeyVersion entry : entries) {
             try {
-                S3Object result = deleteObject(bucketName, key);
+                S3Object result = deleteObject(bucketName, entry.key(), entry.versionId());
                 if (result != null && result.isDeleteMarker()) {
-                    deleted.add(new DeleteResult(key, null, true, result.getVersionId()));
+                    deleted.add(new DeleteResult(entry.key(), entry.versionId(), true, result.getVersionId()));
                 } else {
-                    deleted.add(new DeleteResult(key, null, false, null));
+                    deleted.add(new DeleteResult(entry.key(), entry.versionId(), false, null));
                 }
             } catch (Exception e) {
-                errors.add(new DeleteError(key, "InternalError", e.getMessage()));
+                errors.add(new DeleteError(entry.key(), "InternalError", e.getMessage()));
             }
         }
         return new DeleteObjectsResult(deleted, errors);

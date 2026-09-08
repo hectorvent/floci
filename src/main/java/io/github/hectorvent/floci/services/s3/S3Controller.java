@@ -1408,8 +1408,8 @@ public class S3Controller {
 
     private Response handleDeleteObjects(String bucket, byte[] body, HttpHeaders httpHeaders, UriInfo uriInfo) {
         String xml = new String(body, StandardCharsets.UTF_8);
-        List<String> keys = XmlParser.extractAll(xml, "Key");
-        if (keys.isEmpty()) {
+        List<XmlParser.KeyVersion> entries = XmlParser.extractDeleteObjectEntries(xml);
+        if (entries.isEmpty()) {
             throw new AwsException("MalformedXML",
                     "The XML you provided was not well-formed.", 400);
         }
@@ -1418,18 +1418,18 @@ public class S3Controller {
         S3Service.RequestAuthorization authorization = S3RequestAuthorizationParser.parseIfRequired(
                 s3Service.isAuthEnforced(), httpHeaders, uriInfo);
         s3Service.authorizeSignedRequest(authorization);
-        List<String> authorizedKeys = new ArrayList<>();
+        List<XmlParser.KeyVersion> authorizedEntries = new ArrayList<>();
         List<S3Service.DeleteError> authorizationErrors = new ArrayList<>();
-        for (String key : keys) {
+        for (XmlParser.KeyVersion entry : entries) {
             try {
-                s3Service.authorizeObjectWrite(bucket, key, "s3:DeleteObject", authorization);
-                authorizedKeys.add(key);
+                s3Service.authorizeObjectWrite(bucket, entry.key(), "s3:DeleteObject", authorization);
+                authorizedEntries.add(entry);
             } catch (AwsException e) {
-                authorizationErrors.add(new S3Service.DeleteError(key, e.getErrorCode(), e.getMessage()));
+                authorizationErrors.add(new S3Service.DeleteError(entry.key(), e.getErrorCode(), e.getMessage()));
             }
         }
 
-        S3Service.DeleteObjectsResult result = s3Service.deleteObjects(bucket, authorizedKeys);
+        S3Service.DeleteObjectsResult result = s3Service.deleteObjects(bucket, authorizedEntries);
 
         XmlBuilder builder = new XmlBuilder()
                 .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
