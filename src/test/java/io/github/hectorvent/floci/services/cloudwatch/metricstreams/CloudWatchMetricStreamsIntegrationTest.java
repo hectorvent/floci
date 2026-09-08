@@ -107,6 +107,17 @@ class CloudWatchMetricStreamsIntegrationTest {
     }
 
     @Test
+    void stoppingAnUnknownStreamIsInvalidParameterValue() {
+        query("StopMetricStreams")
+                .formParam("Names.member.1", "no-such-stream")
+            .when()
+                .post("/")
+            .then()
+                .statusCode(400)
+                .body("ErrorResponse.Error.Code", equalTo("InvalidParameterValue"));
+    }
+
+    @Test
     void putWithoutARoleIsMissingParameter() {
         query("PutMetricStream")
                 .formParam("Name", "incomplete")

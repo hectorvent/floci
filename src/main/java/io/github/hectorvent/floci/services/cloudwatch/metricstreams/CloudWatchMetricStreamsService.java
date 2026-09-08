@@ -135,7 +135,9 @@ public class CloudWatchMetricStreamsService {
 
     /**
      * Every named stream is resolved before any is changed, so a batch that names a missing
-     * stream fails as a whole instead of leaving the earlier names already switched.
+     * stream fails as a whole instead of leaving the earlier names already switched. The model
+     * declares ResourceNotFoundException on GetMetricStream alone, so an unknown name here is
+     * InvalidParameterValue.
      */
     private void setState(List<String> names, String state, String region) {
         if (names == null || names.isEmpty()) {
@@ -143,7 +145,9 @@ public class CloudWatchMetricStreamsService {
         }
         List<MetricStream> streams = new ArrayList<>();
         for (String name : names) {
-            streams.add(getMetricStream(name, region));
+            streams.add(streamStore.get(key(region, name)).orElseThrow(() ->
+                    new AwsException("InvalidParameterValue",
+                            "Metric stream " + name + " does not exist.", 400)));
         }
         long now = Instant.now().getEpochSecond();
         for (MetricStream stream : streams) {

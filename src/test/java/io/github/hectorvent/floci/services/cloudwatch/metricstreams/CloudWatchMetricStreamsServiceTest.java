@@ -129,7 +129,8 @@ class CloudWatchMetricStreamsServiceTest {
     void stopRequiresNamesAndReportsAMissingStream() {
         assertEquals("MissingParameter",
                 assertThrows(AwsException.class, () -> service.stopMetricStreams(List.of(), REGION)).getErrorCode());
-        assertEquals("ResourceNotFoundException",
+        // The model declares ResourceNotFoundException on GetMetricStream alone.
+        assertEquals("InvalidParameterValue",
                 assertThrows(AwsException.class, () -> service.stopMetricStreams(List.of("nope"), REGION)).getErrorCode());
     }
 
@@ -140,7 +141,7 @@ class CloudWatchMetricStreamsServiceTest {
         AwsException e = assertThrows(AwsException.class,
                 () -> service.stopMetricStreams(List.of("ops", "nope"), REGION));
 
-        assertEquals("ResourceNotFoundException", e.getErrorCode());
+        assertEquals("InvalidParameterValue", e.getErrorCode());
         assertEquals(MetricStream.STATE_RUNNING, service.getMetricStream("ops", REGION).getState());
     }
 
