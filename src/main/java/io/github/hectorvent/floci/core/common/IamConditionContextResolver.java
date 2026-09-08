@@ -22,6 +22,7 @@ import java.io.InputStream;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,9 +36,9 @@ import java.util.Map;
  *   <li>{@code aws:RequestTag/<key>}, a tag the caller asks to attach, read from the request
  *       before the operation is applied.</li>
  *   <li>{@code aws:ResourceTag/<key>}, a tag already on the target resource, read from current
- *       state. The evaluator takes one resource per call, so a request naming several
- *       resources is evaluated against the first one only. AWS evaluates the condition once
- *       per resource.</li>
+ *       state. {@link #resolve} carries the first target's tags and
+ *       {@link #resolveRemainingTargets} one context per further target, so the filter can
+ *       require the policy to hold for every resource the request names, as AWS does.</li>
  * </ul>
  */
 @ApplicationScoped
@@ -180,9 +181,10 @@ public class IamConditionContextResolver {
     }
 
     /**
-     * CreateTags both requests tags and targets an existing resource, so both keys apply: the
-     * {@code Tag.N} pairs being requested, and the first {@code ResourceId.N}'s tags as they are
-     * before this call.
+     * CreateTags both requests tags and targets existing resources, so both keys apply: the
+     * {@code Tag.N} pairs being requested, and each {@code ResourceId.N}'s tags as they are
+     * before this call. This context carries the first target; the rest come from
+     * {@link #resolveRemainingTargets}.
      */
     private Map<String, List<String>> ec2CreateTagsConditionContext(ContainerRequestContext ctx) {
         Map<String, String> form = formParameters(ctx);
@@ -197,6 +199,38 @@ public class IamConditionContextResolver {
         Map<String, List<String>> conditions = new LinkedHashMap<>();
         addResourceTags(conditions, formParameters(ctx).get(idParameter));
         return conditions.isEmpty() ? null : conditions;
+    }
+
+    /**
+     * One condition context per target after the first, for the EC2 actions that accept several
+     * resource ids in one request. An untagged target yields an empty context rather than none,
+     * so a policy scoped through {@code aws:ResourceTag} fails to match it. Requests naming a
+     * single target, and every other service, get an empty list.
+     */
+    public List<Map<String, List<String>>> resolveRemainingTargets(String credentialScope, String action,
+                                                                   ContainerRequestContext ctx) {
+        if (!"ec2".equals(credentialScope)) {
+            return List.of();
+        }
+        String idParameter = switch (action) {
+            case "ec2:CreateTags", "ec2:DeleteTags" -> "ResourceId.";
+            case "ec2:TerminateInstances", "ec2:DescribeInstances" -> "InstanceId.";
+            default -> null;
+        };
+        if (idParameter == null) {
+            return List.of();
+        }
+        Map<String, String> form = formParameters(ctx);
+        List<Map<String, List<String>>> targets = new ArrayList<>();
+        for (int i = 2; form.containsKey(idParameter + i); i++) {
+            Map<String, List<String>> conditions = new LinkedHashMap<>();
+            if ("ec2:CreateTags".equals(action)) {
+                addRequestTags(conditions, form, "Tag.");
+            }
+            addResourceTags(conditions, form.get(idParameter + i));
+            targets.add(conditions);
+        }
+        return targets;
     }
 
     private static void addRequestTags(Map<String, List<String>> conditions, Map<String, String> form,

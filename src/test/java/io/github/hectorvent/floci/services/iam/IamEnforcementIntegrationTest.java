@@ -290,6 +290,26 @@ class IamEnforcementIntegrationTest {
     }
 
     @Test
+    void aMultiResourceRequestIsAuthorizedOncePerResource() {
+        Vpc payments = ec2Service.createVpc("us-east-1", "10.44.0.0/16", false);
+        Vpc engineering = ec2Service.createVpc("us-east-1", "10.45.0.0/16", false);
+        ec2Service.createTags("us-east-1", List.of(payments.getVpcId()), List.of(new Tag("Team", "payments")));
+        ec2Service.createTags("us-east-1", List.of(engineering.getVpcId()), List.of(new Tag("Team", "engineering")));
+        String mixed = "Action=DeleteTags&ResourceId.1=" + payments.getVpcId()
+                + "&ResourceId.2=" + engineering.getVpcId() + "&Tag.1.Key=Team";
+
+        // The permitted resource comes first, yet the second target still fails the policy.
+        assertEquals(Decision.ALLOW, evaluator.simulateCustomPolicy(
+                List.of(TEAM_SCOPED_EC2_POLICY), "ec2:DeleteTags", "*",
+                conditionContextResolver.resolve("ec2", "ec2:DeleteTags", ec2Request(mixed))));
+        List<Map<String, List<String>>> remaining =
+                conditionContextResolver.resolveRemainingTargets("ec2", "ec2:DeleteTags", ec2Request(mixed));
+        assertEquals(1, remaining.size());
+        assertEquals(Decision.DENY, evaluator.simulateCustomPolicy(
+                List.of(TEAM_SCOPED_EC2_POLICY), "ec2:DeleteTags", "*", remaining.get(0)));
+    }
+
+    @Test
     void resourceTagConditionFollowsTheTagsS3ActuallyHoldsForTheBucket() {
         String alices = "iam-tag-ctx-" + UUID.randomUUID().toString().substring(0, 8);
         String bobs = "iam-tag-ctx-" + UUID.randomUUID().toString().substring(0, 8);

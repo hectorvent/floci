@@ -415,7 +415,7 @@ floci populates:
   `ec2:DeleteTags`, `ec2:TerminateInstances` and `ec2:DescribeInstances` (the first
   `ResourceId.N` or `InstanceId.N`), and for `s3:GetBucketTagging`, `s3:DeleteBucketTagging`
   and `s3:DeleteBucket` (the bucket). A request naming several EC2 resources is evaluated
-  against the first one only, where AWS evaluates the condition once per resource.
+  once per resource and denied when any of them fails the condition, as on AWS.
 - `aws:PrincipalArn`: the caller's ARN, resolved from the signing access key. It is the
   IAM-user ARN for a user access key, the assumed-role ARN for an STS session, and
   `arn:aws:iam::<account>:root` for the bare account-id key (floci's account-root principal),

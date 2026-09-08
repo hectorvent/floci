@@ -71,12 +71,13 @@ class IamConditionContextResolverTest {
                 dynamoDbServiceInstance, ec2ServiceInstance, s3ServiceInstance, requestContext, config);
     }
 
+    /** A form request whose body can be read again, as a real request's restored stream can. */
     private static ContainerRequestContext formRequest(String body) {
         ContainerRequestContext containerRequest = mock(ContainerRequestContext.class);
         when(containerRequest.getMediaType())
                 .thenReturn(MediaType.valueOf("application/x-www-form-urlencoded"));
         when(containerRequest.getEntityStream())
-                .thenReturn(new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+                .thenAnswer(invocation -> new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
         return containerRequest;
     }
 
@@ -389,5 +390,79 @@ class IamConditionContextResolverTest {
         when(s3Service.getBucketTagging("my-bucket")).thenReturn(Map.of("Owner", "bob"));
         assertEquals(Decision.DENY, evaluator.simulateCustomPolicy(List.of(policy), "s3:GetBucketTagging", "*",
                 resolver.resolve("s3", "s3:GetBucketTagging", s3Request("/my-bucket", ""))));
+    }
+
+    // ── Every target of a multi-resource request is evaluated ──────────────────
+
+    @Test
+    void remainingTargetsCarryEachLaterResourcesOwnTags() {
+        when(ec2Service.resourceTags("i-1")).thenReturn(List.of(new Tag("Team", "payments")));
+        when(ec2Service.resourceTags("i-2")).thenReturn(List.of(new Tag("Team", "engineering")));
+        when(ec2Service.resourceTags("i-3")).thenReturn(List.of());
+        ContainerRequestContext containerRequest = formRequest(
+                "Action=TerminateInstances&InstanceId.1=i-1&InstanceId.2=i-2&InstanceId.3=i-3");
+
+        List<Map<String, List<String>>> remaining =
+                resolver.resolveRemainingTargets("ec2", "ec2:TerminateInstances", containerRequest);
+
+        assertEquals(2, remaining.size());
+        assertEquals(List.of("engineering"), remaining.get(0).get("aws:ResourceTag/Team"));
+        // An untagged target still gets its own, empty, context so a tag condition fails on it.
+        assertEquals(Map.of(), remaining.get(1));
+    }
+
+    @Test
+    void remainingTargetsOfCreateTagsRepeatTheRequestedTagsPerResource() {
+        when(ec2Service.resourceTags("vpc-2")).thenReturn(List.of(new Tag("Owner", "bob")));
+        ContainerRequestContext containerRequest = formRequest(
+                "Action=CreateTags&ResourceId.1=vpc-1&ResourceId.2=vpc-2&Tag.1.Key=Env&Tag.1.Value=prod");
+
+        List<Map<String, List<String>>> remaining =
+                resolver.resolveRemainingTargets("ec2", "ec2:CreateTags", containerRequest);
+
+        assertEquals(1, remaining.size());
+        assertEquals(List.of("prod"), remaining.get(0).get("aws:RequestTag/Env"));
+        assertEquals(List.of("bob"), remaining.get(0).get("aws:ResourceTag/Owner"));
+    }
+
+    @Test
+    void singleTargetRequestsAndOtherServicesHaveNoRemainingTargets() {
+        assertEquals(List.of(), resolver.resolveRemainingTargets("ec2", "ec2:TerminateInstances",
+                formRequest("Action=TerminateInstances&InstanceId.1=i-1")));
+        assertEquals(List.of(), resolver.resolveRemainingTargets("ec2", "ec2:RunInstances",
+                formRequest("Action=RunInstances&TagSpecification.1.ResourceType=instance")));
+        assertEquals(List.of(), resolver.resolveRemainingTargets("s3", "s3:DeleteBucket",
+                s3Request("/my-bucket", "")));
+    }
+
+    @Test
+    void policyMustHoldForEveryTargetNotJustTheFirst() {
+        String policy = """
+                {"Version":"2012-10-17","Statement":[
+                  {"Effect":"Allow","Action":"ec2:TerminateInstances","Resource":"*",
+                   "Condition":{"StringEquals":{"aws:ResourceTag/Team":"payments"}}}
+                ]}""";
+        String body = "Action=TerminateInstances&InstanceId.1=i-1&InstanceId.2=i-2";
+        when(ec2Service.resourceTags("i-1")).thenReturn(List.of(new Tag("Team", "payments")));
+
+        when(ec2Service.resourceTags("i-2")).thenReturn(List.of(new Tag("Team", "engineering")));
+        assertEquals(Decision.DENY, decisionForEveryTarget(policy, "ec2:TerminateInstances", formRequest(body)));
+
+        when(ec2Service.resourceTags("i-2")).thenReturn(List.of(new Tag("Team", "payments")));
+        assertEquals(Decision.ALLOW, decisionForEveryTarget(policy, "ec2:TerminateInstances", formRequest(body)));
+    }
+
+    private Decision decisionForEveryTarget(String policy, String action, ContainerRequestContext request) {
+        Decision first = evaluator.simulateCustomPolicy(List.of(policy), action, "*",
+                resolver.resolve("ec2", action, request));
+        if (first == Decision.DENY) {
+            return first;
+        }
+        for (Map<String, List<String>> target : resolver.resolveRemainingTargets("ec2", action, request)) {
+            if (evaluator.simulateCustomPolicy(List.of(policy), action, "*", target) == Decision.DENY) {
+                return Decision.DENY;
+            }
+        }
+        return Decision.ALLOW;
     }
 }
