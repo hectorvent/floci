@@ -270,7 +270,9 @@ public class LambdaEventInvokeConfigCfnProvisioner implements CfnResourceProvisi
         if (ReplacementCleanup.rollback(resource, this::delete)) {
             return true;
         }
-        String raw = resource.getAttributes().remove(CfnRollback.EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR);
+        // The snapshot is spent only once the restore succeeded: a restore that throws leaves it in
+        // place for the next attempt instead of reporting a rollback that never happened.
+        String raw = resource.getAttributes().get(CfnRollback.EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR);
         if (raw == null) {
             return true;
         }
@@ -284,6 +286,7 @@ public class LambdaEventInvokeConfigCfnProvisioner implements CfnResourceProvisi
         lambdaService.putEventInvokeConfig(snapshot.path("region").asText(),
                 snapshot.path("functionName").asText(), snapshot.path("qualifier").asText(),
                 settingsFrom(snapshot.path("settings")));
+        resource.getAttributes().remove(CfnRollback.EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR);
         return true;
     }
 

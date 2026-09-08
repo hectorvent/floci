@@ -359,6 +359,20 @@ class LambdaEventInvokeConfigCfnProvisionerTest {
                 "the snapshot is spent by the rollback");
     }
 
+    /** A restore that fails keeps the snapshot, so the next rollback attempt still has it. */
+    @Test
+    void aFailedRestoreKeepsTheSnapshot() {
+        StackResource r = provision("""
+                {"FunctionName": "orders", "Qualifier": "$LATEST", "MaximumRetryAttempts": 0}
+                """, "orders|$LATEST");
+        doThrow(new AwsException("ServiceException", "boom", 500))
+                .when(lambda).putEventInvokeConfig(eq(REGION), eq("orders"), eq("$LATEST"), anyMap());
+
+        assertThrows(AwsException.class, () -> provisioner.rollbackUpdate(r));
+
+        assertTrue(r.getAttributes().containsKey(CfnRollback.EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR));
+    }
+
     /** Settings the configuration did not carry are restored as absent, not as defaults. */
     @Test
     void rollbackRestoresAbsentSettingsAsAbsent() {
