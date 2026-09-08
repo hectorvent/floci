@@ -3878,6 +3878,38 @@ class DynamoDbServiceTest {
         assertEquals("u2", svc.getItem("Users", item("userId", "u2"), "us-east-1").get("userId").get("S").asText());
     }
 
+    /** Checked against real DynamoDB: another account's bucket fails this way when no policy grants access. */
+    @Test
+    void runImport_bucketOfAnotherAccount_failsWithS3AccessDeniedWithoutReadingS3() {
+        var s3 = mock(S3Service.class);
+        var svc = serviceWithS3(s3, new InMemoryStorage<>());
+        createUsersTableInCreating(svc);
+        var desc = importDescription("bucket", "imp/", "NONE");
+        ((ObjectNode) desc.getS3BucketSource()).put("S3BucketOwner", "111111111111");
+
+        svc.runImport(desc, "Users", "us-east-1");
+
+        assertEquals("FAILED", desc.getImportStatus());
+        assertEquals("S3AccessDenied", desc.getFailureCode());
+        assertEquals("Access Denied (Service: Amazon S3; Status Code: 403; Error Code: AccessDenied)", desc.getFailureMessage());
+        verifyNoInteractions(s3);
+        assertEquals("ACTIVE", svc.describeTable("Users", "us-east-1").getTableStatus());
+    }
+
+    @Test
+    void runImport_bucketOwnerIsTheCaller_readsTheBucket() {
+        var object = s3Object("imp/data.json", "{\"Item\":{\"userId\":{\"S\":\"u1\"}}}\n".getBytes(StandardCharsets.UTF_8));
+        var svc = serviceWithS3(s3With(object), new InMemoryStorage<>());
+        createUsersTableInCreating(svc);
+        var desc = importDescription("bucket", "imp/", "NONE");
+        ((ObjectNode) desc.getS3BucketSource()).put("S3BucketOwner", "000000000000");
+
+        svc.runImport(desc, "Users", "us-east-1");
+
+        assertEquals("COMPLETED", desc.getImportStatus());
+        assertEquals(1L, desc.getImportedItemCount());
+    }
+
     @Test
     void runImport_persistsLoadedItems() {
         var object = s3Object("imp/data.json",

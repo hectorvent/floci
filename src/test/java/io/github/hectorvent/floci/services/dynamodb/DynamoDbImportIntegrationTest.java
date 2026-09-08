@@ -209,6 +209,34 @@ class DynamoDbImportIntegrationTest {
     }
 
     @Test
+    void importTable_bucketOfAnotherAccount_failsWithS3AccessDenied() {
+        var importArn = dynamo("ImportTable", """
+                {
+                    "S3BucketSource": {"S3Bucket": "%s", "S3KeyPrefix": "plain/", "S3BucketOwner": "111111111111"},
+                    "InputFormat": "DYNAMODB_JSON",
+                    "TableCreationParameters": {
+                        "TableName": "ImportForeignBucket",
+                        "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                        "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                        "BillingMode": "PAY_PER_REQUEST"
+                    }
+                }
+                """.formatted(BUCKET_NAME))
+            .then().statusCode(200)
+            .body("ImportTableDescription.S3BucketSource.S3BucketOwner", equalTo("111111111111"))
+            .extract().jsonPath().getString("ImportTableDescription.ImportArn");
+
+        assertEquals("FAILED", pollUntilDone(importArn));
+
+        describeImport(importArn)
+            .then()
+            .statusCode(200)
+            .body("ImportTableDescription.FailureCode", equalTo("S3AccessDenied"))
+            .body("ImportTableDescription.FailureMessage", startsWith("Access Denied"))
+            .body("ImportTableDescription.ProcessedItemCount", equalTo(0));
+    }
+
+    @Test
     void importTable_emptyPrefix_fails() {
         var importArn = dynamo("ImportTable", importRequest("ImportEmptyPrefix", BUCKET_NAME, "nothing-here/", "DYNAMODB_JSON", "NONE"))
             .then().statusCode(200)

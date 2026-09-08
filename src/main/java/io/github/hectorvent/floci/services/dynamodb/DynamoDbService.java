@@ -3785,13 +3785,18 @@ public class DynamoDbService implements ResourceProvider {
         var prefix = source.path("S3KeyPrefix").asText("");
         var bucketOwner = source.path("S3BucketOwner").asText(null);
         try {
-            var objects = RequestScopes.callAs(bucketOwner, () -> s3Service.listObjects(bucket, prefix, null, 0));
+            // AWS reads another account's bucket only when its policy grants it. floci has no bucket policies.
+            if (bucketOwner != null && !bucketOwner.equals(regionResolver.getAccountId())) {
+                throw new AwsException("AccessDenied",
+                        "Access Denied (Service: Amazon S3; Status Code: 403; Error Code: AccessDenied)", 403);
+            }
+            var objects = s3Service.listObjects(bucket, prefix, null, 0);
             if (objects.isEmpty()) {
                 failImport(desc, "S3NoSuchKey", "No objects found under s3://" + bucket + "/" + prefix);
             } else {
                 for (var object : objects) {
                     try {
-                        importObject(desc, tableName, region, bucket, bucketOwner, object.getKey());
+                        importObject(desc, tableName, region, bucket, object.getKey());
                     } catch (IOException | RuntimeException e) {
                         desc.setErrorCount(desc.getErrorCount() + 1);
                         LOG.warnv("Import {0} skipped object {1}: {2}", desc.getImportArn(), object.getKey(), e.getMessage());
@@ -3800,11 +3805,13 @@ public class DynamoDbService implements ResourceProvider {
                 desc.setImportStatus("COMPLETED");
             }
         } catch (AwsException e) {
-            if ("NoSuchBucket".equals(e.getErrorCode())) {
-                failImport(desc, "S3NoSuchBucket", "The specified bucket does not exist: " + bucket);
-            } else {
-                LOG.errorv(e, "Import failed: {0}", desc.getImportArn());
-                failImport(desc, "S3" + e.getErrorCode(), e.getMessage());
+            switch (e.getErrorCode()) {
+                case "NoSuchBucket" -> failImport(desc, "S3NoSuchBucket", "The specified bucket does not exist: " + bucket);
+                case "AccessDenied" -> failImport(desc, "S3AccessDenied", e.getMessage());
+                default -> {
+                    LOG.errorv(e, "Import failed: {0}", desc.getImportArn());
+                    failImport(desc, "S3" + e.getErrorCode(), e.getMessage());
+                }
             }
         } catch (Exception e) {
             LOG.errorv(e, "Import failed: {0}", desc.getImportArn());
@@ -3821,10 +3828,10 @@ public class DynamoDbService implements ResourceProvider {
     }
 
     private void importObject(ImportTableDescription desc, String tableName, String region,
-                              String bucket, String bucketOwner, String key) throws IOException {
-        var size = RequestScopes.callAs(bucketOwner, () -> s3Service.getObjectMetadata(bucket, key, null)).getSize();
+                              String bucket, String key) throws IOException {
+        var size = s3Service.getObjectMetadata(bucket, key, null).getSize();
         desc.setProcessedSizeBytes(desc.getProcessedSizeBytes() + size);
-        try (var raw = RequestScopes.callAs(bucketOwner, () -> s3Service.openObjectStream(bucket, key, null));
+        try (var raw = s3Service.openObjectStream(bucket, key, null);
              var reader = new BufferedReader(new InputStreamReader(decompress(desc, raw), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
