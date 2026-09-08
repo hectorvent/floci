@@ -106,6 +106,9 @@ class CloudFormationEc2NetworkingIntegrationTest {
             "PublicRoute": {"Type": "AWS::EC2::Route", "DependsOn": "Attach",
                             "Properties": {"RouteTableId": {"Ref": "PublicRt"}, "DestinationCidrBlock": "0.0.0.0/0",
                                            "GatewayId": {"Ref": "Igw"}}},
+            "PeerRoute": {"Type": "AWS::EC2::Route",
+                          "Properties": {"RouteTableId": {"Ref": "PublicRt"}, "DestinationCidrBlock": "10.99.0.18/24",
+                                         "GatewayId": {"Ref": "Igw"}}},
             "PublicAssoc": {"Type": "AWS::EC2::SubnetRouteTableAssociation",
                             "Properties": {"RouteTableId": {"Ref": "PublicRt"}, "SubnetId": {"Ref": "PublicSubnet"}}},
             "NatEip": {"Type": "AWS::EC2::EIP", "Properties": {"Domain": "vpc"}},
@@ -124,6 +127,7 @@ class CloudFormationEc2NetworkingIntegrationTest {
             "PrivateRtId": {"Value": {"Ref": "PrivateRt"}},
             "PublicRouteRef": {"Value": {"Ref": "PublicRoute"}},
             "PublicRouteCidr": {"Value": {"Fn::GetAtt": ["PublicRoute", "CidrBlock"]}},
+            "PeerRouteRef": {"Value": {"Ref": "PeerRoute"}},
             "AssocId": {"Value": {"Ref": "PublicAssoc"}},
             "EipRef": {"Value": {"Ref": "NatEip"}},
             "EipAllocationId": {"Value": {"Fn::GetAtt": ["NatEip", "AllocationId"]}},
@@ -152,6 +156,8 @@ class CloudFormationEc2NetworkingIntegrationTest {
         assertEquals(out.get("PublicRtId") + "|0.0.0.0/0", out.get("PublicRouteRef"),
                 "Ref of a Route is the registry primary identifier, table id and destination");
         assertEquals("0.0.0.0/0", out.get("PublicRouteCidr"));
+        assertEquals(out.get("PublicRtId") + "|10.99.0.0/24", out.get("PeerRouteRef"),
+                "a non-canonical destination is keyed by the canonical CIDR the service stores");
         assertTrue(out.get("AssocId").startsWith("rtbassoc-"), out.get("AssocId"));
         assertTrue(out.get("EipAllocationId").startsWith("eipalloc-"), out.get("EipAllocationId"));
         assertFalse(out.get("EipRef").startsWith("eipalloc-"), "Ref of an EIP is its public IP: " + out.get("EipRef"));

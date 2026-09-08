@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.CidrCanonicalizer;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
 import io.github.hectorvent.floci.services.ec2.model.Address;
@@ -499,7 +500,12 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         // The registry primary identifier is RouteTableId|CidrBlock, which is also what Ref returns
         // on AWS, and the only id a later delete can act on. CidrBlock is the schema's read-only
         // attribute: the destination the route was created with, whichever property carried it.
-        String destination = destinationCidr != null ? destinationCidr
+        // Ec2Service stores an IPv4 destination in canonical form (10.0.0.18/24 is 10.0.0.0/24), so
+        // the id, the attribute and the reuse check use that form too, or an unchanged update
+        // would miss its own route and try to create it again.
+        String canonicalCidr = destinationCidr == null ? null
+                : CidrCanonicalizer.canonicalize(destinationCidr).orElse(destinationCidr);
+        String destination = canonicalCidr != null ? canonicalCidr
                 : destinationIpv6Cidr != null ? destinationIpv6Cidr : destinationPrefixListId;
         String physicalId = routeTableId + ROUTE_ID_SEPARATOR + destination;
         Supplier<Void> create = () -> {
