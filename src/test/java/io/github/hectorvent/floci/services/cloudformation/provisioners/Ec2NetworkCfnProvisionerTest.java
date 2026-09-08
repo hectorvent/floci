@@ -479,7 +479,7 @@ class Ec2NetworkCfnProvisionerTest {
 
     private static ObjectNode withTags(ObjectNode props, String... keyValues) {
         var tags = props.putArray("Tags");
-        for (int i = 0; i < keyValues.length; i += 2) {
+        for (int i = 0; i + 1 < keyValues.length; i += 2) {
             tags.addObject().put("Key", keyValues[i]).put("Value", keyValues[i + 1]);
         }
         return props;
@@ -657,6 +657,7 @@ class Ec2NetworkCfnProvisionerTest {
                         "AWS::EC2::SubnetRouteTableAssociation requires RouteTableId"),
                 new Case("AWS::EC2::SubnetRouteTableAssociation", mapper.createObjectNode().put("RouteTableId", RTB_ID),
                         "AWS::EC2::SubnetRouteTableAssociation requires SubnetId"),
+                new Case("AWS::EC2::NatGateway", mapper.createObjectNode().put("AllocationId", ALLOC_ID), "AWS::EC2::NatGateway requires SubnetId"),
                 new Case("AWS::EC2::Route", mapper.createObjectNode().put("DestinationCidrBlock", "0.0.0.0/0"), "AWS::EC2::Route requires RouteTableId"),
                 new Case("AWS::EC2::Route", mapper.createObjectNode().put("RouteTableId", RTB_ID),
                         "AWS::EC2::Route requires exactly one of DestinationCidrBlock, DestinationIpv6CidrBlock or DestinationPrefixListId"),
@@ -671,6 +672,31 @@ class Ec2NetworkCfnProvisionerTest {
         verify(ec2, never()).createRouteTable(any(), any());
         verify(ec2, never()).associateRouteTable(any(), any(), any());
         verify(ec2, never()).createRoute(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(ec2, never()).createNatGateway(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aNonCanonicalIpv4DestinationIsKeyedByItsCanonicalFormAndReusedAsSuch() {
+        StackResource created = resource("AWS::EC2::Route", "Default");
+        provisioner.provision(created, mapper.createObjectNode().put("RouteTableId", RTB_ID)
+                .put("DestinationCidrBlock", "10.40.0.18/24").put("GatewayId", IGW_ID), ctx());
+        assertEquals(RTB_ID + "|10.40.0.0/24", created.getPhysicalId(), "the id carries the canonical CIDR the service stores");
+        assertEquals("10.40.0.0/24", created.getAttributes().get("CidrBlock"));
+        verify(ec2).createRoute(REGION, RTB_ID, "10.40.0.18/24", null, null, IGW_ID, null, null, null);
+
+        Route stored = new Route();
+        stored.setDestinationCidrBlock("10.40.0.0/24");
+        stored.setGatewayId(IGW_ID);
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setRoutes(List.of(stored));
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        StackResource updated = prior("AWS::EC2::Route", "Default", RTB_ID + "|10.40.0.0/24", Map.of("CidrBlock", "10.40.0.0/24"));
+        provisioner.provision(updated, mapper.createObjectNode().put("RouteTableId", RTB_ID)
+                .put("DestinationCidrBlock", "10.40.0.18/24").put("GatewayId", IGW_ID), ctx(RTB_ID + "|10.40.0.0/24"));
+        verify(ec2).replaceRoute(REGION, RTB_ID, "10.40.0.18/24", null, null, IGW_ID, null, null);
+        verify(ec2, org.mockito.Mockito.times(1)).createRoute(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        assertEquals(RTB_ID + "|10.40.0.0/24", updated.getPhysicalId());
     }
 
     @Test

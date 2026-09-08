@@ -544,6 +544,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private void provisionNatGateway(StackResource r, JsonNode props, ProvisionContext ctx) {
         String subnetId = ctx.resolveOptional(props, "SubnetId");
         String allocationId = ctx.resolveOptional(props, "AllocationId");
+        require(NAT_GATEWAY, "SubnetId", subnetId);
         // ConnectivityType defaults to public in the schema; a public gateway needs an EIP, a
         // private one must not have one, as AWS validates.
         String connectivityType = ctx.resolveOptional(props, "ConnectivityType");
