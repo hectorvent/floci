@@ -730,6 +730,57 @@ class Ec2NetworkCfnProvisionerTest {
     }
 
     @Test
+    void aSuccessfulCreateLeavesNoRollbackOwnedMarker() {
+        when(ec2.createSubnet(eq(REGION), eq(VPC_ID), eq("10.0.1.0/24"), isNull())).thenReturn(subnet());
+        StackResource r = resource("AWS::EC2::Subnet", "Subnet");
+
+        provisioner.provision(r, withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), "k", "v"), ctx());
+
+        assertFalse(r.getAttributes().containsKey(CfnRollback.ROLLBACK_OWNED_ATTR));
+        assertFalse(r.getAttributes().containsKey(CfnRollback.UPDATE_ROLLBACK_FAILURE_ATTR));
+    }
+
+    @Test
+    void aFailedUndoOfACreateLeavesTheEntityRollbackOwnedAndReportsTheReason() {
+        when(ec2.createSubnet(eq(REGION), eq(VPC_ID), eq("10.0.1.0/24"), isNull())).thenReturn(subnet());
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).when(ec2).createTags(any(), any(), any());
+        doThrow(new AwsException("DependencyViolation", "in use", 400)).when(ec2).deleteSubnet(REGION, SUBNET_ID);
+        StackResource r = resource("AWS::EC2::Subnet", "Subnet");
+
+        AwsException e = assertThrows(AwsException.class, () -> provisioner.provision(r,
+                withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), "k", "v"), ctx()));
+
+        assertEquals("TagLimitExceeded", e.getErrorCode());
+        assertEquals(1, e.getSuppressed().length);
+        assertEquals(SUBNET_ID, r.getPhysicalId(), "the id stays so the engine's rollback can delete it");
+        assertEquals("true", r.getAttributes().get(CfnRollback.ROLLBACK_OWNED_ATTR));
+        assertTrue(r.getAttributes().get(CfnRollback.UPDATE_ROLLBACK_FAILURE_ATTR).contains("Could not remove " + SUBNET_ID));
+    }
+
+    @Test
+    void aFailedRestoreOfAReusedEntityKeepsTheSnapshotAndReportsTheReason() {
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setVpcId(VPC_ID);
+        rt.setTags(List.of(new Tag("Name", "old")));
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        // Two distinct instances: the attempt's failure and the restore's, since a throwable cannot suppress itself.
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400))
+                .doThrow(new AwsException("TagLimitExceeded", "still too many tags", 400))
+                .when(ec2).createTags(eq(REGION), eq(List.of(RTB_ID)), any());
+        StackResource r = prior("AWS::EC2::RouteTable", "Rtb", RTB_ID, Map.of("RouteTableId", RTB_ID));
+
+        AwsException e = assertThrows(AwsException.class, () -> provisioner.provision(r,
+                withTags(mapper.createObjectNode().put("VpcId", VPC_ID), "Name", "new"), ctx(RTB_ID)));
+
+        assertEquals("TagLimitExceeded", e.getErrorCode());
+        assertEquals(1, e.getSuppressed().length);
+        assertTrue(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR), "the snapshot is kept");
+        assertTrue(r.getAttributes().get(CfnRollback.UPDATE_ROLLBACK_FAILURE_ATTR).contains("Could not restore " + RTB_ID));
+        verify(ec2, never()).deleteRouteTable(any(), any());
+    }
+
+    @Test
     void aFailureMidWayThroughAnInPlaceTagChangePutsThePriorTagsBack() {
         RouteTable rt = new RouteTable();
         rt.setRouteTableId(RTB_ID);
@@ -754,6 +805,7 @@ class Ec2NetworkCfnProvisionerTest {
         verify(ec2, org.mockito.Mockito.times(2)).deleteTags(eq(REGION), eq(List.of(RTB_ID)), removed.capture());
         assertEquals(List.of("env=null"), pairs(removed.getAllValues().get(1)), "the key the failed update added is removed again");
         assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
+        assertFalse(r.getAttributes().containsKey(CfnRollback.UPDATE_ROLLBACK_FAILURE_ATTR), "a successful restore reports nothing");
         verify(ec2, never()).deleteRouteTable(any(), any());
     }
 

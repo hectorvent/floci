@@ -428,23 +428,47 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
      * deleted again, a reused one is put back from its snapshot. The engine only removes a failed
      * create it can see, and on a failed update it restores the previous resource metadata and
      * discards the attempted one, snapshot included, so the undo has to happen here.
+     *
+     * <p>A compensation that fails is reported, never hidden. A created entity carries
+     * {@link CfnRollback#ROLLBACK_OWNED_ATTR} while the steps run, so the engine's create rollback
+     * deletes it (and reports that failing) if the undo here could not; a reused entity keeps its
+     * snapshot and the reason lands in {@link CfnRollback#UPDATE_ROLLBACK_FAILURE_ATTR}, which the
+     * engine copies onto the committed resource so the rollback walker reports
+     * UPDATE_ROLLBACK_FAILED instead of claiming the prior state is live.
      */
     private void guarded(StackResource r, boolean created, Runnable undoCreate, Runnable steps) {
+        if (created) {
+            r.getAttributes().put(CfnRollback.ROLLBACK_OWNED_ATTR, "true");
+        }
         try {
             steps.run();
+            r.getAttributes().remove(CfnRollback.ROLLBACK_OWNED_ATTR);
         } catch (RuntimeException e) {
-            try {
-                if (created) {
+            if (created) {
+                try {
                     undoCreate.run();
-                } else {
-                    String snapshot = r.getAttributes().remove(IN_PLACE_PRIOR_ATTR);
-                    if (snapshot != null) {
+                    r.getAttributes().remove(CfnRollback.ROLLBACK_OWNED_ATTR);
+                } catch (RuntimeException undo) {
+                    e.addSuppressed(undo);
+                    String reason = "Could not remove " + r.getPhysicalId() + ", created for " + r.getLogicalId()
+                            + " by a failed update: " + undo.getMessage();
+                    LOG.warn(reason);
+                    r.getAttributes().put(CfnRollback.UPDATE_ROLLBACK_FAILURE_ATTR, reason);
+                }
+            } else {
+                String snapshot = r.getAttributes().get(IN_PLACE_PRIOR_ATTR);
+                if (snapshot != null) {
+                    try {
                         restoreInPlace(r, snapshot);
+                        r.getAttributes().remove(IN_PLACE_PRIOR_ATTR);
+                    } catch (RuntimeException undo) {
+                        e.addSuppressed(undo);
+                        String reason = "Could not restore " + r.getPhysicalId() + " for " + r.getLogicalId()
+                                + " after a failed update: " + undo.getMessage();
+                        LOG.warn(reason);
+                        r.getAttributes().put(CfnRollback.UPDATE_ROLLBACK_FAILURE_ATTR, reason);
                     }
                 }
-            } catch (RuntimeException undo) {
-                e.addSuppressed(undo);
-                LOG.warnv("Could not undo a failed provision step on {0}: {1}", r.getLogicalId(), undo.getMessage());
             }
             throw e;
         }
