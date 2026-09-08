@@ -24,7 +24,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * and the {@code Fn::GetAtt} attributes, that an {@code UpdateStack} with the same template keeps
  * every id (the legacy switch re-created all of them), that a changed subnet CIDR replaces the subnet
  * and the NAT gateway inside it and removes the displaced ones, and that {@code DeleteStack} removes
- * every one of the seven networking resources, which the legacy switch left behind. The VPC is
+ * every one of the seven networking resources, which the legacy switch left behind. A second case
+ * changes a route table's tag and a subnet's MapPublicIpOnLaunch in place next to a resource that
+ * fails, and asserts the rollback puts both back. The VPC is
  * created through the EC2 API and passed in as a literal: {@code Ec2VpcCfnProvisioner} still
  * re-creates a VPC on every update (the #3033 fix), which would rightly replace everything in it.
  */
@@ -39,6 +41,53 @@ class CloudFormationEc2NetworkingIntegrationTest {
 
     private static String template(String vpcId, String publicSubnetCidr) {
         return template(vpcId, publicSubnetCidr, "{\"Key\": \"tier\", \"Value\": \"web\"}");
+    }
+
+    private static final String ROLLBACK_STACK = "ec2-networking-rollback-it";
+
+    /** A subnet and a tagged route table; the second form flips the mutable properties and adds a resource that cannot be created. */
+    private static String rollbackTemplate(String vpcId, boolean changed) {
+        String failing = changed
+                ? ",\n            \"Boom\": {\"Type\": \"AWS::SecretsManager::Secret\","
+                  + " \"Properties\": {\"SecretString\": \"x\", \"GenerateSecretString\": {\"SecretStringTemplate\": \"{}\", \"GenerateStringKey\": \"p\"}}}"
+                : "";
+        return """
+        {
+          "Resources": {
+            "Subnet": {"Type": "AWS::EC2::Subnet",
+                       "Properties": {"VpcId": "%1$s", "CidrBlock": "10.41.0.0/24", "MapPublicIpOnLaunch": %2$s}},
+            "Rt": {"Type": "AWS::EC2::RouteTable",
+                   "Properties": {"VpcId": "%1$s", "Tags": [{"Key": "Name", "Value": "%3$s"}]}}%4$s
+          },
+          "Outputs": {"SubnetId": {"Value": {"Ref": "Subnet"}}, "RtId": {"Value": {"Ref": "Rt"}}}
+        }
+        """.formatted(vpcId, changed ? "false" : "true", changed ? "after" : "before", failing);
+    }
+
+    @Test
+    void anInPlaceChangeNextToAFailingResourceIsRolledBack() throws Exception {
+        String vpcId = between(ec2("CreateVpc", Map.of("CidrBlock", "10.41.0.0/16")), "<vpcId>", "</vpcId>");
+        cloudFormation(ROLLBACK_STACK, "CreateStack", rollbackTemplate(vpcId, false));
+        Map<String, String> out = XmlParser.extractPairs(describeStacks(ROLLBACK_STACK, "CREATE_COMPLETE"), "Outputs", "OutputKey", "OutputValue");
+        assertTrue(ec2("DescribeRouteTables").contains("<value>before</value>"));
+        assertTrue(subnetXml(out.get("SubnetId")).contains("<mapPublicIpOnLaunch>true</mapPublicIpOnLaunch>"));
+
+        cloudFormation(ROLLBACK_STACK, "UpdateStack", rollbackTemplate(vpcId, true));
+
+        describeStacks(ROLLBACK_STACK, "UPDATE_ROLLBACK_COMPLETE");
+        String routeTables = ec2("DescribeRouteTables");
+        assertTrue(routeTables.contains("<value>before</value>") && !routeTables.contains("<value>after</value>"),
+                "the route table's prior tag must be back: " + routeTables);
+        assertTrue(subnetXml(out.get("SubnetId")).contains("<mapPublicIpOnLaunch>true</mapPublicIpOnLaunch>"),
+                "the subnet's prior MapPublicIpOnLaunch must be back");
+
+        cloudFormation(ROLLBACK_STACK, "DeleteStack", null);
+        awaitStackDeleted(ROLLBACK_STACK);
+        ec2("DeleteVpc", Map.of("VpcId", vpcId));
+    }
+
+    private static String subnetXml(String subnetId) {
+        return ec2("DescribeSubnets", Map.of("SubnetId.1", subnetId));
     }
 
     private static String template(String vpcId, String publicSubnetCidr, String extraSubnetTag) {
@@ -167,11 +216,15 @@ class CloudFormationEc2NetworkingIntegrationTest {
     }
 
     private static void cloudFormation(String action, String templateBody) {
+        cloudFormation(STACK, action, templateBody);
+    }
+
+    private static void cloudFormation(String stack, String action, String templateBody) {
         var request = given()
             .contentType("application/x-www-form-urlencoded")
             .header("Authorization", CFN_AUTH)
             .formParam("Action", action)
-            .formParam("StackName", STACK);
+            .formParam("StackName", stack);
         if (templateBody != null) {
             request.formParam("TemplateBody", templateBody);
         }
@@ -179,23 +232,31 @@ class CloudFormationEc2NetworkingIntegrationTest {
     }
 
     private static String describeStacks(String expectedStatus) {
+        return describeStacks(STACK, expectedStatus);
+    }
+
+    private static String describeStacks(String stack, String expectedStatus) {
         return given()
             .contentType("application/x-www-form-urlencoded")
             .header("Authorization", CFN_AUTH)
             .formParam("Action", "DescribeStacks")
-            .formParam("StackName", STACK)
+            .formParam("StackName", stack)
         .when().post("/").then().statusCode(200)
             .body(containsString("<StackStatus>" + expectedStatus + "</StackStatus>"))
             .extract().asString();
     }
 
     private static void awaitStackDeleted() throws InterruptedException {
+        awaitStackDeleted(STACK);
+    }
+
+    private static void awaitStackDeleted(String stack) throws InterruptedException {
         for (int i = 0; i < 200; i++) {
             String body = given()
                 .contentType("application/x-www-form-urlencoded")
                 .header("Authorization", CFN_AUTH)
                 .formParam("Action", "DescribeStacks")
-                .formParam("StackName", STACK)
+                .formParam("StackName", stack)
             .when().post("/").then().extract().asString();
             if (body.contains("does not exist")) {
                 return;
@@ -205,7 +266,7 @@ class CloudFormationEc2NetworkingIntegrationTest {
             }
             Thread.sleep(50);
         }
-        fail("stack " + STACK + " was not deleted within the timeout");
+        fail("stack " + stack + " was not deleted within the timeout");
     }
 
     private static String ec2(String action) {

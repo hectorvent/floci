@@ -290,7 +290,9 @@ class Ec2NetworkCfnProvisionerTest {
         verify(ec2).modifySubnetAttribute(REGION, SUBNET_ID, "mapPublicIpOnLaunch", "false");
         assertEquals(SUBNET_ID, r.getPhysicalId());
         assertFalse(provisioner.hasReplacementUpdate(r));
-        assertFalse(provisioner.rollbackUpdate(r), "a subnet modified in place has no snapshot to restore");
+        assertTrue(provisioner.rollbackUpdate(r), "the prior MapPublicIpOnLaunch is restored from the snapshot");
+        verify(ec2).modifySubnetAttribute(REGION, SUBNET_ID, "mapPublicIpOnLaunch", "false");
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
     }
 
     @Test
@@ -444,7 +446,9 @@ class Ec2NetworkCfnProvisionerTest {
         verify(ec2).replaceRoute(REGION, RTB_ID, "0.0.0.0/0", null, null, null, NAT_ID, null);
         verify(ec2, never()).createRoute(any(), any(), any(), any(), any(), any(), any(), any(), any());
         assertEquals(RTB_ID + "|0.0.0.0/0", r.getPhysicalId());
-        assertFalse(provisioner.rollbackUpdate(r), "a route re-targeted in place has no snapshot to restore");
+        assertTrue(provisioner.rollbackUpdate(r), "the prior target is restored from the snapshot");
+        verify(ec2).replaceRoute(REGION, RTB_ID, "0.0.0.0/0", null, null, IGW_ID, null, null);
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
     }
 
     @Test
@@ -577,6 +581,57 @@ class Ec2NetworkCfnProvisionerTest {
         verify(ec2).deleteTags(eq(REGION), eq(List.of(SUBNET_ID)), removed.capture());
         assertEquals(List.of("team=null"), pairs(removed.getValue()));
         assertEquals(List.of("Name=new"), tagsWritten(SUBNET_ID));
+    }
+
+    @Test
+    void aTagChangeOnAReusedEntityIsRolledBackToThePriorTags() {
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setVpcId(VPC_ID);
+        rt.setTags(List.of(new Tag("Name", "old"), new Tag("team", "net")));
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        StackResource r = prior("AWS::EC2::RouteTable", "Rtb", RTB_ID, Map.of("RouteTableId", RTB_ID));
+
+        provisioner.provision(r, withTags(mapper.createObjectNode().put("VpcId", VPC_ID), "Name", "new", "env", "test"), ctx(RTB_ID));
+        assertTrue(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR), "the prior tags are snapshotted");
+
+        assertTrue(provisioner.rollbackUpdate(r));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> removed = ArgumentCaptor.forClass(List.class);
+        verify(ec2, org.mockito.Mockito.times(2)).deleteTags(eq(REGION), eq(List.of(RTB_ID)), removed.capture());
+        assertEquals(List.of("env=null"), pairs(removed.getAllValues().get(1)), "the key the update added is removed");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> written = ArgumentCaptor.forClass(List.class);
+        verify(ec2, org.mockito.Mockito.times(2)).createTags(eq(REGION), eq(List.of(RTB_ID)), written.capture());
+        assertEquals(List.of("Name=old", "team=net"), pairs(written.getAllValues().get(1)), "the prior tags are written back");
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
+    }
+
+    @Test
+    void anUnchangedReuseLeavesNoSnapshotAndRollsBackAsComplete() {
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setVpcId(VPC_ID);
+        rt.setTags(List.of(new Tag("Name", "same")));
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        StackResource r = prior("AWS::EC2::RouteTable", "Rtb", RTB_ID, Map.of("RouteTableId", RTB_ID));
+
+        provisioner.provision(r, withTags(mapper.createObjectNode().put("VpcId", VPC_ID), "Name", "same"), ctx(RTB_ID));
+
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
+        assertTrue(provisioner.rollbackUpdate(r));
+        verify(ec2, never()).deleteTags(any(), any(), any());
+    }
+
+    @Test
+    void completingOrClearingAnUpdateDropsTheSnapshot() {
+        StackResource r = prior("AWS::EC2::RouteTable", "Rtb", RTB_ID, Map.of(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR, "{}"));
+        provisioner.completeUpdate(r);
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
+        r.getAttributes().put(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR, "{}");
+        provisioner.clearUpdate(r);
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
     }
 
     @Test

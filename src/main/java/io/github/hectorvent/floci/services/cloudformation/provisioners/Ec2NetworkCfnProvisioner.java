@@ -1,6 +1,9 @@
 package io.github.hectorvent.floci.services.cloudformation.provisioners;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
@@ -54,6 +57,13 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private static final String SUBNET_ROUTE_TABLE_ASSOCIATION = "AWS::EC2::SubnetRouteTableAssociation";
     private static final String ROUTE_ID_SEPARATOR = "|";
     private static final Logger LOG = Logger.getLogger(Ec2NetworkCfnProvisioner.class);
+    /**
+     * What an in-place update changed on a reused entity, recorded before the change so a stack
+     * rollback can put it back: the prior tags (and the keys the update wrote), a subnet's prior
+     * MapPublicIpOnLaunch, a route's prior target. Internal, like the other {@code __Floci} attributes.
+     */
+    static final String IN_PLACE_PRIOR_ATTR = "__FlociEc2NetworkPrior";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final Ec2Service ec2Service;
 
@@ -97,27 +107,101 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
 
     @Override
     public UpdateCleanupResult completeUpdate(StackResource resource) {
+        resource.getAttributes().remove(IN_PLACE_PRIOR_ATTR);
         return ReplacementCleanup.complete(resource, this::delete);
     }
 
     @Override
     public void clearUpdate(StackResource resource) {
+        resource.getAttributes().remove(IN_PLACE_PRIOR_ATTR);
         ReplacementCleanup.clear(resource);
     }
 
     /**
-     * A replacement is undone through the cleanup record. Without one, a gateway, route table, EIP,
-     * NAT gateway or association was reused untouched (nothing about them is mutable here yet), so
-     * there is nothing to put back. A subnet or route kept in place had a mutable property applied
-     * (MapPublicIpOnLaunch, the route's target) with no snapshot to restore, so the engine reports
-     * it as not rolled back, as it did for the switch.
+     * A replacement is undone through the cleanup record: the displaced entity was never touched.
+     * A reused entity that an update changed in place (tags, a subnet's MapPublicIpOnLaunch, a
+     * route's target) is put back from the snapshot taken before the change. Without either, the
+     * update changed nothing about the entity. The one case not covered is the resource whose own
+     * provision failed mid-way: the engine restores its previous metadata before any rollback runs,
+     * so a partially applied change on it stays, as for every provisioner.
      */
     @Override
     public boolean rollbackUpdate(StackResource resource) {
         if (ReplacementCleanup.rollback(resource, this::delete)) {
+            resource.getAttributes().remove(IN_PLACE_PRIOR_ATTR);
             return true;
         }
-        return !SUBNET.equals(resource.getResourceType()) && !ROUTE.equals(resource.getResourceType());
+        String snapshot = resource.getAttributes().remove(IN_PLACE_PRIOR_ATTR);
+        if (snapshot != null) {
+            restoreInPlace(resource, snapshot);
+        }
+        return true;
+    }
+
+    private void restoreInPlace(StackResource resource, String snapshot) {
+        ObjectNode prior;
+        try {
+            prior = (ObjectNode) MAPPER.readTree(snapshot);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Unreadable in-place snapshot on " + resource.getLogicalId(), e);
+        }
+        String region = prior.path("region").asText();
+        String entityId = prior.path("entityId").asText();
+        if (prior.has("tags")) {
+            Map<String, String> priorTags = new LinkedHashMap<>();
+            prior.get("tags").fields().forEachRemaining(f -> priorTags.put(f.getKey(), f.getValue().asText()));
+            List<Tag> added = new ArrayList<>();
+            prior.path("appliedKeys").forEach(key -> {
+                if (!priorTags.containsKey(key.asText())) {
+                    added.add(new Tag(key.asText(), null));
+                }
+            });
+            if (!added.isEmpty()) {
+                ec2Service.deleteTags(region, List.of(entityId), added);
+            }
+            if (!priorTags.isEmpty()) {
+                ec2Service.createTags(region, List.of(entityId), toTagList(priorTags));
+            }
+        }
+        if (prior.has("mapPublicIpOnLaunch")) {
+            ec2Service.modifySubnetAttribute(region, entityId, "mapPublicIpOnLaunch", prior.get("mapPublicIpOnLaunch").asText());
+        }
+        if (prior.has("route")) {
+            ObjectNode target = (ObjectNode) prior.get("route");
+            String routeTableId = target.path("routeTableId").asText();
+            String cidr = text(target, "destinationCidrBlock");
+            String ipv6 = text(target, "destinationIpv6CidrBlock");
+            String prefixList = text(target, "destinationPrefixListId");
+            String egressOnly = text(target, "egressOnlyInternetGatewayId");
+            if (egressOnly != null) {
+                ec2Service.deleteRoute(region, routeTableId, cidr, ipv6, prefixList);
+                ec2Service.createRoute(region, routeTableId, cidr, ipv6, prefixList, null, null, egressOnly, null);
+            } else {
+                ec2Service.replaceRoute(region, routeTableId, cidr, ipv6, prefixList,
+                        text(target, "gatewayId"), text(target, "natGatewayId"), text(target, "vpcPeeringConnectionId"));
+            }
+        }
+    }
+
+    private static String text(ObjectNode node, String field) {
+        return node.hasNonNull(field) ? node.get(field).asText() : null;
+    }
+
+    /** The snapshot for this resource, created on first use so the fields of several changes accumulate. */
+    private static ObjectNode inPlacePrior(StackResource r, String entityId, ProvisionContext ctx) {
+        String existing = r.getAttributes().get(IN_PLACE_PRIOR_ATTR);
+        try {
+            ObjectNode node = existing == null ? MAPPER.createObjectNode() : (ObjectNode) MAPPER.readTree(existing);
+            node.put("region", ctx.region());
+            node.put("entityId", entityId);
+            return node;
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Unreadable in-place snapshot on " + r.getLogicalId(), e);
+        }
+    }
+
+    private static void writeInPlacePrior(StackResource r, ObjectNode node) {
+        r.getAttributes().put(IN_PLACE_PRIOR_ATTR, node.toString());
     }
 
     /** An EIP's Ref is its public IP, so its release needs the AllocationId recorded at create time. */
@@ -186,7 +270,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
      * Reconciles the template's {@code Tags} onto an entity: keys the template dropped are removed,
      * the rest written. A template without a Tags property leaves whatever the entity carries.
      */
-    private void applyTags(String resourceId, List<Tag> current, JsonNode props, ProvisionContext ctx) {
+    private void applyTags(StackResource r, boolean reused, String resourceId, List<Tag> current, JsonNode props, ProvisionContext ctx) {
         if (props == null || !props.has("Tags")) {
             return;
         }
@@ -196,6 +280,14 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
             currentTags.put(tag.getKey(), tag.getValue());
         }
         List<String> stale = ProvisionContext.staleTagKeys(currentTags, desired);
+        if (reused && ctx.isUpdate() && (!stale.isEmpty() || !desired.equals(currentTags))) {
+            ObjectNode prior = inPlacePrior(r, resourceId, ctx);
+            ObjectNode tags = prior.putObject("tags");
+            currentTags.forEach(tags::put);
+            var applied = prior.putArray("appliedKeys");
+            desired.keySet().forEach(applied::add);
+            writeInPlacePrior(r, prior);
+        }
         if (!stale.isEmpty()) {
             ec2Service.deleteTags(ctx.region(), List.of(resourceId),
                     stale.stream().map(key -> new Tag(key, null)).toList());
@@ -251,9 +343,11 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         return matches.stream().findFirst().orElse(null);
     }
 
-    private boolean routeExists(String routeTableId, String destination, String region) {
+    private Route findRoute(String routeTableId, String destination, String region) {
         RouteTable table = findRouteTable(routeTableId, region);
-        return table != null && table.getRoutes().stream().anyMatch(route -> destination.equals(routeDestination(route)));
+        return table == null ? null : table.getRoutes().stream()
+                .filter(route -> destination.equals(routeDestination(route)))
+                .findFirst().orElse(null);
     }
 
     private static String routeDestination(Route route) {
@@ -315,8 +409,13 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         r.getAttributes().put("VpcId", subnet.getVpcId());
         r.getAttributes().put("AvailabilityZone", subnet.getAvailabilityZone());
         afterCreate(!reuse, () -> ec2Service.deleteSubnet(ctx.region(), subnet.getSubnetId()), () -> {
-            applyTags(subnet.getSubnetId(), reuse ? existing.getTags() : List.of(), props, ctx);
+            applyTags(r, reuse, subnet.getSubnetId(), reuse ? existing.getTags() : List.of(), props, ctx);
             if (mapPublicIpOnLaunch != null) {
+                if (reuse && ctx.isUpdate() && existing.isMapPublicIpOnLaunch() != Boolean.parseBoolean(mapPublicIpOnLaunch)) {
+                    ObjectNode prior = inPlacePrior(r, subnet.getSubnetId(), ctx);
+                    prior.put("mapPublicIpOnLaunch", String.valueOf(existing.isMapPublicIpOnLaunch()));
+                    writeInPlacePrior(r, prior);
+                }
                 ec2Service.modifySubnetAttribute(ctx.region(), subnet.getSubnetId(), "mapPublicIpOnLaunch", mapPublicIpOnLaunch);
             }
         });
@@ -350,7 +449,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         r.setPhysicalId(igw.getInternetGatewayId());
         r.getAttributes().put("InternetGatewayId", igw.getInternetGatewayId());
         afterCreate(existing == null, () -> ec2Service.deleteInternetGateway(ctx.region(), igw.getInternetGatewayId()),
-                () -> applyTags(igw.getInternetGatewayId(), existing != null ? existing.getTags() : List.of(), props, ctx));
+                () -> applyTags(r, existing != null, igw.getInternetGatewayId(), existing != null ? existing.getTags() : List.of(), props, ctx));
     }
 
     private void provisionRouteTable(StackResource r, JsonNode props, ProvisionContext ctx) {
@@ -363,7 +462,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         r.setPhysicalId(rt.getRouteTableId());
         r.getAttributes().put("RouteTableId", rt.getRouteTableId());
         afterCreate(!reuse, () -> ec2Service.deleteRouteTable(ctx.region(), rt.getRouteTableId()),
-                () -> applyTags(rt.getRouteTableId(), reuse ? existing.getTags() : List.of(), props, ctx));
+                () -> applyTags(r, reuse, rt.getRouteTableId(), reuse ? existing.getTags() : List.of(), props, ctx));
     }
 
     private void provisionSubnetRouteTableAssociation(StackResource r, JsonNode props, ProvisionContext ctx) {
@@ -411,8 +510,20 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         };
         // The table and destination are createOnly: the same pair changes the target in place,
         // another pair is a new route and the prior one goes once the update commits.
-        if (ctx.isUpdate() && physicalId.equals(ctx.priorPhysicalId())
-                && routeExists(routeTableId, destination, ctx.region())) {
+        Route current = ctx.isUpdate() && physicalId.equals(ctx.priorPhysicalId())
+                ? findRoute(routeTableId, destination, ctx.region()) : null;
+        if (current != null) {
+            ObjectNode prior = inPlacePrior(r, physicalId, ctx);
+            ObjectNode target = prior.putObject("route");
+            target.put("routeTableId", routeTableId);
+            target.put("destinationCidrBlock", current.getDestinationCidrBlock());
+            target.put("destinationIpv6CidrBlock", current.getDestinationIpv6CidrBlock());
+            target.put("destinationPrefixListId", current.getDestinationPrefixListId());
+            target.put("gatewayId", current.getGatewayId());
+            target.put("natGatewayId", current.getNatGatewayId());
+            target.put("egressOnlyInternetGatewayId", current.getEgressOnlyInternetGatewayId());
+            target.put("vpcPeeringConnectionId", current.getVpcPeeringConnectionId());
+            writeInPlacePrior(r, prior);
             if (egressOnlyInternetGatewayId != null) {
                 // ReplaceRoute has no egress-only target; re-creating the route is the same outcome.
                 ec2Service.deleteRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr, destinationPrefixListId);
@@ -452,7 +563,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         NatGateway nat = reuse ? existing
                 : ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, connectivityType, tagList(props, ctx));
         if (reuse) {
-            applyTags(nat.getNatGatewayId(), existing.getTags(), props, ctx);
+            applyTags(r, true, nat.getNatGatewayId(), existing.getTags(), props, ctx);
         }
         r.setPhysicalId(nat.getNatGatewayId());
         r.getAttributes().put("NatGatewayId", nat.getNatGatewayId());
@@ -468,6 +579,6 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         r.getAttributes().put("AllocationId", addr.getAllocationId());
         r.getAttributes().put("PublicIp", addr.getPublicIp());
         afterCreate(existing == null, () -> ec2Service.releaseAddress(ctx.region(), addr.getAllocationId()),
-                () -> applyTags(addr.getAllocationId(), existing != null ? existing.getTags() : List.of(), props, ctx));
+                () -> applyTags(r, existing != null, addr.getAllocationId(), existing != null ? existing.getTags() : List.of(), props, ctx));
     }
 }
