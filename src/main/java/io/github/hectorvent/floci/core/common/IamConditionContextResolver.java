@@ -222,6 +222,10 @@ public class IamConditionContextResolver {
         }
         Map<String, String> form = formParameters(ctx);
         List<Map<String, List<String>>> targets = new ArrayList<>();
+        if (!form.containsKey(idParameter + 1)) {
+            // The handlers read numbered members from 1 up to the first gap, and so does this.
+            return targets;
+        }
         for (int i = 2; form.containsKey(idParameter + i); i++) {
             Map<String, List<String>> conditions = new LinkedHashMap<>();
             if ("ec2:CreateTags".equals(action)) {
@@ -256,7 +260,9 @@ public class IamConditionContextResolver {
 
     /**
      * The decoded form parameters of a Query-protocol request, buffered once per request and
-     * restored for the controller that reads the form next.
+     * restored for the controller that reads the form next. A repeated key keeps its first
+     * value, which is the value the Query handlers read through {@code getFirst}, so the
+     * resource this context describes is the resource the handler acts on.
      */
     @SuppressWarnings("unchecked")
     private static Map<String, String> formParameters(ContainerRequestContext ctx) {
@@ -283,7 +289,7 @@ public class IamConditionContextResolver {
             int eq = pair.indexOf('=');
             String key = eq < 0 ? pair : pair.substring(0, eq);
             String value = eq < 0 ? "" : pair.substring(eq + 1);
-            parameters.put(URLDecoder.decode(key, charset), URLDecoder.decode(value, charset));
+            parameters.putIfAbsent(URLDecoder.decode(key, charset), URLDecoder.decode(value, charset));
         }
         ctx.setProperty(BUFFERED_FORM_BODY, parameters);
         return parameters;

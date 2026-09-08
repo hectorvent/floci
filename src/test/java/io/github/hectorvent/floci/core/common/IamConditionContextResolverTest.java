@@ -452,6 +452,42 @@ class IamConditionContextResolverTest {
         assertEquals(Decision.ALLOW, decisionForEveryTarget(policy, "ec2:TerminateInstances", formRequest(body)));
     }
 
+    @Test
+    void aRepeatedNumberedParameterKeepsItsFirstValueLikeTheHandlers() {
+        when(ec2Service.resourceTags("i-first")).thenReturn(List.of(new Tag("Team", "engineering")));
+        when(ec2Service.resourceTags("i-second")).thenReturn(List.of(new Tag("Team", "payments")));
+
+        Map<String, List<String>> conditions = resolver.resolve("ec2", "ec2:TerminateInstances",
+                formRequest("Action=TerminateInstances&InstanceId.1=i-first&InstanceId.1=i-second"));
+
+        assertEquals(List.of("engineering"), conditions.get("aws:ResourceTag/Team"));
+    }
+
+    @Test
+    void remainingTargetsStopAtTheFirstNumberingGapLikeTheHandlers() {
+        when(ec2Service.resourceTags("i-2")).thenReturn(List.of(new Tag("Team", "payments")));
+
+        assertEquals(List.of(), resolver.resolveRemainingTargets("ec2", "ec2:TerminateInstances",
+                formRequest("Action=TerminateInstances&InstanceId.2=i-2")));
+        assertEquals(List.of(), resolver.resolveRemainingTargets("ec2", "ec2:TerminateInstances",
+                formRequest("Action=TerminateInstances&InstanceId.1=i-1&InstanceId.3=i-3")));
+    }
+
+    @Test
+    void aRepeatedKeyCannotSwapAnAllowedResourceInFrontOfTheDeniedOne() {
+        String policy = """
+                {"Version":"2012-10-17","Statement":[
+                  {"Effect":"Allow","Action":"ec2:TerminateInstances","Resource":"*",
+                   "Condition":{"StringEquals":{"aws:ResourceTag/Team":"payments"}}}
+                ]}""";
+        when(ec2Service.resourceTags("i-denied")).thenReturn(List.of(new Tag("Team", "engineering")));
+        when(ec2Service.resourceTags("i-allowed")).thenReturn(List.of(new Tag("Team", "payments")));
+
+        // The handler terminates i-denied, the first value, so that is what must be authorized.
+        assertEquals(Decision.DENY, decisionForEveryTarget(policy, "ec2:TerminateInstances",
+                formRequest("Action=TerminateInstances&InstanceId.1=i-denied&InstanceId.1=i-allowed")));
+    }
+
     private Decision decisionForEveryTarget(String policy, String action, ContainerRequestContext request) {
         Decision first = evaluator.simulateCustomPolicy(List.of(policy), action, "*",
                 resolver.resolve("ec2", action, request));
