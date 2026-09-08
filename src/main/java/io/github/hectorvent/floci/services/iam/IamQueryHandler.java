@@ -70,7 +70,7 @@ public class IamQueryHandler {
             // Identity providers & server certificates
             case "ListSAMLProviders" -> handleListSAMLProviders(authorization);
             case "CreateSAMLProvider" -> handleCreateSAMLProvider(params, authorization);
-            case "GetSAMLProvider" -> handleGetSAMLProvider(params);
+            case "GetSAMLProvider" -> handleGetSAMLProvider(params, authorization);
             case "ListOpenIDConnectProviders" -> handleListOpenIDConnectProviders(params);
             case "CreateOpenIDConnectProvider" -> handleCreateOpenIDConnectProvider(params);
             case "GetOpenIDConnectProvider" -> handleGetOpenIDConnectProvider(params);
@@ -333,8 +333,9 @@ public class IamQueryHandler {
                 new XmlBuilder().elem("SAMLProviderArn", provider.getArn()).build())).build();
     }
 
-    private Response handleGetSAMLProvider(MultivaluedMap<String, String> params) {
-        SAMLProvider provider = samlProviderService.get(getParam(params, "SAMLProviderArn"));
+    private Response handleGetSAMLProvider(MultivaluedMap<String, String> params, String authorization) {
+        String accountId = accountResolver.resolve(authorization);
+        SAMLProvider provider = samlProviderService.getForAccount(accountId, getParam(params, "SAMLProviderArn"));
         String metadata = "<md:EntityDescriptor xmlns:md=\"urn:oasis:names:tc:SAML:2.0:metadata\" entityID=\""
                 + provider.getEntityId() + "\"><md:KeyDescriptor use=\"signing\"><ds:KeyInfo xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\"><ds:X509Data><ds:X509Certificate>"
                 + provider.getCertificate() + "</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor></md:EntityDescriptor>";

@@ -473,6 +473,24 @@ class IamIntegrationTest {
 
     @Test
     @Order(54)
+    void getSamlProviderDoesNotCrossAccountBoundaries() {
+        String providerName = "cross-account-saml-" + System.nanoTime();
+        String metadata = "<md:EntityDescriptor xmlns:md=\"urn:oasis:names:tc:SAML:2.0:metadata\" entityID=\"https://idp.example.test/"
+                + providerName + "\"><md:IDPSSODescriptor><md:KeyDescriptor use=\"signing\"><ds:KeyInfo xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\"><ds:X509Data><ds:X509Certificate>Y2VydA==</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor></md:IDPSSODescriptor></md:EntityDescriptor>";
+        String ownerAuth = "AWS4-HMAC-SHA256 Credential=111111111111/20260227/us-east-1/iam/aws4_request";
+        String otherAccountAuth = "AWS4-HMAC-SHA256 Credential=222222222222/20260227/us-east-1/iam/aws4_request";
+        given().formParam("Action", "CreateSAMLProvider").formParam("Name", providerName)
+                .formParam("SAMLMetadataDocument", metadata).header("Authorization", ownerAuth)
+                .when().post("/").then().statusCode(200);
+
+        given().formParam("Action", "GetSAMLProvider")
+                .formParam("SAMLProviderArn", "arn:aws:iam::111111111111:saml-provider/" + providerName)
+                .header("Authorization", otherAccountAuth)
+                .when().post("/").then().statusCode(404).body("ErrorResponse.Error.Code", equalTo("NoSuchEntity"));
+    }
+
+    @Test
+    @Order(55)
     void listOpenIdConnectProvidersReturnsEmptyList() {
         given()
             .formParam("Action", "ListOpenIDConnectProviders")

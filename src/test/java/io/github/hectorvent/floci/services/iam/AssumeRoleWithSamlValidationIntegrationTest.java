@@ -52,6 +52,7 @@ class AssumeRoleWithSamlValidationIntegrationTest {
     private static final String SAML_NS = "urn:oasis:names:tc:SAML:2.0:assertion";
     private static KeyPair signingKeys;
     private static String certificateBase64;
+    private static boolean providerRegistered;
 
     @BeforeAll
     static void createSigningCertificate() throws Exception {
@@ -136,6 +137,44 @@ class AssumeRoleWithSamlValidationIntegrationTest {
     }
 
     @Test
+    void conditionalTrustPolicyDenyIsNotBypassed() {
+        String role = "saml-conditional-deny-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        String trust = "{\"Version\":\"2012-10-17\",\"Statement\":["
+                + "{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"" + PROVIDER
+                + "\"},\"Action\":\"sts:AssumeRoleWithSAML\"},"
+                + "{\"Effect\":\"Deny\",\"Principal\":{\"Federated\":\"" + PROVIDER
+                + "\"},\"Action\":\"sts:AssumeRoleWithSAML\",\"Condition\":{\"StringNotEquals\":{\"saml:iss\":\"https://other.example.test\"}}}]}";
+        given().contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "CreateRole").formParam("RoleName", role)
+                .formParam("AssumeRolePolicyDocument", trust)
+                .header("Authorization", auth("iam")).when().post("/").then().statusCode(200);
+        ensureProviderRegistered();
+        String roleArn = "arn:aws:iam::" + ACCOUNT + ":role/" + role;
+        assume(roleArn, assertion(roleArn, PROVIDER, Instant.now().plusSeconds(300), AUDIENCE, ISSUER, true), PROVIDER)
+                .statusCode(403).body(containsString("AccessDenied"));
+    }
+
+    @Test
+    void duplicateProviderCreationIsRejected() {
+        String metadata = "<md:EntityDescriptor xmlns:md=\"urn:oasis:names:tc:SAML:2.0:metadata\" entityID=\""
+                + ISSUER + "\"><md:IDPSSODescriptor><md:KeyDescriptor use=\"signing\"><ds:KeyInfo xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\"><ds:X509Data><ds:X509Certificate>"
+                + certificateBase64 + "</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor></md:IDPSSODescriptor></md:EntityDescriptor>";
+        given().contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "CreateSAMLProvider").formParam("Name", PROVIDER_NAME)
+                .formParam("SAMLMetadataDocument", metadata)
+                .header("Authorization", auth("iam")).when().post("/").then()
+                .statusCode(409).body(containsString("EntityAlreadyExists"));
+    }
+
+    @Test
+    void validBearerConfirmationIsAcceptedWithUnrelatedConfirmation() {
+        String role = createRole(true);
+        assume(role, assertion(role, PROVIDER, Instant.now().plusSeconds(300), AUDIENCE, ISSUER, true, true), PROVIDER)
+                .statusCode(200)
+                .body("AssumeRoleWithSAMLResponse.AssumeRoleWithSAMLResult.Credentials.AccessKeyId", startsWith("ASIA"));
+    }
+
+    @Test
     void validSignedAssertionReturnsCredentialsAndSamlFields() {
         String role = createRole(true);
         assume(role, assertion(role, PROVIDER, Instant.now().plusSeconds(300), AUDIENCE, ISSUER, true), PROVIDER)
@@ -165,8 +204,15 @@ class AssumeRoleWithSamlValidationIntegrationTest {
                 .formParam("Action", "CreateRole").formParam("RoleName", role)
                 .formParam("AssumeRolePolicyDocument", trust)
                 .header("Authorization", auth("iam")).when().post("/").then().statusCode(200);
-        registerProvider();
+        ensureProviderRegistered();
         return "arn:aws:iam::" + ACCOUNT + ":role/" + role;
+    }
+
+    private static void ensureProviderRegistered() {
+        if (!providerRegistered) {
+            registerProvider();
+            providerRegistered = true;
+        }
     }
 
     private static void registerProvider() {
@@ -190,10 +236,18 @@ class AssumeRoleWithSamlValidationIntegrationTest {
 
     private static String assertion(String role, String provider, Instant expiry, String audience,
                                     String issuer, boolean sign) {
+        return assertion(role, provider, expiry, audience, issuer, sign, false);
+    }
+
+    private static String assertion(String role, String provider, Instant expiry, String audience,
+                                    String issuer, boolean sign, boolean unrelatedConfirmation) {
         String id = "_" + UUID.randomUUID();
+        String extraConfirmation = unrelatedConfirmation
+                ? "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:sender-vouches\"><saml:SubjectConfirmationData Recipient=\"https://unrelated.example.test\" NotOnOrAfter=\"" + Instant.now().minusSeconds(1) + "\"/></saml:SubjectConfirmation>"
+                : "";
         String xml = "<saml:Assertion xmlns:saml=\"" + SAML_NS + "\" ID=\"" + id + "\" Version=\"2.0\" IssueInstant=\""
                 + Instant.now() + "\"><saml:Issuer>" + issuer + "</saml:Issuer><saml:Subject><saml:NameID Format=\"persistent\">saml-subject</saml:NameID>"
-                + "<saml:SubjectConfirmation><saml:SubjectConfirmationData Recipient=\"https://signin.aws.amazon.com/saml\" NotOnOrAfter=\"" + expiry + "\"/></saml:SubjectConfirmation></saml:Subject>"
+                + extraConfirmation + "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\"><saml:SubjectConfirmationData Recipient=\"https://signin.aws.amazon.com/saml\" NotOnOrAfter=\"" + expiry + "\"/></saml:SubjectConfirmation></saml:Subject>"
                 + "<saml:Conditions NotBefore=\"" + Instant.now().minusSeconds(30) + "\" NotOnOrAfter=\"" + expiry + "\"><saml:AudienceRestriction><saml:Audience>" + audience + "</saml:Audience></saml:AudienceRestriction></saml:Conditions>"
                 + "<saml:AttributeStatement><saml:Attribute Name=\"https://aws.amazon.com/SAML/Attributes/Role\"><saml:AttributeValue>" + role + "," + provider + "</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion>";
         try {
@@ -201,7 +255,9 @@ class AssumeRoleWithSamlValidationIntegrationTest {
             parserFactory.setNamespaceAware(true);
             Document document = parserFactory.newDocumentBuilder()
                     .parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
-            if (!sign) return encoded(document);
+            if (!sign) {
+                return encoded(document);
+            }
             Element assertion = document.getDocumentElement();
             assertion.setIdAttribute("ID", true);
             XMLSignatureFactory factory = XMLSignatureFactory.getInstance("DOM");
