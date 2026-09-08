@@ -29,6 +29,7 @@ AWS::CertificateManager::Certificate	AcmCfnProvisioner
 AWS::CloudFormation::CustomResource	LEGACY_SWITCH
 AWS::CloudFront::Distribution	LEGACY_SWITCH
 AWS::CloudWatch::Alarm	CloudWatchCfnProvisioner
+AWS::CloudWatch::Dashboard	CloudWatchDashboardCfnProvisioner
 AWS::CodeBuild::Project	CodeBuildCfnProvisioner
 AWS::CodePipeline::CustomActionType	CodePipelineCfnProvisioner
 AWS::CodePipeline::Pipeline	CodePipelineCfnProvisioner
