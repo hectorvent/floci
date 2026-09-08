@@ -22,12 +22,14 @@ import java.util.Map;
 import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class EventBridgeInvokerTest {
 
     private EventBridgeInvoker invoker;
+    private LambdaService lambdaService;
     private SqsService sqsService;
     private BatchService batchService;
     private FirehoseService firehoseService;
@@ -36,7 +38,7 @@ class EventBridgeInvokerTest {
 
     @BeforeEach
     void setUp() {
-        LambdaService lambdaService = mock(LambdaService.class);
+        lambdaService = mock(LambdaService.class);
         sqsService = mock(SqsService.class);
         SnsService snsService = mock(SnsService.class);
         batchService = mock(BatchService.class);
@@ -57,6 +59,19 @@ class EventBridgeInvokerTest {
                 new ObjectMapper(),
                 mock(io.github.hectorvent.floci.config.EmulatorConfig.class)
         );
+    }
+
+    @Test
+    void invokeTarget_lambdaTargetPreservesArnAccount() {
+        String arn = "arn:aws:lambda:ap-south-1:100000000012:function:cross-account-function";
+        Target target = new Target("id1", arn, "{\"detail\":{\"job\":\"workflow-recovery\"}}", null);
+
+        invoker.invokeTarget(target, "{\"ignored\":true}", "ap-south-1");
+
+        verify(lambdaService).invokeArn(
+                eq(arn),
+                aryEq("{\"detail\":{\"job\":\"workflow-recovery\"}}".getBytes()),
+                eq(io.github.hectorvent.floci.services.lambda.model.InvocationType.Event));
     }
 
     @Test
@@ -246,6 +261,55 @@ class EventBridgeInvokerTest {
         String eventJson = "{\"source\":\"aws.s3\"}";
         InputTransformer transformer = new InputTransformer(Map.of(), null);
         assertEquals(eventJson, invoker.applyInputTransformer(transformer, eventJson));
+    }
+
+    @Test
+    void applyInputTransformer_valuePosition_stringIsQuoted() {
+        String event = "{\"detail\":{\"eventName\":\"site.created\"}}";
+        InputTransformer t = new InputTransformer(
+                java.util.Map.of("e", "$.detail.eventName"), "{\"e\":<e>}");
+        assertEquals("{\"e\":\"site.created\"}", invoker.applyInputTransformer(t, event));
+    }
+
+    @Test
+    void applyInputTransformer_valuePosition_objectNumberBoolAsIs() {
+        String event = "{\"detail\":{\"count\":42,\"ok\":true,\"payload\":{\"id\":\"abc\"}}}";
+        InputTransformer t = new InputTransformer(
+                java.util.Map.of("c", "$.detail.count", "o", "$.detail.ok", "p", "$.detail.payload"),
+                "{\"c\":<c>,\"o\":<o>,\"p\":<p>}");
+        assertEquals("{\"c\":42,\"o\":true,\"p\":{\"id\":\"abc\"}}", invoker.applyInputTransformer(t, event));
+    }
+
+    @Test
+    void applyInputTransformer_valuePosition_missingIsEmpty() {
+        String event = "{\"detail\":{}}";
+        InputTransformer t = new InputTransformer(
+                java.util.Map.of("e", "$.detail.nope"), "prefix:<e>:suffix");
+        assertEquals("prefix::suffix", invoker.applyInputTransformer(t, event));
+    }
+
+    @Test
+    void applyInputTransformer_insideString_interpolatesRaw() {
+        String event = "{\"detail\":{\"user\":\"alice\",\"eventName\":\"site.created\"}}";
+        InputTransformer t = new InputTransformer(
+                java.util.Map.of("user", "$.detail.user", "e", "$.detail.eventName"),
+                "\"<user> did <e>\"");
+        assertEquals("\"alice did site.created\"", invoker.applyInputTransformer(t, event));
+    }
+
+    @Test
+    void applyInputTransformer_quotedWholeToken_rawBetweenQuotes() {
+        String event = "{\"detail\":{\"eventName\":\"site.created\"}}";
+        InputTransformer t = new InputTransformer(
+                java.util.Map.of("e", "$.detail.eventName"), "{\"e\":\"<e>\"}");
+        assertEquals("{\"e\":\"site.created\"}", invoker.applyInputTransformer(t, event));
+    }
+
+    @Test
+    void applyInputTransformer_unknownVarLeftLiteral() {
+        String event = "{\"detail\":{}}";
+        InputTransformer t = new InputTransformer(java.util.Map.of(), "{\"x\":<unknown>}");
+        assertEquals("{\"x\":<unknown>}", invoker.applyInputTransformer(t, event));
     }
 
     @SuppressWarnings("unchecked")

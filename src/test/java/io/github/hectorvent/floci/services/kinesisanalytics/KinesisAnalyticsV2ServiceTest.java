@@ -3,7 +3,7 @@ package io.github.hectorvent.floci.services.kinesisanalytics;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
-import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.kinesisanalytics.container.FlinkContainerManager;
 import io.github.hectorvent.floci.services.kinesisanalytics.model.ApplicationStatus;
@@ -55,6 +55,55 @@ class KinesisAnalyticsV2ServiceTest {
     void createApplicationRequiresName() {
         assertThrows(AwsException.class,
                 () -> service.createApplication(" ", "FLINK-1_18", ROLE, null, null));
+    }
+
+    @Test
+    void createApplicationRejectsNamesOutsideAwsCharsetAndLength() {
+        // AWS ApplicationName Pattern: [a-zA-Z0-9_.-]+, 1-128 chars. Rejecting this at the API
+        // boundary (matching real AWS) is also what keeps a name containing '%', '"', '\', or '$'
+        // from ever reaching FlinkContainerManager's generated log4j2 CloudWatch-log-format pattern,
+        // where those characters would otherwise be a log4j2 conversion-specifier/Lookup or JSON
+        // injection risk.
+        for (String badName : List.of("has spaces", "quote\"here", "percent%here", "dollar${x}",
+                "back\\slash", "a".repeat(129))) {
+            AwsException ex = assertThrows(AwsException.class,
+                    () -> service.createApplication(badName, "FLINK-1_18", ROLE, null, null));
+            assertEquals("InvalidArgumentException", ex.getErrorCode());
+        }
+    }
+
+    @Test
+    void startApplicationRejectsLegacyStatePersistedBeforeNameValidationExisted() {
+        // Simulates an application created by a floci build older than
+        // createApplicationRejectsNamesOutsideAwsCharsetAndLength's check, by writing directly to
+        // storage (bypassing createApplication). startApplication must still reject it rather than
+        // silently generating a CloudWatch-log applicationARN that either drops the '$' (mismatching
+        // the real ApplicationARN) or, if some future change stopped dropping it, resolves it as a
+        // log4j2 Lookup.
+        AccountAwareStorageBackend<FlinkApplication> store =
+                AccountAwareStorageBackend.inMemory("000000000000");
+        StorageFactory storageFactory = Mockito.mock(StorageFactory.class);
+        Mockito.doReturn(store).when(storageFactory)
+                .create(Mockito.anyString(), Mockito.anyString(), Mockito.any());
+
+        EmulatorConfig config = Mockito.mock(EmulatorConfig.class);
+        var servicesConfig = Mockito.mock(EmulatorConfig.ServicesConfig.class);
+        var kaConfig = Mockito.mock(EmulatorConfig.KinesisAnalyticsServiceConfig.class);
+        when(config.services()).thenReturn(servicesConfig);
+        when(servicesConfig.kinesisAnalytics()).thenReturn(kaConfig);
+        when(kaConfig.mock()).thenReturn(true);
+        when(config.defaultRegion()).thenReturn("us-east-1");
+        RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
+
+        KinesisAnalyticsV2Service legacyState = new KinesisAnalyticsV2Service(
+                storageFactory, config, regionResolver, Mockito.mock(FlinkContainerManager.class));
+        FlinkApplication legacyApp = new FlinkApplication("dollar${x}",
+                "arn:aws:kinesisanalytics:us-east-1:000000000000:application/dollar${x}",
+                "FLINK-1_18", ROLE, "STREAMING");
+        store.putForAccount("000000000000", "dollar${x}", legacyApp);
+
+        AwsException ex = assertThrows(AwsException.class, () -> legacyState.startApplication("dollar${x}"));
+        assertEquals("InvalidArgumentException", ex.getErrorCode());
     }
 
     @Test
@@ -552,9 +601,10 @@ class KinesisAnalyticsV2ServiceTest {
         // intermediate state must still be persisted — not just the final RUNNING transition — since
         // pendingJars (a separate in-process-only cache) is already cleared by then; an emulator
         // restart before the next persist would otherwise leave the application permanently stuck.
-        InMemoryStorage<String, FlinkApplication> backing = Mockito.spy(new InMemoryStorage<>());
+        AccountAwareStorageBackend<FlinkApplication> store =
+                Mockito.spy(AccountAwareStorageBackend.inMemory("000000000000"));
         StorageFactory storageFactory = Mockito.mock(StorageFactory.class);
-        Mockito.doReturn(backing).when(storageFactory)
+        Mockito.doReturn(store).when(storageFactory)
                 .create(Mockito.anyString(), Mockito.anyString(), Mockito.any());
 
         EmulatorConfig config = Mockito.mock(EmulatorConfig.class);
@@ -580,7 +630,7 @@ class KinesisAnalyticsV2ServiceTest {
         realMode.createApplication("demo", "FLINK-1_18", ROLE, null, null, "bucket", "app.jar", null, 1);
         FlinkApplication app = realMode.describeApplication("demo");
         app.setApplicationStatus(ApplicationStatus.STARTING);
-        Mockito.clearInvocations(backing); // ignore createApplication's own put()
+        Mockito.clearInvocations(store); // ignore createApplication's own put()
 
         try {
             // @PostConstruct isn't wired by a plain `new` in this unit test; start the poller manually.
@@ -588,7 +638,8 @@ class KinesisAnalyticsV2ServiceTest {
             // The poller's first tick fires ~1s after scheduling; give it margin.
             Thread.sleep(1500);
 
-            Mockito.verify(backing, Mockito.atLeastOnce()).put(Mockito.eq("demo"), Mockito.any());
+            Mockito.verify(store, Mockito.atLeastOnce())
+                    .putForAccount(Mockito.eq("000000000000"), Mockito.eq("demo"), Mockito.any());
             assertEquals("job-1", realMode.describeApplication("demo").getFlinkJobId());
         } finally {
             realMode.shutdown();
@@ -609,7 +660,7 @@ class KinesisAnalyticsV2ServiceTest {
     private KinesisAnalyticsV2Service buildService(boolean mock, FlinkContainerManager manager) {
         StorageFactory storageFactory = Mockito.mock(StorageFactory.class);
         when(storageFactory.create(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
-                .thenReturn(new InMemoryStorage<>());
+                .thenReturn(AccountAwareStorageBackend.inMemory("000000000000"));
 
         EmulatorConfig config = Mockito.mock(EmulatorConfig.class);
         var servicesConfig = Mockito.mock(EmulatorConfig.ServicesConfig.class);

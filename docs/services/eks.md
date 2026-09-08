@@ -46,7 +46,11 @@ aws eks update-kubeconfig --name my-cluster
 kubectl get nodes
 ```
 
-`aws eks update-kubeconfig` wires `aws eks get-token` into the kubeconfig as an exec credential. The bearer token it produces is validated by a **token-authentication webhook** that Floci wires into k3s: the k3s API server POSTs a Kubernetes `TokenReview` to Floci's `/_floci/eks/token-webhook` endpoint, and Floci maps the token to the `system:masters` group (bound to `cluster-admin`). No `aws-iam-authenticator` is required.
+`aws eks update-kubeconfig` wires `aws eks get-token` into the kubeconfig as an exec credential. The bearer token contains a SigV4-presigned STS `GetCallerIdentity` request. Floci validates its signature and 60-second presign expiry, then verifies the signed `x-k8s-aws-id` header against the cluster-specific `/_floci/eks/clusters/<cluster-name>/token-webhook` endpoint before mapping the caller to the `system:masters` group (bound to `cluster-admin`). No `aws-iam-authenticator` is required.
+
+Create an IAM access key before using EKS authentication. The public local-development pairs `test`/`test` and `floci`/`floci` are deliberately rejected because the webhook grants cluster-admin access.
+
+Temporary IAM credentials must include their `AWS_SESSION_TOKEN` when signing the token.
 
 This webhook is enabled by default (`iam-auth-webhook: true`). Set it to `false` to start k3s without it (in which case `aws eks get-token` tokens are rejected with `401`).
 
@@ -72,6 +76,29 @@ services:
 
 !!! note "No port mapping needed for k3s ports"
     k3s containers bind their API server port (6500–6599) directly on the host via Docker — no `ports:` entry is required in `docker-compose.yml`. See [Ports Reference](../configuration/ports.md#ports-65006599-eks-real-mode) for the full explanation.
+
+#### Clusters survive a restart
+
+With a persistent [storage mode](../configuration/storage.md) (the default), clusters recorded in
+`eks-clusters.json` are **re-latched to their k3s containers when Floci starts**:
+
+- A surviving container (for example after a Docker Desktop / daemon reboot) is adopted and
+  started in place, keeping its published API server port and data volume — deployments come
+  back as they were.
+- A missing container is recreated. Its named k3s data volume (`floci-eks-<name>`; for a
+  [non-default account](../configuration/multi-account.md), `floci-eks-<account>.<name>`) is
+  reused if it survived; volumes follow the global prune policy
+  (`FLOCI_STORAGE_PRUNE_VOLUMES_ON_DELETE`, default `false`), so they are retained when the
+  container is stopped or the cluster deleted, except in `memory` storage mode.
+- A non-default-account cluster created before account-qualified naming keeps its historical
+  `floci-eks-<name>` container and volume: restoration adopts the surviving container when its
+  `io.floci.account` label matches the owning account, so pre-upgrade workloads are not
+  orphaned.
+
+A restored cluster reports `CREATING` until its API server answers again, then returns to
+`ACTIVE` with a freshly extracted certificate authority. If the container cannot be brought
+back (for example Docker is unavailable), the cluster is marked `FAILED` instead of appearing
+`ACTIVE` while unreachable.
 
 ## Configuration
 
@@ -218,7 +245,7 @@ When `sts:AssumeRoleWithWebIdentity` receives a token whose `iss` names an issue
 - `exp` / `nbf`, with 60s of clock-skew tolerance
 - the role's trust policy: `Principal.Federated` and the `Condition` block, comparing `oidc:sub` / `oidc:aud` with exact, case-sensitive equality
 
-The response then carries the token's real claims in `SubjectFromWebIdentityToken`, `Provider`, and `Audience`. Failures return `InvalidIdentityToken` (400) for a bad token or `AccessDenied` (403) when the trust policy does not permit the subject.
+The response then carries the token's real claims in `SubjectFromWebIdentityToken`, `Provider`, and `Audience`. Failures return `InvalidIdentityToken` (400) for a bad token, `ExpiredTokenException` (400) for an expired one, or `AccessDenied` (403) when the trust policy does not permit the subject.
 
 A token whose issuer Floci does not host is treated as opaque and accepted, since Floci cannot adjudicate a third-party provider. Validation is therefore automatic for Floci-issued tokens and requires no configuration flag.
 

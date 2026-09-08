@@ -5,6 +5,9 @@ import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.Resettable;
+import io.github.hectorvent.floci.core.resource.ExplorerResource;
+import io.github.hectorvent.floci.core.resource.ResourceProvider;
+import io.github.hectorvent.floci.core.resource.SupportedResourceType;
 import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -17,6 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.services.sqs.model.MessageAttributeValue;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -27,10 +31,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 @ApplicationScoped
-public class SqsService implements Resettable {
+public class SqsService implements Resettable, ResourceProvider {
 
     private static final Logger LOG = Logger.getLogger(SqsService.class);
     private static final int DEDUP_WINDOW_SECONDS = 300; // 5 minutes
+    private static final int MAX_RECEIVE_WAIT_TIME_SECONDS = 20;
 
     private final StorageBackend<String, Queue> queueStore;
     private final StorageBackend<String, List<Message>> messageStore;
@@ -129,6 +134,11 @@ public class SqsService implements Resettable {
         loadPersistedDedup();
     }
 
+    @PreDestroy
+    void stop() {
+        moveTaskExecutor.shutdownNow();
+    }
+
     public void clear() {
         messagesByQueue.values().forEach(GuardedMessageQueue::close);
         messagesByQueue.clear();
@@ -201,6 +211,35 @@ public class SqsService implements Resettable {
         }
     }
 
+    @Override
+    public List<ExplorerResource> getResources() {
+        List<ExplorerResource> resources = new ArrayList<>();
+        for (String key : queueStore.keys()) {
+            int sep = key.indexOf("::");
+            if (sep < 0) {
+                continue;
+            }
+            String region = key.substring(0, sep);
+            Queue queue = queueStore.get(key).orElse(null);
+            if (queue == null) {
+                continue;
+            }
+            String account = queue.getAccountId() != null ? queue.getAccountId() : regionResolver.getAccountId();
+            String arn = AwsArnUtils.Arn.of("sqs", region, account, queue.getQueueName()).toString();
+            resources.add(new ExplorerResource(
+                    arn, "sqs:queue", "sqs",
+                    region, account,
+                    queue.getCreatedTimestamp() != null ? queue.getCreatedTimestamp() : Instant.now(),
+                    queue.getTags() != null ? queue.getTags() : Map.of()));
+        }
+        return resources;
+    }
+
+    @Override
+    public Set<SupportedResourceType> getSupportedResourceTypes() {
+        return Set.of(new SupportedResourceType("sqs:queue", "sqs", true));
+    }
+
     public Queue createQueue(String queueName, Map<String, String> attributes, String region) {
         return createQueue(queueName, attributes, null, region);
     }
@@ -256,6 +295,7 @@ public class SqsService implements Resettable {
         queue.getAttributes().putIfAbsent("VisibilityTimeout", String.valueOf(defaultVisibilityTimeout));
         queue.getAttributes().putIfAbsent("MaximumMessageSize", String.valueOf(maxMessageSize));
         queue.getAttributes().putIfAbsent("DelaySeconds", "0");
+        queue.getAttributes().putIfAbsent("ReceiveMessageWaitTimeSeconds", "0");
         queue.getAttributes().putIfAbsent("MessageRetentionPeriod", "345600");
         if (queue.isFifo()) {
             if (attributes != null && attributes.containsKey("ContentBasedDeduplication") && "true".equals(attributes.get("ContentBasedDeduplication"))) {
@@ -388,7 +428,7 @@ public class SqsService implements Resettable {
                             "Reason: Message must be shorter than " + queueMaxMessageSize + " bytes.", 400);
         }
 
-        int queueDelaySeconds = parseDelaySecondsAttribute(queue.getAttributes().get("DelaySeconds"));
+        int queueDelaySeconds = parseNonNegativeSecondsAttribute(queue.getAttributes().get("DelaySeconds"));
 
         // Resolve the effective delay:
         //   - FIFO queues only support queue-level DelaySeconds per AWS SQS,
@@ -554,12 +594,7 @@ public class SqsService implements Resettable {
         return total;
     }
 
-    /**
-     * Parse the queue-level DelaySeconds attribute. Returns 0 when the
-     * attribute is null, empty, non-numeric, or negative -- the queue falls
-     * back to "no default delay" rather than failing the SendMessage call.
-     */
-    private int parseDelaySecondsAttribute(String value) {
+    private int parseNonNegativeSecondsAttribute(String value) {
         if (value == null || value.isEmpty()) {
             return 0;
         }
@@ -599,18 +634,23 @@ public class SqsService implements Resettable {
     }
 
     public List<Message> receiveMessage(String queueUrl, int maxMessages, int visibilityTimeout,
-                                        int waitTimeSeconds, String region) {
+                                        Integer waitTimeSeconds, String region) {
         String storageKey = regionKey(region, queueUrl);
-        getQueueByUrl(storageKey, queueUrl)
+        Queue queue = getQueueByUrl(storageKey, queueUrl)
                 .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
                         "The specified queue does not exist.", 400));
 
         if (maxMessages < 1 || maxMessages > 10) {
             maxMessages = 1;
         }
+        if (waitTimeSeconds != null && (waitTimeSeconds < 0 || waitTimeSeconds > MAX_RECEIVE_WAIT_TIME_SECONDS)) {
+            throw new AwsException("InvalidParameterValue",
+                    "Value " + waitTimeSeconds + " for parameter WaitTimeSeconds is invalid. "
+                            + "Reason: Must be >= 0 and <= " + MAX_RECEIVE_WAIT_TIME_SECONDS + ".", 400);
+        }
 
         long start = System.currentTimeMillis();
-        long maxWait = waitTimeSeconds * 1000L;
+        long maxWait = resolveWaitTimeSeconds(queue, waitTimeSeconds) * 1000L;
         Object lock = queueLocks.computeIfAbsent(storageKey, k -> new Object());
         // The queue incarnation this call polls against. DeleteQueue removes it
         // from messagesByQueue (and CreateQueue registers a fresh instance), so
@@ -649,6 +689,15 @@ public class SqsService implements Resettable {
                 return result;
             }
         }
+    }
+
+    private int resolveWaitTimeSeconds(Queue queue, Integer requestedWaitTimeSeconds) {
+        if (requestedWaitTimeSeconds != null) {
+            return requestedWaitTimeSeconds;
+        }
+        int queueWaitTimeSeconds = parseNonNegativeSecondsAttribute(
+                queue.getAttributes().get("ReceiveMessageWaitTimeSeconds"));
+        return Math.min(queueWaitTimeSeconds, MAX_RECEIVE_WAIT_TIME_SECONDS);
     }
 
     private RedrivePolicy getOrParseRedrivePolicy(Queue queue, String storageKey) {

@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.core.common;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.eks.EksOidcService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -38,9 +39,9 @@ class WebIdentityTokenVerifierTest {
         verifier = new WebIdentityTokenVerifier(objectMapper);
         oidcService = new EksOidcService(new StorageFactory(null, null) {
             @Override
-            public <V> StorageBackend<String, V> create(String serviceName, String fileName,
+            public <V> AccountAwareStorageBackend<V> create(String serviceName, String fileName,
                     TypeReference<Map<String, V>> typeReference) {
-                return new InMemoryStorage<>();
+                return AccountAwareStorageBackend.inMemory("000000000000");
             }
         }, objectMapper);
         oidcService.ensureKey(CLUSTER, ISSUER);
@@ -166,8 +167,10 @@ class WebIdentityTokenVerifierTest {
                         + "\"sub\":\"system:serviceaccount:my-namespace:my-service-account\","
                         + "\"exp\":" + expired + "}");
 
-        WebIdentityTokenVerifier.InvalidTokenException thrown = assertThrows(
-                WebIdentityTokenVerifier.InvalidTokenException.class,
+        // The distinct subtype is what lets STS answer ExpiredTokenException instead of the
+        // generic InvalidIdentityToken it returns for every other verification failure.
+        WebIdentityTokenVerifier.ExpiredTokenException thrown = assertThrows(
+                WebIdentityTokenVerifier.ExpiredTokenException.class,
                 () -> verifier.verify(token, (RSAPublicKey) keyPair.getPublic(), ISSUER,
                         EksOidcService.STS_AUDIENCE));
         assertTrue(thrown.getMessage().contains("expired"));
