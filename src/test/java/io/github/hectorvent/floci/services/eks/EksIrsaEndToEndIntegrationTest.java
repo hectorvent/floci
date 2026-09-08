@@ -2,7 +2,6 @@ package io.github.hectorvent.floci.services.eks;
 
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
-import jakarta.inject.Inject;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -43,8 +42,11 @@ class EksIrsaEndToEndIntegrationTest {
     private static String issuer;
     private static String roleArn;
 
-    @Inject
-    EksOidcService oidcService;
+    private final EksOidcService oidcService;
+
+    EksIrsaEndToEndIntegrationTest(EksOidcService oidcService) {
+        this.oidcService = oidcService;
+    }
 
     private static String issuerKeyPrefix() {
         return issuer.replaceFirst("^https://", "");
