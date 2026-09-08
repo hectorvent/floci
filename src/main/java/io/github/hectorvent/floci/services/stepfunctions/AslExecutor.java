@@ -65,6 +65,7 @@ import jakarta.ws.rs.core.MultivaluedHashMap;
 import jakarta.ws.rs.core.MultivaluedMap;
 import org.jboss.logging.Logger;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -82,6 +83,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -135,6 +137,8 @@ public class AslExecutor {
     // AWS caps the string input of States.Base64Encode/Base64Decode/Hash at 10,000 characters
     // (measured here in Unicode code points).
     private static final int INTRINSIC_MAX_INPUT_LENGTH = 10_000;
+    // AWS refuses a States.ArrayRange result of more than 1,000 elements.
+    private static final int ARRAY_RANGE_MAX_ELEMENTS = 1_000;
     // Must mirror the identical private set in JsonataEvaluator ($hash): both query languages
     // expose exactly these five algorithms, case-sensitively.
     private static final Set<String> HASH_ALGORITHMS =
@@ -3470,7 +3474,8 @@ public class AslExecutor {
      * Supports: States.StringToJson, States.JsonToString, States.Format,
      *           States.Array, States.ArrayLength, States.ArrayContains, States.MathAdd, States.UUID,
      *           States.JsonMerge, States.Base64Encode, States.Base64Decode, States.StringSplit,
-     *           States.ArrayGetItem, States.Hash.
+     *           States.ArrayGetItem, States.Hash, States.ArrayPartition, States.ArrayRange,
+     *           States.ArrayUnique, States.MathRandom.
      * Throws FailStateException("States.Runtime") for unrecognized functions.
      *
      * <p>An argument that matches nothing fails the execution, and the cause names the whole
@@ -3783,9 +3788,208 @@ public class AslExecutor {
                             "States.Hash algorithm '" + algorithm + "' is not available");
                 }
             }
+            case "States.ArrayPartition" -> {
+                List<String> parts = splitIntrinsicArgs(argsStr);
+                if (parts.size() != 2 || argsStr.stripTrailing().endsWith(",")) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayPartition requires exactly 2 arguments");
+                }
+                JsonNode array = resolveIntrinsicArg(parts.get(0).trim(), root, context);
+                if (!array.isArray()) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayPartition first argument must be an array");
+                }
+                // AWS rounds a non-integer chunk size to the nearest integer, then requires it to
+                // be positive.
+                long chunkSize = intrinsicInteger(
+                        resolveIntrinsicArg(parts.get(1).trim(), root, context),
+                        "States.ArrayPartition", "chunk size");
+                if (chunkSize <= 0) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayPartition chunk size must be a positive integer");
+                }
+                ArrayNode chunks = objectMapper.createArrayNode();
+                int size = (int) Math.min(chunkSize, Math.max(array.size(), 1));
+                for (int i = 0; i < array.size(); i += size) {
+                    ArrayNode chunk = chunks.addArray();
+                    for (int j = i; j < Math.min(i + size, array.size()); j++) {
+                        chunk.add(array.get(j));
+                    }
+                }
+                yield chunks;
+            }
+            case "States.ArrayRange" -> {
+                List<String> parts = splitIntrinsicArgs(argsStr);
+                if (parts.size() != 3 || argsStr.stripTrailing().endsWith(",")) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayRange requires exactly 3 arguments");
+                }
+                // AWS rounds non-integer arguments to the nearest integer; the step must be
+                // non-zero, and the end is included when the step lands on it exactly.
+                long start = intrinsicInteger(
+                        resolveIntrinsicArg(parts.get(0).trim(), root, context), "States.ArrayRange", "start");
+                long end = intrinsicInteger(
+                        resolveIntrinsicArg(parts.get(1).trim(), root, context), "States.ArrayRange", "end");
+                long step = intrinsicInteger(
+                        resolveIntrinsicArg(parts.get(2).trim(), root, context), "States.ArrayRange", "step");
+                if (step == 0) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayRange step must be a non-zero integer");
+                }
+                ArrayNode range = objectMapper.createArrayNode();
+                if ((step > 0 && start > end) || (step < 0 && start < end)) {
+                    // A step pointing away from the end yields nothing.
+                    yield range;
+                }
+                // Counted in BigInteger, then iterated a fixed number of times, so a step near
+                // Long.MAX_VALUE can neither overflow the count nor wrap a `v <= end` walk forever.
+                BigInteger elements = BigInteger.valueOf(end)
+                        .subtract(BigInteger.valueOf(start))
+                        .divide(BigInteger.valueOf(step))
+                        .add(BigInteger.ONE);
+                if (elements.compareTo(BigInteger.valueOf(ARRAY_RANGE_MAX_ELEMENTS)) > 0) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayRange result cannot contain more than " + ARRAY_RANGE_MAX_ELEMENTS
+                                    + " elements, size: " + elements);
+                }
+                long value = start;
+                for (int i = 0, n = elements.intValue(); i < n; i++) {
+                    // Values that fit in an int are added as IntNode, the node Jackson parses
+                    // such a number from JSON into, so the result compares equal to parsed input.
+                    if (value >= Integer.MIN_VALUE && value <= Integer.MAX_VALUE) {
+                        range.add((int) value);
+                    } else {
+                        range.add(value);
+                    }
+                    value += step;
+                }
+                yield range;
+            }
+            case "States.ArrayUnique" -> {
+                List<String> parts = splitIntrinsicArgs(argsStr);
+                if (parts.size() != 1 || argsStr.stripTrailing().endsWith(",")) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayUnique requires exactly 1 argument");
+                }
+                JsonNode array = resolveIntrinsicArg(parts.get(0).trim(), root, context);
+                if (!array.isArray()) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.ArrayUnique requires an array");
+                }
+                // First occurrence wins and input order is kept. Equality is structural, with
+                // numbers compared by value so a literal 1 (a LongNode) and a path-resolved 1 (an
+                // IntNode) count as the same element.
+                ArrayNode unique = objectMapper.createArrayNode();
+                for (JsonNode element : array) {
+                    boolean seen = false;
+                    for (JsonNode kept : unique) {
+                        if (intrinsicNodesEqual(kept, element)) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen) {
+                        unique.add(element);
+                    }
+                }
+                yield unique;
+            }
+            case "States.MathRandom" -> {
+                List<String> parts = splitIntrinsicArgs(argsStr);
+                if (parts.size() < 2 || parts.size() > 3 || argsStr.stripTrailing().endsWith(",")) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.MathRandom requires 2 or 3 arguments");
+                }
+                // AWS rounds non-integer bounds to the nearest integer and draws an integer from
+                // the half-open range [start, end): the start is inclusive, the end exclusive, so
+                // the range must be non-empty. An optional integer seed makes the draw
+                // reproducible: AWS draws from java.util.Random, so the same seed yields the same
+                // number here.
+                long start = intrinsicInteger(
+                        resolveIntrinsicArg(parts.get(0).trim(), root, context), "States.MathRandom", "start");
+                long end = intrinsicInteger(
+                        resolveIntrinsicArg(parts.get(1).trim(), root, context), "States.MathRandom", "end");
+                if (start >= end) {
+                    throw new FailStateException("States.IntrinsicFailure",
+                            "States.MathRandom start must be less than end");
+                }
+                long drawn;
+                if (parts.size() == 3) {
+                    long seed = intrinsicInteger(
+                            resolveIntrinsicArg(parts.get(2).trim(), root, context), "States.MathRandom", "seed");
+                    drawn = new Random(seed).nextLong(start, end);
+                } else {
+                    drawn = ThreadLocalRandom.current().nextLong(start, end);
+                }
+                yield objectMapper.getNodeFactory().numberNode(drawn);
+            }
             default -> throw new FailStateException("States.Runtime",
                     "Unsupported intrinsic function: " + fnName);
         };
+    }
+
+    /**
+     * Coerces a numeric intrinsic argument to an integer the way AWS does for
+     * {@code States.ArrayPartition}, {@code States.ArrayRange} and {@code States.MathRandom}: an
+     * integral value is taken as is and a fractional one is rounded to the nearest integer. A
+     * non-number, or an integer outside the long range, is a {@code States.IntrinsicFailure}.
+     */
+    private static long intrinsicInteger(JsonNode node, String fnName, String argName) {
+        if (!node.isNumber()) {
+            throw new FailStateException("States.IntrinsicFailure",
+                    fnName + " " + argName + " must be a number");
+        }
+        if (node.isIntegralNumber()) {
+            if (!node.canConvertToLong()) {
+                throw new FailStateException("States.IntrinsicFailure",
+                        fnName + " " + argName + " is out of range");
+            }
+            return node.asLong();
+        }
+        double value = node.doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            throw new FailStateException("States.IntrinsicFailure",
+                    fnName + " " + argName + " must be a finite number");
+        }
+        return Math.round(value);
+    }
+
+    /**
+     * Structural equality for intrinsic array elements. Jackson's own {@code equals} tells an
+     * {@code IntNode} from a {@code LongNode} holding the same value, and a number literal in an
+     * intrinsic expression is parsed as a long while a number read from the state input is parsed
+     * as an int, so numbers are compared by value here, recursively through arrays and objects.
+     */
+    private static boolean intrinsicNodesEqual(JsonNode a, JsonNode b) {
+        if (a.isNumber() && b.isNumber()) {
+            return a.decimalValue().compareTo(b.decimalValue()) == 0;
+        }
+        if (a.isArray() && b.isArray()) {
+            if (a.size() != b.size()) {
+                return false;
+            }
+            for (int i = 0; i < a.size(); i++) {
+                if (!intrinsicNodesEqual(a.get(i), b.get(i))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (a.isObject() && b.isObject()) {
+            if (a.size() != b.size()) {
+                return false;
+            }
+            Iterator<Map.Entry<String, JsonNode>> fields = a.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                JsonNode other = b.get(field.getKey());
+                if (other == null || !intrinsicNodesEqual(field.getValue(), other)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return a.equals(b);
     }
 
     /**
