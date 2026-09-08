@@ -510,6 +510,43 @@ class Ec2NetworkCfnProvisionerTest {
     }
 
     @Test
+    void aPrivateNatGatewayNeedsNoAllocationAndAPublicOneRequiresIt() {
+        NatGateway nat = new NatGateway();
+        nat.setNatGatewayId(NAT_ID);
+        when(ec2.createNatGateway(eq(REGION), eq(SUBNET_ID), isNull(), eq("private"), any())).thenReturn(nat);
+        StackResource r = resource("AWS::EC2::NatGateway", "Nat");
+
+        provisioner.provision(r, mapper.createObjectNode().put("SubnetId", SUBNET_ID).put("ConnectivityType", "private"), ctx());
+        assertEquals(NAT_ID, r.getPhysicalId());
+
+        AwsException e = assertThrows(AwsException.class, () -> provisioner.provision(resource("AWS::EC2::NatGateway", "Nat2"),
+                mapper.createObjectNode().put("SubnetId", SUBNET_ID), ctx()));
+        assertEquals("ValidationError", e.getErrorCode());
+        AwsException e2 = assertThrows(AwsException.class, () -> provisioner.provision(resource("AWS::EC2::NatGateway", "Nat3"),
+                mapper.createObjectNode().put("SubnetId", SUBNET_ID).put("ConnectivityType", "private").put("AllocationId", ALLOC_ID), ctx()));
+        assertEquals("ValidationError", e2.getErrorCode());
+    }
+
+    @Test
+    void aNatGatewayWhoseConnectivityTypeChangedIsReplaced() {
+        NatGateway nat = new NatGateway();
+        nat.setNatGatewayId(NAT_ID);
+        nat.setSubnetId(SUBNET_ID);
+        nat.setAllocationId(ALLOC_ID);
+        nat.setConnectivityType("public");
+        when(ec2.describeNatGateways(REGION, List.of(NAT_ID), Map.of())).thenReturn(List.of(nat));
+        NatGateway replacement = new NatGateway();
+        replacement.setNatGatewayId("nat-private");
+        when(ec2.createNatGateway(eq(REGION), eq(SUBNET_ID), isNull(), eq("private"), any())).thenReturn(replacement);
+        StackResource r = prior("AWS::EC2::NatGateway", "Nat", NAT_ID, Map.of("NatGatewayId", NAT_ID));
+
+        provisioner.provision(r, mapper.createObjectNode().put("SubnetId", SUBNET_ID).put("ConnectivityType", "private"), ctx(NAT_ID));
+
+        assertEquals("nat-private", r.getPhysicalId());
+        assertEquals(NAT_ID, provisioner.updateCleanupPhysicalId(r));
+    }
+
+    @Test
     void natGatewayTagsGoThroughItsCreateCall() {
         NatGateway nat = new NatGateway();
         nat.setNatGatewayId(NAT_ID);

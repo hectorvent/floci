@@ -389,12 +389,24 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private void provisionNatGateway(StackResource r, JsonNode props, ProvisionContext ctx) {
         String subnetId = ctx.resolveOptional(props, "SubnetId");
         String allocationId = ctx.resolveOptional(props, "AllocationId");
-        // SubnetId and AllocationId are createOnly: the same pair keeps the gateway, a change replaces it.
+        // ConnectivityType defaults to public in the schema; a public gateway needs an EIP, a
+        // private one must not have one, as AWS validates.
+        String connectivityType = ctx.resolveOptional(props, "ConnectivityType");
+        connectivityType = connectivityType == null || connectivityType.isBlank() ? "public" : connectivityType.toLowerCase();
+        if ("public".equals(connectivityType) && (allocationId == null || allocationId.isBlank())) {
+            throw new AwsException("ValidationError", "AWS::EC2::NatGateway requires AllocationId for a public gateway", 400);
+        }
+        if ("private".equals(connectivityType) && allocationId != null && !allocationId.isBlank()) {
+            throw new AwsException("ValidationError", "AWS::EC2::NatGateway with ConnectivityType private cannot have an AllocationId", 400);
+        }
+        // SubnetId, AllocationId and ConnectivityType are createOnly: the same triple keeps the
+        // gateway, a change replaces it.
         NatGateway existing = ctx.isUpdate() ? findNatGateway(ctx.priorPhysicalId(), ctx.region()) : null;
         boolean reuse = existing != null && Objects.equals(subnetId, existing.getSubnetId())
-                && Objects.equals(allocationId, existing.getAllocationId());
+                && Objects.equals(allocationId, existing.getAllocationId())
+                && connectivityType.equalsIgnoreCase(existing.getConnectivityType() == null ? "public" : existing.getConnectivityType());
         NatGateway nat = reuse ? existing
-                : ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, "public", tagList(props, ctx));
+                : ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, connectivityType, tagList(props, ctx));
         if (reuse) {
             applyTags(nat.getNatGatewayId(), existing.getTags(), props, ctx);
         }
