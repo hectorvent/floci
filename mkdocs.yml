@@ -125,6 +125,7 @@ nav:
     - Identity Store: services/identitystore.md
     - AWS Budgets: services/budgets.md
     - Amazon Macie: services/macie2.md
+    - Security Hub: services/securityhub.md
     - Amazon Detective: services/detective.md
     - Control Tower: services/controltower.md
     - AWS Service Catalog: services/service-catalog.md

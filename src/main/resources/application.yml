@@ -623,6 +623,8 @@ floci:
       enabled: true
     budgets:
       enabled: true
+    securityhub:
+      enabled: true
     detective:
       enabled: true
     controltower:
