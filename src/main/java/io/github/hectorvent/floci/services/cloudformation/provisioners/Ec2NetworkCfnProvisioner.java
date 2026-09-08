@@ -122,9 +122,9 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
      * A replacement is undone through the cleanup record: the displaced entity was never touched.
      * A reused entity that an update changed in place (tags, a subnet's MapPublicIpOnLaunch, a
      * route's target) is put back from the snapshot taken before the change. Without either, the
-     * update changed nothing about the entity. The one case not covered is the resource whose own
-     * provision failed mid-way: the engine restores its previous metadata before any rollback runs,
-     * so a partially applied change on it stays, as for every provisioner.
+     * update changed nothing about the entity. A provision that fails mid-way restores its own
+     * snapshot before the failure propagates (see {@link #guarded}), so the previous metadata the
+     * engine restores for that resource matches the entity again.
      */
     @Override
     public boolean rollbackUpdate(StackResource resource) {
@@ -409,7 +409,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         r.getAttributes().put("SubnetId", subnet.getSubnetId());
         r.getAttributes().put("VpcId", subnet.getVpcId());
         r.getAttributes().put("AvailabilityZone", subnet.getAvailabilityZone());
-        afterCreate(!reuse, () -> ec2Service.deleteSubnet(ctx.region(), subnet.getSubnetId()), () -> {
+        guarded(r, !reuse, () -> ec2Service.deleteSubnet(ctx.region(), subnet.getSubnetId()), () -> {
             applyTags(r, reuse, subnet.getSubnetId(), reuse ? existing.getTags() : List.of(), props, ctx);
             if (mapPublicIpOnLaunch != null) {
                 if (reuse && ctx.isUpdate() && existing.isMapPublicIpOnLaunch() != Boolean.parseBoolean(mapPublicIpOnLaunch)) {
@@ -423,22 +423,28 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     }
 
     /**
-     * Runs the steps that follow an EC2 create. If one of them throws and this provision created the
-     * entity, the entity is deleted again before the failure propagates: the engine only removes a
-     * failed create it can see, and on a failed update it restores the previous resource metadata
-     * and forgets whatever the attempt made. A reused entity is left as it is.
+     * Runs the steps that follow an EC2 create or change a reused entity in place. If one of them
+     * throws, what this provision did is undone before the failure propagates: a created entity is
+     * deleted again, a reused one is put back from its snapshot. The engine only removes a failed
+     * create it can see, and on a failed update it restores the previous resource metadata and
+     * discards the attempted one, snapshot included, so the undo has to happen here.
      */
-    private void afterCreate(boolean created, Runnable undoCreate, Runnable steps) {
+    private void guarded(StackResource r, boolean created, Runnable undoCreate, Runnable steps) {
         try {
             steps.run();
         } catch (RuntimeException e) {
-            if (created) {
-                try {
+            try {
+                if (created) {
                     undoCreate.run();
-                } catch (RuntimeException undo) {
-                    e.addSuppressed(undo);
-                    LOG.warnv("Could not undo a create after a failed provision step: {0}", undo.getMessage());
+                } else {
+                    String snapshot = r.getAttributes().remove(IN_PLACE_PRIOR_ATTR);
+                    if (snapshot != null) {
+                        restoreInPlace(r, snapshot);
+                    }
                 }
+            } catch (RuntimeException undo) {
+                e.addSuppressed(undo);
+                LOG.warnv("Could not undo a failed provision step on {0}: {1}", r.getLogicalId(), undo.getMessage());
             }
             throw e;
         }
@@ -449,7 +455,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         InternetGateway igw = existing != null ? existing : ec2Service.createInternetGateway(ctx.region());
         r.setPhysicalId(igw.getInternetGatewayId());
         r.getAttributes().put("InternetGatewayId", igw.getInternetGatewayId());
-        afterCreate(existing == null, () -> ec2Service.deleteInternetGateway(ctx.region(), igw.getInternetGatewayId()),
+        guarded(r, existing == null, () -> ec2Service.deleteInternetGateway(ctx.region(), igw.getInternetGatewayId()),
                 () -> applyTags(r, existing != null, igw.getInternetGatewayId(), existing != null ? existing.getTags() : List.of(), props, ctx));
     }
 
@@ -462,7 +468,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         RouteTable rt = reuse ? existing : ec2Service.createRouteTable(ctx.region(), vpcId);
         r.setPhysicalId(rt.getRouteTableId());
         r.getAttributes().put("RouteTableId", rt.getRouteTableId());
-        afterCreate(!reuse, () -> ec2Service.deleteRouteTable(ctx.region(), rt.getRouteTableId()),
+        guarded(r, !reuse, () -> ec2Service.deleteRouteTable(ctx.region(), rt.getRouteTableId()),
                 () -> applyTags(r, reuse, rt.getRouteTableId(), reuse ? existing.getTags() : List.of(), props, ctx));
     }
 
@@ -530,14 +536,16 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
             target.put("egressOnlyInternetGatewayId", current.getEgressOnlyInternetGatewayId());
             target.put("vpcPeeringConnectionId", current.getVpcPeeringConnectionId());
             writeInPlacePrior(r, prior);
-            if (egressOnlyInternetGatewayId != null) {
-                // ReplaceRoute has no egress-only target; re-creating the route is the same outcome.
-                ec2Service.deleteRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr, destinationPrefixListId);
-                create.get();
-            } else {
-                ec2Service.replaceRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr,
-                        destinationPrefixListId, gatewayId, natGatewayId, vpcPeeringConnectionId);
-            }
+            guarded(r, false, () -> { }, () -> {
+                if (egressOnlyInternetGatewayId != null) {
+                    // ReplaceRoute has no egress-only target; re-creating the route is the same outcome.
+                    ec2Service.deleteRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr, destinationPrefixListId);
+                    create.get();
+                } else {
+                    ec2Service.replaceRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr,
+                            destinationPrefixListId, gatewayId, natGatewayId, vpcPeeringConnectionId);
+                }
+            });
         } else {
             create.get();
         }
@@ -570,7 +578,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         NatGateway nat = reuse ? existing
                 : ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, connectivityType, tagList(props, ctx));
         if (reuse) {
-            applyTags(r, true, nat.getNatGatewayId(), existing.getTags(), props, ctx);
+            guarded(r, false, () -> { }, () -> applyTags(r, true, nat.getNatGatewayId(), existing.getTags(), props, ctx));
         }
         r.setPhysicalId(nat.getNatGatewayId());
         r.getAttributes().put("NatGatewayId", nat.getNatGatewayId());
@@ -585,7 +593,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         r.setPhysicalId(addr.getPublicIp());
         r.getAttributes().put("AllocationId", addr.getAllocationId());
         r.getAttributes().put("PublicIp", addr.getPublicIp());
-        afterCreate(existing == null, () -> ec2Service.releaseAddress(ctx.region(), addr.getAllocationId()),
+        guarded(r, existing == null, () -> ec2Service.releaseAddress(ctx.region(), addr.getAllocationId()),
                 () -> applyTags(r, existing != null, addr.getAllocationId(), existing != null ? existing.getTags() : List.of(), props, ctx));
     }
 }

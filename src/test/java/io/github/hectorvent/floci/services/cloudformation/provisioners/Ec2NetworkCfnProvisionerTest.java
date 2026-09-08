@@ -730,6 +730,100 @@ class Ec2NetworkCfnProvisionerTest {
     }
 
     @Test
+    void aFailureMidWayThroughAnInPlaceTagChangePutsThePriorTagsBack() {
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setVpcId(VPC_ID);
+        rt.setTags(List.of(new Tag("Name", "old"), new Tag("team", "net")));
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        // deleteTags (of "team") succeeds, then the createTags of the new set throws; the restore's createTags succeeds.
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).doNothing()
+                .when(ec2).createTags(eq(REGION), eq(List.of(RTB_ID)), any());
+        StackResource r = prior("AWS::EC2::RouteTable", "Rtb", RTB_ID, Map.of("RouteTableId", RTB_ID));
+
+        AwsException e = assertThrows(AwsException.class, () -> provisioner.provision(r,
+                withTags(mapper.createObjectNode().put("VpcId", VPC_ID), "Name", "new", "env", "test"), ctx(RTB_ID)));
+
+        assertEquals("TagLimitExceeded", e.getErrorCode());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> written = ArgumentCaptor.forClass(List.class);
+        verify(ec2, org.mockito.Mockito.times(2)).createTags(eq(REGION), eq(List.of(RTB_ID)), written.capture());
+        assertEquals(List.of("Name=old", "team=net"), pairs(written.getAllValues().get(1)), "the prior tags are put back");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> removed = ArgumentCaptor.forClass(List.class);
+        verify(ec2, org.mockito.Mockito.times(2)).deleteTags(eq(REGION), eq(List.of(RTB_ID)), removed.capture());
+        assertEquals(List.of("env=null"), pairs(removed.getAllValues().get(1)), "the key the failed update added is removed again");
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
+        verify(ec2, never()).deleteRouteTable(any(), any());
+    }
+
+    @Test
+    void aFailedSubnetAttributeChangeAfterTagsPutsTheTagsBack() {
+        Subnet current = subnet();
+        current.setTags(List.of(new Tag("Name", "old")));
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(current));
+        doThrow(new AwsException("InvalidParameterValue", "nope", 400))
+                .when(ec2).modifySubnetAttribute(REGION, SUBNET_ID, "mapPublicIpOnLaunch", "true");
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID));
+        ObjectNode props = withTags(mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24")
+                .put("MapPublicIpOnLaunch", true), "Name", "new");
+
+        assertThrows(AwsException.class, () -> provisioner.provision(r, props, ctx(SUBNET_ID)));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> written = ArgumentCaptor.forClass(List.class);
+        verify(ec2, org.mockito.Mockito.times(2)).createTags(eq(REGION), eq(List.of(SUBNET_ID)), written.capture());
+        assertEquals(List.of("Name=old"), pairs(written.getAllValues().get(1)));
+        // the snapshot recorded the prior value before the flip was attempted, so the restore writes it back
+        verify(ec2).modifySubnetAttribute(REGION, SUBNET_ID, "mapPublicIpOnLaunch", "false");
+        verify(ec2, org.mockito.Mockito.times(2)).modifySubnetAttribute(any(), any(), any(), any());
+        verify(ec2, never()).deleteSubnet(any(), any());
+    }
+
+    @Test
+    void aFailedRouteRetargetPutsThePriorTargetBack() {
+        Route route = new Route();
+        route.setDestinationCidrBlock("0.0.0.0/0");
+        route.setGatewayId(IGW_ID);
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setRoutes(List.of(route));
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        doThrow(new AwsException("InvalidNatGatewayID.NotFound", "gone", 400)).doNothing()
+                .when(ec2).replaceRoute(eq(REGION), eq(RTB_ID), eq("0.0.0.0/0"), isNull(), isNull(), any(), any(), any());
+        StackResource r = prior("AWS::EC2::Route", "Default", RTB_ID + "|0.0.0.0/0", Map.of("CidrBlock", "0.0.0.0/0"));
+
+        assertThrows(AwsException.class, () -> provisioner.provision(r, mapper.createObjectNode().put("RouteTableId", RTB_ID)
+                .put("DestinationCidrBlock", "0.0.0.0/0").put("NatGatewayId", NAT_ID), ctx(RTB_ID + "|0.0.0.0/0")));
+
+        verify(ec2).replaceRoute(REGION, RTB_ID, "0.0.0.0/0", null, null, null, NAT_ID, null);
+        verify(ec2).replaceRoute(REGION, RTB_ID, "0.0.0.0/0", null, null, IGW_ID, null, null);
+        assertFalse(r.getAttributes().containsKey(Ec2NetworkCfnProvisioner.IN_PLACE_PRIOR_ATTR));
+    }
+
+    @Test
+    void aFailedNatGatewayTagChangePutsThePriorTagsBack() {
+        NatGateway nat = new NatGateway();
+        nat.setNatGatewayId(NAT_ID);
+        nat.setSubnetId(SUBNET_ID);
+        nat.setAllocationId(ALLOC_ID);
+        nat.setTags(List.of(new Tag("Name", "old")));
+        when(ec2.describeNatGateways(REGION, List.of(NAT_ID), Map.of())).thenReturn(List.of(nat));
+        doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).doNothing()
+                .when(ec2).createTags(eq(REGION), eq(List.of(NAT_ID)), any());
+        StackResource r = prior("AWS::EC2::NatGateway", "Nat", NAT_ID, Map.of("NatGatewayId", NAT_ID));
+
+        assertThrows(AwsException.class, () -> provisioner.provision(r,
+                withTags(mapper.createObjectNode().put("SubnetId", SUBNET_ID).put("AllocationId", ALLOC_ID), "Name", "new"), ctx(NAT_ID)));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Tag>> written = ArgumentCaptor.forClass(List.class);
+        verify(ec2, org.mockito.Mockito.times(2)).createTags(eq(REGION), eq(List.of(NAT_ID)), written.capture());
+        assertEquals(List.of("Name=old"), pairs(written.getAllValues().get(1)));
+        verify(ec2, never()).deleteNatGateway(any(), any());
+    }
+
+    @Test
     void aFailedStepOnAReusedEntityLeavesItAlone() {
         when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(subnet()));
         doThrow(new AwsException("TagLimitExceeded", "too many tags", 400)).when(ec2).createTags(any(), any(), any());
