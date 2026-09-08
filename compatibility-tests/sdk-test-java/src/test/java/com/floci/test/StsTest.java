@@ -23,12 +23,11 @@ import javax.xml.crypto.dsig.SignedInfo;
 import javax.xml.crypto.dsig.Transform;
 import javax.xml.crypto.dsig.XMLSignatureFactory;
 import javax.xml.crypto.dsig.dom.DOMSignContext;
-import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.OutputKeys;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-import java.io.ByteArrayInputStream;
+
 import java.io.StringWriter;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -315,18 +314,6 @@ class StsTest {
         return Base64.getEncoder().encodeToString(certificate.getEncoded());
     }
 
-    private static Document parseDocument(String xml) throws Exception {
-        DocumentBuilderFactory parserFactory = DocumentBuilderFactory.newInstance();
-        parserFactory.setNamespaceAware(true);
-        parserFactory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        parserFactory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        parserFactory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        parserFactory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        parserFactory.setXIncludeAware(false);
-        parserFactory.setExpandEntityReferences(false);
-        return parserFactory.newDocumentBuilder().parse(
-                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
-    }
 
     private static String signedAssertion(String roleArn, String principalArn, String issuer) {
         String id = "_" + UUID.randomUUID();
@@ -341,7 +328,7 @@ class StsTest {
                 + "<saml:AttributeStatement><saml:Attribute Name=\"https://aws.amazon.com/SAML/Attributes/Role\"><saml:AttributeValue>"
                 + roleArn + "," + principalArn + "</saml:AttributeValue></saml:Attribute></saml:AttributeStatement></saml:Assertion>";
         try {
-            Document document = parseDocument(xml);
+            Document document = XmlParser.parseDocument(xml);
             Element assertion = document.getDocumentElement();
             assertion.setIdAttribute("ID", true);
             XMLSignatureFactory factory = XMLSignatureFactory.getInstance("DOM");
