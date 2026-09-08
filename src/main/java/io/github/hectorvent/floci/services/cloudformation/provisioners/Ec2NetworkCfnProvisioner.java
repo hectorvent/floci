@@ -1,14 +1,25 @@
 package io.github.hectorvent.floci.services.cloudformation.provisioners;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
+import io.github.hectorvent.floci.services.ec2.model.Address;
+import io.github.hectorvent.floci.services.ec2.model.InternetGateway;
+import io.github.hectorvent.floci.services.ec2.model.NatGateway;
+import io.github.hectorvent.floci.services.ec2.model.Route;
+import io.github.hectorvent.floci.services.ec2.model.RouteTable;
+import io.github.hectorvent.floci.services.ec2.model.RouteTableAssociation;
+import io.github.hectorvent.floci.services.ec2.model.Subnet;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * CloudFormation provisioning for the EC2 networking types: {@code AWS::EC2::Subnet},
@@ -17,6 +28,13 @@ import java.util.Set;
  * part of the per-service decomposition. The physical id is the EC2 id the service assigns, except
  * for a Route, whose id is the registry primary identifier {@code <RouteTableId>|<destination>} (what
  * Ref returns on AWS and what a delete needs), and an EIP, whose Ref is its public IP.
+ *
+ * <p>{@code provision} runs again on every {@code UpdateStack}. A resource whose create-only
+ * properties (the schema's {@code createOnlyProperties} that Floci emulates) are unchanged is kept:
+ * its prior entity is described and reused, and the mutable properties are applied in place. A
+ * changed create-only property creates the replacement and the {@link ReplacementCleanup} record
+ * deletes the displaced entity once the update commits or restores it on rollback, as CloudFormation
+ * does. A prior entity that is gone out of band is created anew.
  *
  * <p>Deletes tolerate only the service's own not-found code for each type; a
  * {@code DependencyViolation} still fails the stack delete, as on AWS.
@@ -32,6 +50,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private static final String EIP = "AWS::EC2::EIP";
     private static final String SUBNET_ROUTE_TABLE_ASSOCIATION = "AWS::EC2::SubnetRouteTableAssociation";
     private static final String ROUTE_ID_SEPARATOR = "|";
+    private static final Logger LOG = Logger.getLogger(Ec2NetworkCfnProvisioner.class);
 
     private final Ec2Service ec2Service;
 
@@ -47,6 +66,7 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
 
     @Override
     public void provision(StackResource r, JsonNode props, ProvisionContext ctx) {
+        Map<String, String> attributesBefore = Map.copyOf(r.getAttributes());
         switch (r.getResourceType()) {
             case SUBNET -> provisionSubnet(r, props, ctx);
             case INTERNET_GATEWAY -> provisionInternetGateway(r, ctx);
@@ -57,6 +77,44 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
             case SUBNET_ROUTE_TABLE_ASSOCIATION -> provisionSubnetRouteTableAssociation(r, props, ctx);
             default -> throw new IllegalStateException("Ec2NetworkCfnProvisioner cannot handle " + r.getResourceType());
         }
+        // A provision that left the resource with a new physical id replaced the entity: the
+        // displaced one is deleted once the update commits, or restored if the update rolls back.
+        ReplacementCleanup.record(r, ctx, attributesBefore);
+    }
+
+    @Override
+    public boolean hasReplacementUpdate(StackResource resource) {
+        return ReplacementCleanup.hasReplacement(resource);
+    }
+
+    @Override
+    public String updateCleanupPhysicalId(StackResource resource) {
+        return ReplacementCleanup.cleanupPhysicalId(resource);
+    }
+
+    @Override
+    public UpdateCleanupResult completeUpdate(StackResource resource) {
+        return ReplacementCleanup.complete(resource, this::delete);
+    }
+
+    @Override
+    public void clearUpdate(StackResource resource) {
+        ReplacementCleanup.clear(resource);
+    }
+
+    /**
+     * A replacement is undone through the cleanup record. Without one, a gateway, route table, EIP,
+     * NAT gateway or association was reused untouched (nothing about them is mutable here yet), so
+     * there is nothing to put back. A subnet or route kept in place had a mutable property applied
+     * (MapPublicIpOnLaunch, the route's target) with no snapshot to restore, so the engine reports
+     * it as not rolled back, as it did for the switch.
+     */
+    @Override
+    public boolean rollbackUpdate(StackResource resource) {
+        if (ReplacementCleanup.rollback(resource, this::delete)) {
+            return true;
+        }
+        return !SUBNET.equals(resource.getResourceType()) && !ROUTE.equals(resource.getResourceType());
     }
 
     /** An EIP's Ref is its public IP, so its release needs the AllocationId recorded at create time. */
@@ -121,6 +179,69 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
                         () -> ec2Service.releaseAddress(region, address.getAllocationId()), "InvalidAllocationID.NotFound"));
     }
 
+    private Subnet findSubnet(String subnetId, String region) {
+        return tolerateNotFound(() -> ec2Service.describeSubnets(region, List.of(subnetId), Map.of()).stream()
+                .findFirst().orElse(null), "InvalidSubnetID.NotFound", subnetId);
+    }
+
+    private InternetGateway findInternetGateway(String igwId, String region) {
+        return tolerateNotFound(() -> ec2Service.describeInternetGateways(region, List.of(igwId), Map.of()).stream()
+                .findFirst().orElse(null), "InvalidInternetGatewayID.NotFound", igwId);
+    }
+
+    private RouteTable findRouteTable(String routeTableId, String region) {
+        return tolerateNotFound(() -> ec2Service.describeRouteTables(region, List.of(routeTableId), Map.of()).stream()
+                .findFirst().orElse(null), "InvalidRouteTableID.NotFound", routeTableId);
+    }
+
+    private RouteTableAssociation findAssociation(String associationId, String region) {
+        return ec2Service.describeRouteTables(region, List.of(),
+                        Map.of("association.route-table-association-id", List.of(associationId))).stream()
+                .flatMap(rt -> rt.getAssociations().stream())
+                .filter(a -> associationId.equals(a.getRouteTableAssociationId()))
+                .findFirst().orElse(null);
+    }
+
+    private NatGateway findNatGateway(String natGatewayId, String region) {
+        return tolerateNotFound(() -> ec2Service.describeNatGateways(region, List.of(natGatewayId), Map.of()).stream()
+                .filter(nat -> !"deleted".equals(nat.getState()))
+                .findFirst().orElse(null), "NatGatewayNotFound", natGatewayId);
+    }
+
+    private Address findAddress(String allocationId, String publicIp, String region) {
+        List<Address> matches = allocationId != null
+                ? ec2Service.describeAddresses(region, List.of(allocationId), Map.of())
+                : ec2Service.describeAddresses(region, List.of(), Map.of("public-ip", List.of(publicIp)));
+        return matches.stream().findFirst().orElse(null);
+    }
+
+    private boolean routeExists(String routeTableId, String destination, String region) {
+        RouteTable table = findRouteTable(routeTableId, region);
+        return table != null && table.getRoutes().stream().anyMatch(route -> destination.equals(routeDestination(route)));
+    }
+
+    private static String routeDestination(Route route) {
+        if (route.getDestinationCidrBlock() != null) {
+            return route.getDestinationCidrBlock();
+        }
+        if (route.getDestinationIpv6CidrBlock() != null) {
+            return route.getDestinationIpv6CidrBlock();
+        }
+        return route.getDestinationPrefixListId();
+    }
+
+    private static <T> T tolerateNotFound(Supplier<T> lookup, String notFoundCode, String id) {
+        try {
+            return lookup.get();
+        } catch (AwsException e) {
+            if (!notFoundCode.equals(e.getErrorCode())) {
+                throw e;
+            }
+            LOG.debugv("{0} is gone; creating it anew", id);
+            return null;
+        }
+    }
+
     private static boolean isPrefixList(String destination) {
         return destination.startsWith("pl-");
     }
@@ -138,7 +259,13 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         String cidr = ctx.resolveOptional(props, "CidrBlock");
         String az = ctx.resolveOptional(props, "AvailabilityZone");
         String mapPublicIpOnLaunch = ctx.resolveOptional(props, "MapPublicIpOnLaunch");
-        var subnet = ec2Service.createSubnet(ctx.region(), vpcId, cidr, az);
+        // VpcId, CidrBlock and AvailabilityZone are createOnly: unchanged, the subnet is kept and
+        // only MapPublicIpOnLaunch is applied; changed, a new subnet replaces it.
+        Subnet existing = ctx.isUpdate() ? findSubnet(ctx.priorPhysicalId(), ctx.region()) : null;
+        boolean reuse = existing != null && Objects.equals(vpcId, existing.getVpcId())
+                && Objects.equals(cidr, existing.getCidrBlock())
+                && (az == null || az.equals(existing.getAvailabilityZone()));
+        Subnet subnet = reuse ? existing : ec2Service.createSubnet(ctx.region(), vpcId, cidr, az);
         if (mapPublicIpOnLaunch != null) {
             ec2Service.modifySubnetAttribute(ctx.region(), subnet.getSubnetId(), "mapPublicIpOnLaunch", mapPublicIpOnLaunch);
         }
@@ -149,14 +276,18 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     }
 
     private void provisionInternetGateway(StackResource r, ProvisionContext ctx) {
-        var igw = ec2Service.createInternetGateway(ctx.region());
+        InternetGateway existing = ctx.isUpdate() ? findInternetGateway(ctx.priorPhysicalId(), ctx.region()) : null;
+        InternetGateway igw = existing != null ? existing : ec2Service.createInternetGateway(ctx.region());
         r.setPhysicalId(igw.getInternetGatewayId());
         r.getAttributes().put("InternetGatewayId", igw.getInternetGatewayId());
     }
 
     private void provisionRouteTable(StackResource r, JsonNode props, ProvisionContext ctx) {
         String vpcId = ctx.resolveOptional(props, "VpcId");
-        var rt = ec2Service.createRouteTable(ctx.region(), vpcId);
+        // VpcId is createOnly: a table in the same VPC is kept, one in another VPC is replaced.
+        RouteTable existing = ctx.isUpdate() ? findRouteTable(ctx.priorPhysicalId(), ctx.region()) : null;
+        RouteTable rt = existing != null && Objects.equals(vpcId, existing.getVpcId())
+                ? existing : ec2Service.createRouteTable(ctx.region(), vpcId);
         r.setPhysicalId(rt.getRouteTableId());
         r.getAttributes().put("RouteTableId", rt.getRouteTableId());
     }
@@ -164,7 +295,12 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private void provisionSubnetRouteTableAssociation(StackResource r, JsonNode props, ProvisionContext ctx) {
         String routeTableId = ctx.resolveOptional(props, "RouteTableId");
         String subnetId = ctx.resolveOptional(props, "SubnetId");
-        var assoc = ec2Service.associateRouteTable(ctx.region(), routeTableId, subnetId);
+        // Both properties are createOnly: the same pair keeps the association, anything else is a
+        // new association and the prior one is removed once the update commits.
+        RouteTableAssociation existing = ctx.isUpdate() ? findAssociation(ctx.priorPhysicalId(), ctx.region()) : null;
+        RouteTableAssociation assoc = existing != null && Objects.equals(routeTableId, existing.getRouteTableId())
+                && Objects.equals(subnetId, existing.getSubnetId())
+                ? existing : ec2Service.associateRouteTable(ctx.region(), routeTableId, subnetId);
         r.setPhysicalId(assoc.getRouteTableAssociationId());
         r.getAttributes().put("Id", assoc.getRouteTableAssociationId());
     }
@@ -178,15 +314,34 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
         String natGatewayId = ctx.resolveOptional(props, "NatGatewayId");
         String egressOnlyInternetGatewayId = ctx.resolveOptional(props, "EgressOnlyInternetGatewayId");
         String vpcPeeringConnectionId = ctx.resolveOptional(props, "VpcPeeringConnectionId");
-        ec2Service.createRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr,
-                destinationPrefixListId, gatewayId, natGatewayId, egressOnlyInternetGatewayId,
-                vpcPeeringConnectionId);
         // The registry primary identifier is RouteTableId|CidrBlock, which is also what Ref returns
         // on AWS, and the only id a later delete can act on. CidrBlock is the schema's read-only
         // attribute: the destination the route was created with, whichever property carried it.
         String destination = destinationCidr != null ? destinationCidr
                 : destinationIpv6Cidr != null ? destinationIpv6Cidr : destinationPrefixListId;
-        r.setPhysicalId(routeTableId + ROUTE_ID_SEPARATOR + destination);
+        String physicalId = routeTableId + ROUTE_ID_SEPARATOR + destination;
+        Supplier<Void> create = () -> {
+            ec2Service.createRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr,
+                    destinationPrefixListId, gatewayId, natGatewayId, egressOnlyInternetGatewayId,
+                    vpcPeeringConnectionId);
+            return null;
+        };
+        // The table and destination are createOnly: the same pair changes the target in place,
+        // another pair is a new route and the prior one goes once the update commits.
+        if (ctx.isUpdate() && physicalId.equals(ctx.priorPhysicalId())
+                && routeExists(routeTableId, destination, ctx.region())) {
+            if (egressOnlyInternetGatewayId != null) {
+                // ReplaceRoute has no egress-only target; re-creating the route is the same outcome.
+                ec2Service.deleteRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr, destinationPrefixListId);
+                create.get();
+            } else {
+                ec2Service.replaceRoute(ctx.region(), routeTableId, destinationCidr, destinationIpv6Cidr,
+                        destinationPrefixListId, gatewayId, natGatewayId, vpcPeeringConnectionId);
+            }
+        } else {
+            create.get();
+        }
+        r.setPhysicalId(physicalId);
         if (destination != null) {
             r.getAttributes().put("CidrBlock", destination);
         }
@@ -195,13 +350,20 @@ public class Ec2NetworkCfnProvisioner implements CfnResourceProvisioner {
     private void provisionNatGateway(StackResource r, JsonNode props, ProvisionContext ctx) {
         String subnetId = ctx.resolveOptional(props, "SubnetId");
         String allocationId = ctx.resolveOptional(props, "AllocationId");
-        var nat = ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, "public", List.of());
+        // SubnetId and AllocationId are createOnly: the same pair keeps the gateway, a change replaces it.
+        NatGateway existing = ctx.isUpdate() ? findNatGateway(ctx.priorPhysicalId(), ctx.region()) : null;
+        NatGateway nat = existing != null && Objects.equals(subnetId, existing.getSubnetId())
+                && Objects.equals(allocationId, existing.getAllocationId())
+                ? existing : ec2Service.createNatGateway(ctx.region(), subnetId, allocationId, "public", List.of());
         r.setPhysicalId(nat.getNatGatewayId());
         r.getAttributes().put("NatGatewayId", nat.getNatGatewayId());
     }
 
     private void provisionEip(StackResource r, ProvisionContext ctx) {
-        var addr = ec2Service.allocateAddress(ctx.region());
+        // Nothing about an EIP that Floci emulates is mutable or create-only in a way a template can
+        // change, so an address that is still allocated is simply kept.
+        Address existing = ctx.isUpdate() ? findAddress(r.getAttributes().get("AllocationId"), ctx.priorPhysicalId(), ctx.region()) : null;
+        Address addr = existing != null ? existing : ec2Service.allocateAddress(ctx.region());
         // Ref on AWS::EC2::EIP returns the public IP; AllocationId is exposed via Fn::GetAtt.
         r.setPhysicalId(addr.getPublicIp());
         r.getAttributes().put("AllocationId", addr.getAllocationId());

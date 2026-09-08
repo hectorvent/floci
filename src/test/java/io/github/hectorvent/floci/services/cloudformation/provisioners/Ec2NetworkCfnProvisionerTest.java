@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.ec2.Ec2Service;
 import io.github.hectorvent.floci.services.ec2.model.Address;
 import io.github.hectorvent.floci.services.ec2.model.InternetGateway;
 import io.github.hectorvent.floci.services.ec2.model.NatGateway;
+import io.github.hectorvent.floci.services.ec2.model.Route;
 import io.github.hectorvent.floci.services.ec2.model.RouteTable;
 import io.github.hectorvent.floci.services.ec2.model.RouteTableAssociation;
 import io.github.hectorvent.floci.services.ec2.model.Subnet;
@@ -20,6 +21,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -55,6 +57,10 @@ class Ec2NetworkCfnProvisionerTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     private ProvisionContext ctx() {
+        return ctx(null);
+    }
+
+    private ProvisionContext ctx(String priorPhysicalId) {
         CloudFormationTemplateEngine engine = mock(CloudFormationTemplateEngine.class);
         when(engine.resolve(any())).thenAnswer(inv -> {
             JsonNode node = inv.getArgument(0);
@@ -62,7 +68,7 @@ class Ec2NetworkCfnProvisionerTest {
         });
         when(engine.resolveNode(any())).thenAnswer(inv -> inv.getArgument(0));
         when(engine.resolveStringList(any())).thenCallRealMethod();
-        return new ProvisionContext(engine, REGION, "000000000000", "my-stack");
+        return new ProvisionContext(engine, REGION, "000000000000", "my-stack", priorPhysicalId);
     }
 
     private static StackResource resource(String type, String logicalId) {
@@ -77,6 +83,7 @@ class Ec2NetworkCfnProvisionerTest {
         Subnet s = new Subnet();
         s.setSubnetId(SUBNET_ID);
         s.setVpcId(VPC_ID);
+        s.setCidrBlock("10.0.1.0/24");
         s.setAvailabilityZone("us-east-1a");
         return s;
     }
@@ -259,6 +266,197 @@ class Ec2NetworkCfnProvisionerTest {
 
         when(ec2.describeAddresses(REGION, List.of(), Map.of("public-ip", List.of("54.0.0.3")))).thenReturn(List.of());
         assertDoesNotThrow(() -> provisioner.delete("AWS::EC2::EIP", "54.0.0.3", REGION));
+    }
+
+    private static StackResource prior(String type, String logicalId, String physicalId, Map<String, String> attributes) {
+        StackResource r = resource(type, logicalId);
+        r.setPhysicalId(physicalId);
+        r.getAttributes().putAll(attributes);
+        return r;
+    }
+
+    @Test
+    void anUnchangedSubnetIsKeptAndOnlyMapPublicIpOnLaunchIsApplied() {
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(subnet()));
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID, "VpcId", VPC_ID, "AvailabilityZone", "us-east-1a"));
+        ObjectNode props = mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24")
+                .put("AvailabilityZone", "us-east-1a").put("MapPublicIpOnLaunch", false);
+
+        provisioner.provision(r, props, ctx(SUBNET_ID));
+
+        verify(ec2, never()).createSubnet(any(), any(), any(), any());
+        verify(ec2).modifySubnetAttribute(REGION, SUBNET_ID, "mapPublicIpOnLaunch", "false");
+        assertEquals(SUBNET_ID, r.getPhysicalId());
+        assertFalse(provisioner.hasReplacementUpdate(r));
+        assertFalse(provisioner.rollbackUpdate(r), "a subnet modified in place has no snapshot to restore");
+    }
+
+    @Test
+    void aSubnetWithAChangedCidrIsReplacedAndThePriorOneIsOwedToCleanup() {
+        Subnet current = subnet();
+        current.setCidrBlock("10.0.1.0/24");
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of())).thenReturn(List.of(current));
+        Subnet replacement = subnet();
+        replacement.setSubnetId("subnet-replacement");
+        when(ec2.createSubnet(REGION, VPC_ID, "10.0.2.0/24", "us-east-1a")).thenReturn(replacement);
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of("SubnetId", SUBNET_ID));
+        ObjectNode props = mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.2.0/24").put("AvailabilityZone", "us-east-1a");
+
+        provisioner.provision(r, props, ctx(SUBNET_ID));
+
+        assertEquals("subnet-replacement", r.getPhysicalId());
+        assertTrue(provisioner.hasReplacementUpdate(r));
+        assertEquals(SUBNET_ID, provisioner.updateCleanupPhysicalId(r));
+        provisioner.completeUpdate(r);
+        verify(ec2).deleteSubnet(REGION, SUBNET_ID);
+    }
+
+    @Test
+    void aSubnetGoneOutOfBandIsCreatedAnew() {
+        when(ec2.describeSubnets(REGION, List.of(SUBNET_ID), Map.of()))
+                .thenThrow(new AwsException("InvalidSubnetID.NotFound", "gone", 400));
+        when(ec2.createSubnet(REGION, VPC_ID, "10.0.1.0/24", null)).thenReturn(subnet());
+        StackResource r = prior("AWS::EC2::Subnet", "Subnet", SUBNET_ID, Map.of());
+
+        provisioner.provision(r, mapper.createObjectNode().put("VpcId", VPC_ID).put("CidrBlock", "10.0.1.0/24"), ctx(SUBNET_ID));
+
+        assertEquals(SUBNET_ID, r.getPhysicalId());
+    }
+
+    @Test
+    void anInternetGatewayAndARouteTableInTheSameVpcAreKeptAndRollBackAsComplete() {
+        InternetGateway igw = new InternetGateway();
+        igw.setInternetGatewayId(IGW_ID);
+        when(ec2.describeInternetGateways(REGION, List.of(IGW_ID), Map.of())).thenReturn(List.of(igw));
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setVpcId(VPC_ID);
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        StackResource igwResource = prior("AWS::EC2::InternetGateway", "Igw", IGW_ID, Map.of("InternetGatewayId", IGW_ID));
+        StackResource rtResource = prior("AWS::EC2::RouteTable", "Rtb", RTB_ID, Map.of("RouteTableId", RTB_ID));
+
+        provisioner.provision(igwResource, mapper.createObjectNode(), ctx(IGW_ID));
+        provisioner.provision(rtResource, mapper.createObjectNode().put("VpcId", VPC_ID), ctx(RTB_ID));
+
+        verify(ec2, never()).createInternetGateway(any());
+        verify(ec2, never()).createRouteTable(any(), any());
+        assertTrue(provisioner.rollbackUpdate(igwResource));
+        assertTrue(provisioner.rollbackUpdate(rtResource));
+    }
+
+    @Test
+    void aRouteTableMovedToAnotherVpcIsReplaced() {
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setVpcId(VPC_ID);
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        RouteTable replacement = new RouteTable();
+        replacement.setRouteTableId("rtb-replacement");
+        when(ec2.createRouteTable(REGION, "vpc-other")).thenReturn(replacement);
+        StackResource r = prior("AWS::EC2::RouteTable", "Rtb", RTB_ID, Map.of("RouteTableId", RTB_ID));
+
+        provisioner.provision(r, mapper.createObjectNode().put("VpcId", "vpc-other"), ctx(RTB_ID));
+
+        assertEquals("rtb-replacement", r.getPhysicalId());
+        assertEquals(RTB_ID, provisioner.updateCleanupPhysicalId(r));
+        assertTrue(provisioner.rollbackUpdate(r));
+        verify(ec2).deleteRouteTable(REGION, "rtb-replacement");
+        assertEquals(RTB_ID, r.getPhysicalId());
+    }
+
+    @Test
+    void aNatGatewayWithTheSameSubnetAndAllocationIsKeptAndAChangedSubnetReplacesIt() {
+        NatGateway nat = new NatGateway();
+        nat.setNatGatewayId(NAT_ID);
+        nat.setSubnetId(SUBNET_ID);
+        nat.setAllocationId(ALLOC_ID);
+        when(ec2.describeNatGateways(REGION, List.of(NAT_ID), Map.of())).thenReturn(List.of(nat));
+        StackResource same = prior("AWS::EC2::NatGateway", "Nat", NAT_ID, Map.of("NatGatewayId", NAT_ID));
+        provisioner.provision(same, mapper.createObjectNode().put("SubnetId", SUBNET_ID).put("AllocationId", ALLOC_ID), ctx(NAT_ID));
+        verify(ec2, never()).createNatGateway(any(), any(), any(), any(), any());
+        assertEquals(NAT_ID, same.getPhysicalId());
+
+        NatGateway replacement = new NatGateway();
+        replacement.setNatGatewayId("nat-replacement");
+        when(ec2.createNatGateway(REGION, "subnet-other", ALLOC_ID, "public", List.of())).thenReturn(replacement);
+        StackResource moved = prior("AWS::EC2::NatGateway", "Nat", NAT_ID, Map.of("NatGatewayId", NAT_ID));
+        provisioner.provision(moved, mapper.createObjectNode().put("SubnetId", "subnet-other").put("AllocationId", ALLOC_ID), ctx(NAT_ID));
+        assertEquals("nat-replacement", moved.getPhysicalId());
+        assertEquals(NAT_ID, provisioner.updateCleanupPhysicalId(moved));
+    }
+
+    @Test
+    void anAllocatedEipIsKeptAcrossUpdates() {
+        Address addr = new Address();
+        addr.setAllocationId(ALLOC_ID);
+        addr.setPublicIp(PUBLIC_IP);
+        when(ec2.describeAddresses(REGION, List.of(ALLOC_ID), Map.of())).thenReturn(List.of(addr));
+        StackResource r = prior("AWS::EC2::EIP", "Eip", PUBLIC_IP, Map.of("AllocationId", ALLOC_ID, "PublicIp", PUBLIC_IP));
+
+        provisioner.provision(r, mapper.createObjectNode().put("Domain", "vpc"), ctx(PUBLIC_IP));
+
+        verify(ec2, never()).allocateAddress(any());
+        assertEquals(PUBLIC_IP, r.getPhysicalId());
+    }
+
+    @Test
+    void anAssociationWithTheSamePairIsKeptAndAnotherSubnetReplacesIt() {
+        RouteTableAssociation assoc = new RouteTableAssociation();
+        assoc.setRouteTableAssociationId(ASSOC_ID);
+        assoc.setRouteTableId(RTB_ID);
+        assoc.setSubnetId(SUBNET_ID);
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setAssociations(List.of(assoc));
+        when(ec2.describeRouteTables(REGION, List.of(), Map.of("association.route-table-association-id", List.of(ASSOC_ID))))
+                .thenReturn(List.of(rt));
+        StackResource same = prior("AWS::EC2::SubnetRouteTableAssociation", "Assoc", ASSOC_ID, Map.of("Id", ASSOC_ID));
+        provisioner.provision(same, mapper.createObjectNode().put("RouteTableId", RTB_ID).put("SubnetId", SUBNET_ID), ctx(ASSOC_ID));
+        verify(ec2, never()).associateRouteTable(any(), any(), any());
+
+        RouteTableAssociation replacement = new RouteTableAssociation();
+        replacement.setRouteTableAssociationId("rtbassoc-replacement");
+        when(ec2.associateRouteTable(REGION, RTB_ID, "subnet-other")).thenReturn(replacement);
+        StackResource moved = prior("AWS::EC2::SubnetRouteTableAssociation", "Assoc", ASSOC_ID, Map.of("Id", ASSOC_ID));
+        provisioner.provision(moved, mapper.createObjectNode().put("RouteTableId", RTB_ID).put("SubnetId", "subnet-other"), ctx(ASSOC_ID));
+        assertEquals("rtbassoc-replacement", moved.getPhysicalId());
+        assertEquals(ASSOC_ID, provisioner.updateCleanupPhysicalId(moved));
+        provisioner.completeUpdate(moved);
+        verify(ec2).disassociateRouteTable(REGION, ASSOC_ID);
+    }
+
+    @Test
+    void aRouteWithTheSameTableAndDestinationChangesItsTargetInPlace() {
+        Route route = new Route();
+        route.setDestinationCidrBlock("0.0.0.0/0");
+        route.setGatewayId(IGW_ID);
+        RouteTable rt = new RouteTable();
+        rt.setRouteTableId(RTB_ID);
+        rt.setRoutes(List.of(route));
+        when(ec2.describeRouteTables(REGION, List.of(RTB_ID), Map.of())).thenReturn(List.of(rt));
+        StackResource r = prior("AWS::EC2::Route", "Default", RTB_ID + "|0.0.0.0/0", Map.of("CidrBlock", "0.0.0.0/0"));
+        ObjectNode props = mapper.createObjectNode().put("RouteTableId", RTB_ID).put("DestinationCidrBlock", "0.0.0.0/0").put("NatGatewayId", NAT_ID);
+
+        provisioner.provision(r, props, ctx(RTB_ID + "|0.0.0.0/0"));
+
+        verify(ec2).replaceRoute(REGION, RTB_ID, "0.0.0.0/0", null, null, null, NAT_ID, null);
+        verify(ec2, never()).createRoute(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        assertEquals(RTB_ID + "|0.0.0.0/0", r.getPhysicalId());
+        assertFalse(provisioner.rollbackUpdate(r), "a route re-targeted in place has no snapshot to restore");
+    }
+
+    @Test
+    void aRouteWithAChangedDestinationIsANewRouteAndThePriorOneIsOwedToCleanup() {
+        StackResource r = prior("AWS::EC2::Route", "Default", RTB_ID + "|0.0.0.0/0", Map.of("CidrBlock", "0.0.0.0/0"));
+        ObjectNode props = mapper.createObjectNode().put("RouteTableId", RTB_ID).put("DestinationCidrBlock", "10.1.0.0/16").put("GatewayId", IGW_ID);
+
+        provisioner.provision(r, props, ctx(RTB_ID + "|0.0.0.0/0"));
+
+        verify(ec2).createRoute(REGION, RTB_ID, "10.1.0.0/16", null, null, IGW_ID, null, null, null);
+        assertEquals(RTB_ID + "|10.1.0.0/16", r.getPhysicalId());
+        assertEquals(RTB_ID + "|0.0.0.0/0", provisioner.updateCleanupPhysicalId(r));
+        provisioner.completeUpdate(r);
+        verify(ec2).deleteRoute(REGION, RTB_ID, "0.0.0.0/0", null, null);
     }
 
     @Test
