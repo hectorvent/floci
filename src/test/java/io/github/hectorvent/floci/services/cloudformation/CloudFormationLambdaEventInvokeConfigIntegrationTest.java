@@ -9,8 +9,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
@@ -189,6 +187,34 @@ class CloudFormationLambdaEventInvokeConfigIntegrationTest {
         awaitStackDeleted(functionStack);
     }
 
+    /** An in-place settings change is put back from the snapshot the update took. */
+    @Test
+    void aFailedUpdateRestoresTheSettingsAnInPlaceUpdateChanged() throws InterruptedException {
+        String suffix = Long.toString(System.nanoTime(), 36);
+        String functionStack = "cfn-event-invoke-ip-fn-" + suffix;
+        String stack = "cfn-event-invoke-ip-" + suffix;
+        String fn = "event-invoke-ip-fn-" + suffix;
+        createFunctionStack(functionStack, fn);
+
+        cloudFormation(stack, "CreateStack", CONFIG_TEMPLATE.formatted(fn, DLQ_ARN, ""), Map.of());
+        describeStacks(stack, "CREATE_COMPLETE");
+
+        cloudFormation(stack, "UpdateStack", CONFIG_TEMPLATE.formatted(fn, DLQ_ARN, FAILING_RESOURCE.formatted(suffix)),
+                Map.of("Retries", "0"));
+        String rolledBack = describeStacks(stack, "UPDATE_ROLLBACK_COMPLETE");
+        assertEquals(fn + "|$LATEST", outputValue(rolledBack, "ConfigRef"));
+        getConfig(fn, "$LATEST").then()
+            .statusCode(200)
+            .body("MaximumRetryAttempts", equalTo(1))
+            .body("MaximumEventAgeInSeconds", equalTo(300))
+            .body("DestinationConfig.OnFailure.Destination", equalTo(DLQ_ARN));
+
+        cloudFormation(stack, "DeleteStack", null, Map.of());
+        awaitStackDeleted(stack);
+        cloudFormation(functionStack, "DeleteStack", null, Map.of());
+        awaitStackDeleted(functionStack);
+    }
+
     @Test
     void anOutOfRangeSettingFailsTheResource() throws InterruptedException {
         String suffix = Long.toString(System.nanoTime(), 36);
@@ -263,15 +289,10 @@ class CloudFormationLambdaEventInvokeConfigIntegrationTest {
     }
 
     private static void assertEvent(String eventsXml, String status, String physicalId) {
-        Matcher m = Pattern.compile("<member>(.*?)</member>", Pattern.DOTALL).matcher(eventsXml);
-        while (m.find()) {
-            String member = m.group(1);
-            if (member.contains("<ResourceStatus>" + status + "</ResourceStatus>")
-                    && member.contains("<PhysicalResourceId>" + physicalId + "</PhysicalResourceId>")) {
-                return;
-            }
-        }
-        fail("no " + status + " event for " + physicalId + " in " + eventsXml);
+        boolean found = XmlParser.extractGroups(eventsXml, "member").stream()
+                .anyMatch(event -> status.equals(event.get("ResourceStatus"))
+                        && physicalId.equals(event.get("PhysicalResourceId")));
+        assertTrue(found, "no " + status + " event for " + physicalId + " in " + eventsXml);
     }
 
     /** A failed create rolls back asynchronously; returns the events once the status is reached. */

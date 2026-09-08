@@ -2,10 +2,12 @@ package io.github.hectorvent.floci.services.cloudformation.provisioners;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.TextNode;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.services.cloudformation.CloudFormationTemplateEngine;
 import io.github.hectorvent.floci.services.cloudformation.model.StackResource;
 import io.github.hectorvent.floci.services.lambda.LambdaService;
+import io.github.hectorvent.floci.services.lambda.model.FunctionEventInvokeConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -58,6 +60,10 @@ class LambdaEventInvokeConfigCfnProvisionerTest {
             return node == null || node.isMissingNode() || node.isNull() ? null : node.asText();
         });
         when(engine.resolveNode(any())).thenAnswer(i -> i.getArgument(0));
+        // The service never answers null: a missing configuration throws. Tests that care about
+        // the settings before an update stub their own.
+        when(lambda.getEventInvokeConfig(anyString(), anyString(), anyString()))
+                .thenReturn(config(2, 21600, null, null));
     }
 
     private static JsonNode props(String json) {
@@ -127,7 +133,7 @@ class LambdaEventInvokeConfigCfnProvisionerTest {
         assertEquals(60, request.getValue().get("MaximumEventAgeInSeconds"));
     }
 
-    /** A setting the template leaves out is left out of the request, so the service applies its default. */
+    /** A setting the template leaves out is left out of the request; the service stores nothing for it. */
     @Test
     void omittedSettingsAreNotSent() {
         provision("""
@@ -228,6 +234,7 @@ class LambdaEventInvokeConfigCfnProvisionerTest {
     /** Same function and qualifier: the update path, applied through the merge-style update call. */
     @Test
     void anUpdateWithTheSameIdentityUpdatesInPlace() {
+        when(lambda.getEventInvokeConfig(REGION, "orders", "$LATEST")).thenReturn(config(2, 21600, null, null));
         StackResource r = provision("""
                 {"FunctionName": "orders", "Qualifier": "$LATEST", "MaximumRetryAttempts": 0}
                 """, "orders|$LATEST");
@@ -295,14 +302,165 @@ class LambdaEventInvokeConfigCfnProvisionerTest {
         assertFalse(provisioner.hasReplacementUpdate(r));
     }
 
-    /** An in-place update keeps no snapshot, so the engine is told it was not rolled back. */
+    /**
+     * The service keys a configuration by the function's ARN, so a short name and the ARN address
+     * one configuration: treating the change as a replacement would put over that configuration
+     * and then delete it through the old name once the update committed.
+     */
     @Test
-    void anInPlaceUpdateReportsNoRollback() {
+    void aFunctionNameGivenAsTheArnOfTheSameFunctionUpdatesInPlace() {
         StackResource r = provision("""
-                {"FunctionName": "orders", "Qualifier": "$LATEST"}
+                {"FunctionName": "arn:aws:lambda:us-east-1:000000000000:function:orders", "Qualifier": "$LATEST",
+                 "MaximumRetryAttempts": 0}
                 """, "orders|$LATEST");
 
-        assertFalse(provisioner.rollbackUpdate(r));
+        verify(lambda).updateEventInvokeConfig(eq(REGION),
+                eq("arn:aws:lambda:us-east-1:000000000000:function:orders"), eq("$LATEST"), anyMap());
+        verify(lambda, never()).putEventInvokeConfig(anyString(), anyString(), anyString(), anyMap());
+        assertEquals("orders|$LATEST", r.getPhysicalId(), "the prior id stays so nothing is recorded as displaced");
+        assertFalse(provisioner.hasReplacementUpdate(r));
+        assertNull(provisioner.updateCleanupPhysicalId(r));
+    }
+
+    @Test
+    void theSameNameInAnotherRegionIsAnotherTarget() {
+        StackResource r = provision("""
+                {"FunctionName": "arn:aws:lambda:eu-west-1:000000000000:function:orders", "Qualifier": "$LATEST"}
+                """, "arn:aws:lambda:us-east-1:000000000000:function:orders|$LATEST");
+
+        verify(lambda).putEventInvokeConfig(eq(REGION),
+                eq("arn:aws:lambda:eu-west-1:000000000000:function:orders"), eq("$LATEST"), anyMap());
+        assertTrue(provisioner.hasReplacementUpdate(r));
+    }
+
+    /** The settings before an in-place update are kept, and a failed stack update puts every one back. */
+    @Test
+    void anInPlaceUpdateIsRolledBackFromTheSettingsItReplaced() {
+        when(lambda.getEventInvokeConfig(REGION, "orders", "$LATEST")).thenReturn(config(2, 21600,
+                "arn:aws:sqs:us-east-1:000000000000:ok", "arn:aws:sqs:us-east-1:000000000000:dlq"));
+
+        StackResource r = provision("""
+                {"FunctionName": "orders", "Qualifier": "$LATEST", "MaximumRetryAttempts": 0,
+                 "DestinationConfig": {"OnFailure": {"Destination": "arn:aws:sns:us-east-1:000000000000:alerts"}}}
+                """, "orders|$LATEST");
+        assertTrue(r.getAttributes().containsKey(CfnRollback.EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR));
+
+        assertTrue(provisioner.rollbackUpdate(r));
+
+        ArgumentCaptor<Map<String, Object>> restored = ArgumentCaptor.captor();
+        verify(lambda).putEventInvokeConfig(eq(REGION), eq("orders"), eq("$LATEST"), restored.capture());
+        assertEquals(2, restored.getValue().get("MaximumRetryAttempts"));
+        assertEquals(21600, restored.getValue().get("MaximumEventAgeInSeconds"));
+        assertEquals(Map.of(
+                "OnSuccess", Map.of("Destination", "arn:aws:sqs:us-east-1:000000000000:ok"),
+                "OnFailure", Map.of("Destination", "arn:aws:sqs:us-east-1:000000000000:dlq")),
+                restored.getValue().get("DestinationConfig"));
+        assertFalse(r.getAttributes().containsKey(CfnRollback.EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR),
+                "the snapshot is spent by the rollback");
+    }
+
+    /** Settings the configuration did not carry are restored as absent, not as defaults. */
+    @Test
+    void rollbackRestoresAbsentSettingsAsAbsent() {
+        when(lambda.getEventInvokeConfig(REGION, "orders", "live")).thenReturn(config(null, null, null, null));
+
+        StackResource r = provision("""
+                {"FunctionName": "orders", "Qualifier": "live", "MaximumEventAgeInSeconds": 120}
+                """, "orders|live");
+        assertTrue(provisioner.rollbackUpdate(r));
+
+        ArgumentCaptor<Map<String, Object>> restored = ArgumentCaptor.captor();
+        verify(lambda).putEventInvokeConfig(eq(REGION), eq("orders"), eq("live"), restored.capture());
+        assertTrue(restored.getValue().isEmpty(), restored.getValue().toString());
+    }
+
+    /** A successful update clears the snapshot, so a later rollback cannot restore stale settings. */
+    @Test
+    void aCommittedUpdateDropsTheSnapshot() {
+        when(lambda.getEventInvokeConfig(REGION, "orders", "$LATEST")).thenReturn(config(2, 21600, null, null));
+        StackResource r = provision("""
+                {"FunctionName": "orders", "Qualifier": "$LATEST", "MaximumRetryAttempts": 0}
+                """, "orders|$LATEST");
+
+        provisioner.clearUpdate(r);
+
+        assertFalse(r.getAttributes().containsKey(CfnRollback.EVENT_INVOKE_CONFIG_SNAPSHOT_ATTR));
+        assertTrue(provisioner.rollbackUpdate(r), "nothing is left to undo");
+        verify(lambda, never()).putEventInvokeConfig(anyString(), anyString(), anyString(), anyMap());
+    }
+
+    /** A provision that failed before it changed anything has nothing to undo. */
+    @Test
+    void aProvisionThatFailedBeforeMutatingReportsRolledBack() {
+        doThrow(new AwsException("ResourceNotFoundException", "Function not found: payments", 404))
+                .when(lambda).putEventInvokeConfig(eq(REGION), eq("payments"), eq("$LATEST"), anyMap());
+        StackResource r = resource();
+        r.setPhysicalId("orders|$LATEST");
+        assertThrows(AwsException.class, () -> provisioner.provision(r, props("""
+                {"FunctionName": "payments", "Qualifier": "$LATEST"}
+                """), new ProvisionContext(engine, REGION, ACCOUNT_ID, STACK, "orders|$LATEST")));
+
+        assertTrue(provisioner.rollbackUpdate(r));
+        verify(lambda, never()).deleteEventInvokeConfig(anyString(), anyString(), anyString());
+    }
+
+    /** A conditional DestinationConfig that resolves to AWS::NoValue is omitted, not sent as an empty set. */
+    @Test
+    void aDestinationConfigResolvingToNoValueIsNotSent() {
+        when(engine.resolveNode(any())).thenAnswer(i -> {
+            JsonNode node = i.getArgument(0);
+            return node.has("Ref") ? TextNode.valueOf("") : node;
+        });
+
+        provision("""
+                {"FunctionName": "orders", "Qualifier": "$LATEST",
+                 "DestinationConfig": {"Ref": "AWS::NoValue"}}
+                """, "orders|$LATEST");
+
+        ArgumentCaptor<Map<String, Object>> request = ArgumentCaptor.captor();
+        verify(lambda).updateEventInvokeConfig(eq(REGION), eq("orders"), eq("$LATEST"), request.capture());
+        assertFalse(request.getValue().containsKey("DestinationConfig"), request.getValue().toString());
+    }
+
+    @Test
+    void aDestinationSideResolvingToNoValueIsNotSent() {
+        when(engine.resolveNode(any())).thenAnswer(i -> {
+            JsonNode node = i.getArgument(0);
+            if (node.isObject() && node.has("OnSuccess")) {
+                ((com.fasterxml.jackson.databind.node.ObjectNode) node).set("OnSuccess", TextNode.valueOf(""));
+            }
+            return node;
+        });
+
+        provision("""
+                {"FunctionName": "orders", "Qualifier": "$LATEST",
+                 "DestinationConfig": {"OnSuccess": {"Ref": "AWS::NoValue"},
+                                       "OnFailure": {"Destination": "arn:aws:sqs:us-east-1:000000000000:dlq"}}}
+                """, null);
+
+        ArgumentCaptor<Map<String, Object>> request = ArgumentCaptor.captor();
+        verify(lambda).putEventInvokeConfig(eq(REGION), eq("orders"), eq("$LATEST"), request.capture());
+        assertEquals(Map.of("OnFailure", Map.of("Destination", "arn:aws:sqs:us-east-1:000000000000:dlq")),
+                request.getValue().get("DestinationConfig"));
+    }
+
+    private static FunctionEventInvokeConfig config(Integer retries, Integer eventAge,
+                                                    String onSuccess, String onFailure) {
+        FunctionEventInvokeConfig config = new FunctionEventInvokeConfig();
+        config.setFunctionArn("arn:aws:lambda:us-east-1:000000000000:function:orders:$LATEST");
+        config.setMaximumRetryAttempts(retries);
+        config.setMaximumEventAgeInSeconds(eventAge);
+        if (onSuccess != null || onFailure != null) {
+            FunctionEventInvokeConfig.DestinationConfig destinations = new FunctionEventInvokeConfig.DestinationConfig();
+            if (onSuccess != null) {
+                destinations.setOnSuccess(new FunctionEventInvokeConfig.Destination(onSuccess));
+            }
+            if (onFailure != null) {
+                destinations.setOnFailure(new FunctionEventInvokeConfig.Destination(onFailure));
+            }
+            config.setDestinationConfig(destinations);
+        }
+        return config;
     }
 
     @Test
